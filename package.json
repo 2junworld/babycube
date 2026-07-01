@@ -19,6 +19,7 @@
     "@vitejs/plugin-react": "latest",
     "vite": "latest",
     "tailwindcss": "latest",
-    "@tailwindcss/vite": "latest"
+    "@tailwindcss/vite": "latest",
+    "vite-plugin-pwa": "latest"
   }
 }

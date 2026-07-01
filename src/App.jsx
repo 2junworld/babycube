@@ -202,6 +202,33 @@ function reducer(state, action) {
     case "HYDRATE":
       return action.state;
 
+    /* ---- 삭제 실행취소(Undo) 복원용 ---- */
+    case "RESTORE_BATCH": {
+      const { name, batch } = action;
+      const cur = state.stock[name] || { batches: [] };
+      return { ...state, stock: { ...state.stock, [name]: { batches: [...cur.batches, batch] } } };
+    }
+    case "RESTORE_MEAL": {
+      const { date, meal } = action;
+      const dayMeals = state.plans[date] ? [...state.plans[date], meal] : [meal];
+      dayMeals.sort((a, b) => a.time.localeCompare(b.time));
+      return { ...state, plans: { ...state.plans, [date]: dayMeals } };
+    }
+    case "RESTORE_LOG_ENTRY": {
+      const { date, log } = action;
+      const dayLogs = state.logs[date] ? [...state.logs[date], log] : [log];
+      dayLogs.sort((a, b) => a.time.localeCompare(b.time));
+      return { ...state, logs: { ...state.logs, [date]: dayLogs } };
+    }
+    case "RESTORE_LOG_DAY": {
+      const { date, logs } = action;
+      return { ...state, logs: { ...state.logs, [date]: logs } };
+    }
+    case "RESTORE_INTRO": {
+      const { intro } = action;
+      return { ...state, intros: [intro, ...state.intros] };
+    }
+
     case "RESET":
       return seedState();
 
@@ -449,6 +476,31 @@ function ageText(birthISO) {
   return `생후 ${Math.max(0, months)}개월`;
 }
 
+/* ----------------------------- 데이터 내보내기 ----------------------------- */
+function downloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function feedingLogsToCSV(state) {
+  const header = ["날짜", "끼니", "시간", "제공량(g)", "섭취량(g)", "섭취율(%)"];
+  const rows = [header];
+  Object.keys(state.logs).sort().forEach((date) => {
+    (state.logs[date] || []).forEach((log) => {
+      const prov = log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+      const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
+      rows.push([date, log.label, log.time, prov, log.intakeG, pct]);
+    });
+  });
+  return rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+}
+
 /* --------------------------- 스토어 컨텍스트 --------------------------- */
 const Store = createContext(null);
 const useStore = () => useContext(Store);
@@ -534,6 +586,18 @@ function CategoryLegend() {
 function CategoryBar({ items, height = 6 }) {
   const { state } = useStore();
   const totals = catTotals(state, items);
+  const sum = Object.values(totals).reduce((a, b) => a + b, 0) || 1;
+  return (
+    <div style={{ display: "flex", width: "100%", height, borderRadius: height / 2, overflow: "hidden", background: C.border }}>
+      {Object.entries(totals).map(([cat, g]) =>
+        g > 0 ? <div key={cat} style={{ width: `${(g / sum) * 100}%`, background: CATEGORY[cat].color }} /> : null
+      )}
+    </div>
+  );
+}
+
+// CategoryBar와 동일한 모양이지만, items 배열이 아니라 카테고리별 g 합계(totals 객체)를 바로 받는 버전
+function CategoryTotalsBar({ totals, height = 6 }) {
   const sum = Object.values(totals).reduce((a, b) => a + b, 0) || 1;
   return (
     <div style={{ display: "flex", width: "100%", height, borderRadius: height / 2, overflow: "hidden", background: C.border }}>
@@ -1547,7 +1611,7 @@ function MonthView({ monthDate, selected, setSelected }) {
 }
 
 function MealPlanTab() {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const timeFmt = state.settings.timeFmt;
   const [range, setRange] = useState("day");
   const [detail, setDetail] = useState(true);
@@ -1619,7 +1683,10 @@ function MealPlanTab() {
                     <div className="flex items-center" style={{ gap: 12 }}>
                       <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{mT}g</span>
                       <button onClick={() => setEditing({ date: cursor, meal: m })} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Pencil size={14} color={C.muted} /></button>
-                      <button onClick={() => dispatch({ type: "PLAN_DELETE_MEAL", date: cursor, mealId: m.id })} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
+                      <button onClick={() => {
+                        dispatch({ type: "PLAN_DELETE_MEAL", date: cursor, mealId: m.id });
+                        notify(`'${m.label}' 끼니를 삭제했습니다`, () => dispatch({ type: "RESTORE_MEAL", date: cursor, meal: m }));
+                      }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
                     </div>
                   </div>
                   {detail ? <IngredientTable items={m.items} total={mT} /> : <div style={{ marginBottom: 9 }}><MealItemList items={m.items} fontSize={12.5} wrap /></div>}
@@ -1774,7 +1841,7 @@ function StockTab({ go }) {
    재고 상세 (카드 탭 → 배치별 바로 수정/삭제)
    ===================================================================== */
 function StockDetailScreen({ name, onBack }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const [addOpen, setAddOpen] = useState(false);
   const [delTarget, setDelTarget] = useState(null); // 삭제 확인 대상 batchId
   const batches = stockBatches(state, name).slice().sort((a, b) => a.date.localeCompare(b.date));
@@ -1782,8 +1849,10 @@ function StockDetailScreen({ name, onBack }) {
 
   const patch = (batchId, p) => dispatch({ type: "STOCK_UPDATE_BATCH", name, batchId, patch: p });
   const confirmDel = () => {
+    const batch = stockBatches(state, name).find((b) => b.id === delTarget);
     dispatch({ type: "STOCK_DELETE_BATCH", name, batchId: delTarget });
     setDelTarget(null);
+    if (batch) notify("배치를 삭제했습니다", () => dispatch({ type: "RESTORE_BATCH", name, batch }));
   };
 
   return (
@@ -1919,14 +1988,45 @@ function weeklyRates(state) {
   return out;
 }
 
+/* 월간 리포트: 급여 횟수 · 평균 섭취율 · 카테고리별 추정 섭취 비율(제공량 × 전체 섭취율) */
+function monthStats(state, year, month) {
+  const catTotals = { 탄수화물: 0, 단백질: 0, 채소: 0, 과일: 0 };
+  let totalProv = 0, totalIntake = 0, count = 0;
+  Object.keys(state.logs).forEach((d) => {
+    const dt = new Date(d + "T00:00:00");
+    if (dt.getFullYear() !== year || dt.getMonth() !== month) return;
+    (state.logs[d] || []).forEach((log) => {
+      const prov = log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+      const rate = prov ? log.intakeG / prov : 0;
+      totalProv += prov;
+      totalIntake += log.intakeG;
+      count += 1;
+      log.items.forEach((it) => {
+        const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
+        const cat = catOf(state, it.name);
+        catTotals[cat] = (catTotals[cat] || 0) + g * rate;
+      });
+    });
+  });
+  const avgRate = totalProv ? Math.round((totalIntake / totalProv) * 100) : null;
+  return { count, totalProv: Math.round(totalProv), totalIntake: Math.round(totalIntake), avgRate, catTotals };
+}
+
 function RecordTab({ go }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const trend = weeklyRates(state).filter((x) => x.rate != null);
   const thisWeek = trend.length ? trend[trend.length - 1].rate : null;
   const lastWeek = trend.length > 1 ? trend[trend.length - 2].rate : null;
   const diff = thisWeek != null && lastWeek != null ? thisWeek - lastWeek : null;
   const [editIntro, setEditIntro] = useState(null); // null | 'new' | introObj
   const [delIntro, setDelIntro] = useState(null); // 삭제 확인 대상 introObj
+  const [reportYM, setReportYM] = useState(() => { const t = todayISO(); return { y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) - 1 }; });
+
+  const shiftReportMonth = (n) => setReportYM((p) => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const report = monthStats(state, reportYM.y, reportYM.m);
+  const prevMonthDate = new Date(reportYM.y, reportYM.m - 1, 1);
+  const prevReport = monthStats(state, prevMonthDate.getFullYear(), prevMonthDate.getMonth());
+  const reportDiff = report.avgRate != null && prevReport.avgRate != null ? report.avgRate - prevReport.avgRate : null;
 
   const yISO = addDaysISO(todayISO(), -1);
   const yLogs = state.logs[yISO] || [];
@@ -1961,6 +2061,36 @@ function RecordTab({ go }) {
                 </LineChart>
               </ResponsiveContainer>
             </div>
+          )}
+        </div>
+
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 16 }}>
+          <div className="flex items-center" style={{ gap: 8, marginBottom: 10 }}>
+            <button onClick={() => shiftReportMonth(-1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronLeft size={15} color={C.muted} /></button>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{reportYM.y}년 {reportYM.m + 1}월 리포트</span>
+            <button onClick={() => shiftReportMonth(1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronRight size={15} color={C.muted} /></button>
+          </div>
+          {report.count === 0 ? (
+            <div style={{ textAlign: "center", padding: "10px 0", fontSize: 12, color: C.muted }}>이 달엔 급여 기록이 없습니다</div>
+          ) : (
+            <>
+              <div className="flex items-center" style={{ gap: 18, marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 600, marginBottom: 2 }}>급여 횟수</div>
+                  <div style={{ fontSize: 17, fontWeight: 900, color: C.ink }}>{report.count}회</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 600, marginBottom: 2 }}>평균 섭취율</div>
+                  <div className="flex items-end" style={{ gap: 6 }}>
+                    <span style={{ fontSize: 17, fontWeight: 900, color: C.sageDeep }}>{report.avgRate != null ? `${report.avgRate}%` : "—"}</span>
+                    {reportDiff != null && <span style={{ fontSize: 11, color: reportDiff >= 0 ? C.sage : C.apricot, fontWeight: 700 }}>{reportDiff >= 0 ? "▲" : "▼"} {Math.abs(reportDiff)}%p</span>}
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginBottom: 6 }}>카테고리별 추정 섭취 비율</div>
+              <CategoryTotalsBar totals={report.catTotals} height={8} />
+              <div style={{ marginTop: 8 }}><CategoryLegend /></div>
+            </>
           )}
         </div>
 
@@ -2025,7 +2155,11 @@ function RecordTab({ go }) {
       {delIntro && (
         <ConfirmModal
           title={`'${delIntro.name}' 기록을 삭제할까요?`}
-          onConfirm={() => { dispatch({ type: "INTRO_DELETE", id: delIntro.id }); setDelIntro(null); }}
+          onConfirm={() => {
+            dispatch({ type: "INTRO_DELETE", id: delIntro.id });
+            setDelIntro(null);
+            notify(`'${delIntro.name}' 기록을 삭제했습니다`, () => dispatch({ type: "RESTORE_INTRO", intro: delIntro }));
+          }}
           onCancel={() => setDelIntro(null)}
         />
       )}
@@ -2037,7 +2171,7 @@ function RecordTab({ go }) {
    재료 정보 추가·수정 모달 (기록 탭 "먹어본 재료" 겸 재료 도입 기록)
    ===================================================================== */
 function IntroEditModal({ intro, onClose }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const isNew = intro === "new";
   const base = isNew ? {} : intro;
   const [picker, setPicker] = useState(false);
@@ -2052,7 +2186,11 @@ function IntroEditModal({ intro, onClose }) {
     dispatch({ type: "INTRO_UPSERT", intro: { id: isNew ? undefined : base.id, name, cat, status, memo, date: base.date || todayISO() } });
     onClose();
   };
-  const del = () => { dispatch({ type: "INTRO_DELETE", id: base.id }); onClose(); };
+  const del = () => {
+    dispatch({ type: "INTRO_DELETE", id: base.id });
+    notify(`'${base.name}' 기록을 삭제했습니다`, () => dispatch({ type: "RESTORE_INTRO", intro: base }));
+    onClose();
+  };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
@@ -2109,7 +2247,7 @@ function IntroEditModal({ intro, onClose }) {
    기록 히스토리 전체 보기
    ===================================================================== */
 function RecordHistoryScreen({ onBack }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const [delDay, setDelDay] = useState(null); // 삭제 확인 대상 날짜 (일자 전체 삭제)
   const [delEntry, setDelEntry] = useState(null); // 삭제 확인 대상 { date, logId, label } (개별 삭제)
   const logDates = Object.keys(state.logs).filter((d) => (state.logs[d] || []).length > 0).sort().reverse();
@@ -2149,7 +2287,12 @@ function RecordHistoryScreen({ onBack }) {
         <ConfirmModal
           title={`${delDay} 기록을 전체 삭제할까요?`}
           message="이 날짜의 급여 기록이 모두 삭제됩니다. 재고는 자동으로 복원되지 않습니다."
-          onConfirm={() => { dispatch({ type: "LOG_DELETE_DAY", date: delDay }); setDelDay(null); }}
+          onConfirm={() => {
+            const logsBackup = state.logs[delDay] || [];
+            dispatch({ type: "LOG_DELETE_DAY", date: delDay });
+            setDelDay(null);
+            notify(`${delDay} 기록을 삭제했습니다`, () => dispatch({ type: "RESTORE_LOG_DAY", date: delDay, logs: logsBackup }));
+          }}
           onCancel={() => setDelDay(null)}
         />
       )}
@@ -2157,7 +2300,12 @@ function RecordHistoryScreen({ onBack }) {
         <ConfirmModal
           title={`'${delEntry.label}' 기록을 삭제할까요?`}
           message="재고는 자동으로 복원되지 않습니다."
-          onConfirm={() => { dispatch({ type: "LOG_DELETE_ENTRY", date: delEntry.date, logId: delEntry.logId }); setDelEntry(null); }}
+          onConfirm={() => {
+            const log = (state.logs[delEntry.date] || []).find((l) => l.id === delEntry.logId);
+            dispatch({ type: "LOG_DELETE_ENTRY", date: delEntry.date, logId: delEntry.logId });
+            setDelEntry(null);
+            if (log) notify(`'${delEntry.label}' 기록을 삭제했습니다`, () => dispatch({ type: "RESTORE_LOG_ENTRY", date: delEntry.date, log }));
+          }}
           onCancel={() => setDelEntry(null)}
         />
       )}
@@ -2235,10 +2383,20 @@ function SettingsScreen({ onBack }) {
         </div>
         <div>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>데이터</div>
-          <button onClick={() => setConfirmingReset(true)}
-            style={{ width: "100%", background: C.surface, border: `1px solid ${C.apricot}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.apricot, cursor: "pointer" }}>
-            초기 데이터로 재설정
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button onClick={() => downloadFile(`babycube-backup-${todayISO()}.json`, JSON.stringify(state, null, 2), "application/json")}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
+              전체 데이터 내보내기 (JSON 백업)
+            </button>
+            <button onClick={() => downloadFile(`babycube-feeding-logs-${todayISO()}.csv`, "﻿" + feedingLogsToCSV(state), "text/csv;charset=utf-8;")}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
+              급여 기록 내보내기 (CSV)
+            </button>
+            <button onClick={() => setConfirmingReset(true)}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.apricot}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.apricot, cursor: "pointer" }}>
+              초기 데이터로 재설정
+            </button>
+          </div>
         </div>
       </div>
       {confirmingReset && (
@@ -2720,11 +2878,29 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
     window.location.reload();
   };
 
+  const [toast, setToast] = useState(null); // { id, message, onUndo }
+  const notify = (message, onUndo) => {
+    const id = uid();
+    setToast({ id, message, onUndo });
+    setTimeout(() => {
+      setToast((t) => (t && t.id === id ? null : t));
+    }, 5000);
+  };
+
   if (!ready) return <CenterMessage text="데이터를 불러오는 중..." />;
 
   return (
-    <Store.Provider value={{ state, dispatch, cloud: { familyId, user, meta, leaveFamily, logout: onLogout } }}>
+    <Store.Provider value={{ state, dispatch, cloud: { familyId, user, meta, leaveFamily, logout: onLogout }, notify }}>
       <Shell />
+      {toast && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
+          <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
+            <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 600 }}>{toast.message}</span>
+            <button onClick={() => { if (toast.onUndo) toast.onUndo(); setToast(null); }}
+              style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
+          </div>
+        </div>
+      )}
     </Store.Provider>
   );
 }
