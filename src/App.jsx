@@ -2474,7 +2474,7 @@ function MoreTab({ go }) {
         ))}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
-        베이비큐브 · v1.0.1 (GitHub 자동 배포 테스트)
+        베이비큐브 · v1.0
       </div>
     </div>
   );
