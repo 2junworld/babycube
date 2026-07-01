@@ -876,7 +876,22 @@ function MealEditScreen({ date, meal, onBack }) {
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title={meal.id ? "끼니 수정" : "새 끼니 추가"} onBack={onBack} />
-      <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+
+      <div style={{ position: "sticky", top: 0, zIndex: 15, background: C.bg, padding: "0 18px 10px" }}>
+        <div className="flex items-center justify-between" style={{ padding: "0 2px 8px" }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{date} ({WD[new Date(date + "T00:00:00").getDay()]})</span>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: label ? C.sageDeep : C.muted }}>{label || "끼니 선택 전"}</span>
+        </div>
+        <div style={{ background: C.sageLight, borderRadius: 14, padding: 14, boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep }}>끼니 총량</span>
+            <span style={{ fontSize: 16, fontWeight: 900, color: C.sageDeep }}>{total}g</span>
+          </div>
+          <CategoryBar items={items} height={8} />
+        </div>
+      </div>
+
+      <div style={{ padding: "0 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
         <button onClick={() => setSlotPicker(true)} className="flex items-center justify-between" style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px", cursor: "pointer" }}>
           <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>끼니 종류</span>
           <span className="flex items-center" style={{ gap: 5, fontSize: 13, fontWeight: 700, color: label ? C.ink : C.muted }}>{label || "선택"} <ChevronRight size={14} color={C.muted} /></span>
@@ -928,14 +943,6 @@ function MealEditScreen({ date, meal, onBack }) {
         <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
           <Plus size={14} /> 재료 추가
         </button>
-
-        <div style={{ background: C.sageLight, borderRadius: 14, padding: 14 }}>
-          <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep }}>끼니 총량</span>
-            <span style={{ fontSize: 16, fontWeight: 900, color: C.sageDeep }}>{total}g</span>
-          </div>
-          <CategoryBar items={items} height={8} />
-        </div>
 
         <button onClick={save} style={primaryBtn}>저장</button>
       </div>
