@@ -2192,44 +2192,13 @@ const STOCK_SORT_OPTIONS = [
   { key: "stockAsc", label: "재고 적은순" },
 ];
 
-// 소진임박 재료용 큰 카드 - 기존 재고 탭 카드 디자인을 그대로 유지
-function StockUrgentCard({ name, onClick }) {
-  const { state } = useStore();
-  const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
-  const fgGrams = stockTotalFrozenG(state, name);
-  const expDays = frozenStorageDaysLeft(state, name);
-  const expUrgent = expDays != null && expDays <= 3;
-  return (
-    <button onClick={onClick} className="flex flex-col" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${fg > 0 ? C.apricot : C.border}`, borderRadius: 16, padding: 14, cursor: "pointer" }}>
-      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
-        <div className="flex items-center"><CatDot name={name} size={8} /><span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{name}</span></div>
-        <div className="flex items-center" style={{ gap: 6 }}>
-          {fg > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.apricot }}>냉장 소진 임박</span>}
-          <ChevronRight size={15} color={C.muted} />
-        </div>
-      </div>
-      <div className="flex items-center justify-between" style={{ marginBottom: fg > 0 ? 8 : 0 }}>
-        <div className="flex items-center" style={{ gap: 9 }}><Snowflake size={14} color={C.sageDeep} /><CubeGrid filled={cubes} total={10} /></div>
-        <span style={{ fontSize: 11.5, color: expUrgent ? C.apricot : C.muted, fontWeight: expUrgent ? 700 : 400 }}>
-          {cubes}큐브 ({fgGrams}g){expDays != null ? ` · ${expDays < 0 ? "보관기한 지남" : `보관기한 ~${expDays}일`}` : ""}
-        </span>
-      </div>
-      {fg > 0 && (
-        <div className="flex items-center justify-between">
-          <div className="flex items-center" style={{ gap: 9 }}><Refrigerator size={14} color={C.apricot} /><span style={{ fontSize: 12, color: C.inkSoft }}>냉장 보관</span></div>
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: C.apricot }}>{fg}g</span>
-        </div>
-      )}
-    </button>
-  );
-}
-
-// 일반 재료용 컴팩트 리스트 행 - 한 줄로 게이지 + 수량만 보여줌
+// 재료 목록 한 줄 행 - 게이지 + 수량만 보여주는 컴팩트 디자인.
+// 소진임박 재료도 별도 카드 디자인 없이 이 컴포넌트를 그대로 쓰고, urgent=true면 테두리 강조 + "임박" 배지만 붙임
 function StockCompactRow({ name, onClick, urgent }) {
   const { state } = useStore();
   const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
   return (
-    <button onClick={onClick} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
+    <button onClick={onClick} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${urgent ? C.apricot : C.border}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
       <div className="flex items-center" style={{ gap: 8, minWidth: 0, flex: 1 }}>
         <CatDot name={name} size={7} />
         <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
@@ -2294,9 +2263,9 @@ function StockTab({ go }) {
       </div>
       <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
         {urgentNames.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {filter === "전체" && <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px" }}>소진임박 재료</div>}
-            {urgentNames.map((name) => <StockUrgentCard key={name} name={name} onClick={() => go("stockDetail", { name })} />)}
+            {urgentNames.map((name) => <StockCompactRow key={name} name={name} urgent onClick={() => go("stockDetail", { name })} />)}
           </div>
         )}
         {restNames.length > 0 && (
