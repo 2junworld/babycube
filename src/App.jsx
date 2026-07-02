@@ -3,7 +3,7 @@ import {
   Home, CalendarDays, Package, LineChart as LineChartIcon, Menu,
   ChevronLeft, ChevronRight, Plus, Minus, Trash2, Pencil, X, Check,
   Refrigerator, Snowflake, ShoppingCart, Settings2, Users, Plane, Clock,
-  AlertTriangle, Search,
+  AlertTriangle, Search, History, Star,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip,
@@ -125,6 +125,7 @@ function seedState() {
 
   return {
     ingredients: { ...SEED_INGREDIENTS },
+    ingredientUsage: {},
     stock, plans, logs, intros,
     shopping: [
       { id: uid(), name: "새송이버섯", reason: "식단표 추가 (재고없음)", done: false },
@@ -187,6 +188,8 @@ function migrateState(s) {
       { id: uid(), label: "저녁", time: "18:00" },
     ];
   }
+  // 재료 검색 - 최근 사용순 정렬용 사용 이력 (없으면 빈 객체로 시작)
+  if (!out.ingredientUsage) out.ingredientUsage = {};
   return out;
 }
 
@@ -365,7 +368,25 @@ function reducer(state, action) {
     case "INGREDIENT_ENSURE": {
       const { name, cat } = action;
       if (!name || state.ingredients[name]) return state;
-      return { ...state, ingredients: { ...state.ingredients, [name]: { cat: cat || "채소", unitG: 15 } } };
+      return { ...state, ingredients: { ...state.ingredients, [name]: { cat: cat || "채소", unitG: 15, favorite: false } } };
+    }
+
+    /* ---- 재료 즐겨찾기 토글 ---- */
+    case "INGREDIENT_TOGGLE_FAVORITE": {
+      const { name } = action;
+      if (!name || !state.ingredients[name]) return state;
+      const cur = state.ingredients[name];
+      return { ...state, ingredients: { ...state.ingredients, [name]: { ...cur, favorite: !cur.favorite } } };
+    }
+
+    /* ---- 재료 선택(사용) 시각 기록 - 최근 사용순 정렬용 ---- */
+    case "INGREDIENT_TOUCH": {
+      const names = action.names || (action.name ? [action.name] : []);
+      if (names.length === 0) return state;
+      const now = Date.now();
+      const usage = { ...state.ingredientUsage };
+      names.forEach((n) => { usage[n] = now; });
+      return { ...state, ingredientUsage: usage };
     }
 
     /* ---- 아기 정보 ---- */
@@ -486,12 +507,44 @@ function fmtTime(hhmm, mode) {
   }
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
-function ageText(birthISO) {
+function ageMonths(birthISO) {
   const birth = new Date((birthISO || "2025-10-08") + "T00:00:00");
   const now = new Date();
   let months = (now.getFullYear() - birth.getFullYear()) * 12 + (now.getMonth() - birth.getMonth());
   if (now.getDate() < birth.getDate()) months -= 1;
-  return `생후 ${Math.max(0, months)}개월`;
+  return Math.max(0, months);
+}
+function ageText(birthISO) {
+  return `생후 ${ageMonths(birthISO)}개월`;
+}
+
+/* ----------------------------- 이유식 성장 단계 참고 정보 (일반적인 참고용, 자동 적용 안 함) ----------------------------- */
+// 개월수 구간별 일반적으로 알려진 참고 수치 - 실제 급여는 반드시 소아과 상담을 기준으로 할 것을 안내함
+const GROWTH_STAGES = [
+  { min: 0, max: 4, stage: "이유식 준비기", mealsPerDay: "-", perMealG: "-", note: "아직 모유·분유만으로 충분한 시기예요. 이유식 시작은 보통 생후 5~6개월부터 고려해요." },
+  { min: 5, max: 6, stage: "초기 이유식", mealsPerDay: "1~2회", perMealG: "30~60g", note: "묽은 미음 형태로 한 가지 재료씩 천천히 소개하는 시기예요." },
+  { min: 7, max: 8, stage: "중기 이유식", mealsPerDay: "2~3회", perMealG: "80~120g", note: "약간의 알갱이가 있는 죽 형태로 넘어가는 시기예요." },
+  { min: 9, max: 11, stage: "후기 이유식", mealsPerDay: "3회", perMealG: "120~180g", note: "진밥 형태로 다양한 재료를 조합해볼 수 있는 시기예요." },
+  { min: 12, max: 999, stage: "완료기 이유식", mealsPerDay: "3회 + 간식 1~2회", perMealG: "150~200g", note: "일반식에 가까운 진밥·진밥 형태로 넘어가는 시기예요." },
+];
+function growthStageOf(months) {
+  return GROWTH_STAGES.find((g) => months >= g.min && months <= g.max) || GROWTH_STAGES[GROWTH_STAGES.length - 1];
+}
+// 식단 편집 화면 등에서 보여줄 "참고용" 성장 단계 안내 카드 - 값을 자동으로 적용하지 않고 정보만 표시함
+function GrowthStageHint({ birth }) {
+  const months = ageMonths(birth);
+  const g = growthStageOf(months);
+  return (
+    <div style={{ background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "10px 12px" }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 800, color: C.sageDeep }}>생후 {months}개월 · {g.stage} 참고 정보</span>
+      </div>
+      <div style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.6 }}>
+        일반적으로 하루 {g.mealsPerDay} · 1회 {g.perMealG} 정도가 참고돼요. {g.note}
+      </div>
+      <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>* 일반적인 참고 정보이며, 정확한 급여량·시기는 소아과 상담을 따라주세요.</div>
+    </div>
+  );
 }
 
 /* ----------------------------- 데이터 내보내기 ----------------------------- */
@@ -763,6 +816,8 @@ const SORT_OPTIONS = [
   { key: "stockDesc", label: "재고 많은순" },
   { key: "stockAsc", label: "재고 적은순" },
   { key: "cat", label: "카테고리순" },
+  { key: "recent", label: "최근 사용순" },
+  { key: "favorite", label: "즐겨찾기순" },
 ];
 function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] }) {
   const { state, dispatch } = useStore();
@@ -773,9 +828,24 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
   const [sortMode, setSortMode] = useState("stockDesc");
   const names = Object.keys(state.ingredients);
   const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
+  const isFavorite = (n) => !!(state.ingredients[n] && state.ingredients[n].favorite);
+  const usageOf = (n) => (state.ingredientUsage && state.ingredientUsage[n]) || 0;
   const base = names.filter((n) => (cat === "전체" || catOf(state, n) === cat) && n.includes(q));
   const filtered = sortMode === "cat"
     ? sortByCategory(state, base, (n) => n)
+    : sortMode === "recent"
+    ? [...base].sort((a, b) => {
+        const ua = usageOf(a), ub = usageOf(b);
+        if (ua === 0 && ub === 0) return stockAmt(b) - stockAmt(a); // 사용 이력 없으면 재고 많은순 보조 정렬
+        if (ua === 0 || ub === 0) return ub - ua; // 사용 이력 있는 쪽이 항상 먼저
+        return ub - ua;
+      })
+    : sortMode === "favorite"
+    ? [...base].sort((a, b) => {
+        const fa = isFavorite(a), fb = isFavorite(b);
+        if (fa !== fb) return fa ? -1 : 1; // 즐겨찾기가 항상 먼저
+        return stockAmt(b) - stockAmt(a); // 보조 정렬: 재고 많은순
+      })
     : [...base].sort((a, b) => {
         const sa = stockAmt(a), sb = stockAmt(b);
         const aHas = sa > 0, bHas = sb > 0;
@@ -787,6 +857,7 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
 
   const confirmNew = () => {
     dispatch({ type: "INGREDIENT_ENSURE", name: q, cat: newCat });
+    dispatch({ type: "INGREDIENT_TOUCH", name: q });
     if (multi) {
       setSelected((p) => p.includes(q) ? p : [...p, q]);
       setQ("");
@@ -795,8 +866,10 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
     }
   };
 
+  const pickOne = (n) => { dispatch({ type: "INGREDIENT_TOUCH", name: n }); onPick(n); };
+  const toggleFavorite = (n, e) => { e.stopPropagation(); dispatch({ type: "INGREDIENT_TOGGLE_FAVORITE", name: n }); };
   const toggle = (n) => setSelected((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n]);
-  const confirmSelection = () => { onPick(selected); onClose(); };
+  const confirmSelection = () => { dispatch({ type: "INGREDIENT_TOUCH", names: selected }); onPick(selected); onClose(); };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
@@ -846,18 +919,22 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
             const cubes = stockTotalCubes(state, n), fg = stockFridgeG(state, n);
             const already = multi && addedSet.has(n);
             const checked = selected.includes(n);
+            const fav = isFavorite(n);
             return (
-              <button key={n} onClick={() => (multi ? (already ? null : toggle(n)) : onPick(n))} disabled={already}
+              <button key={n} onClick={() => (multi ? (already ? null : toggle(n)) : pickOne(n))} disabled={already}
                 className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
                 borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid",
                 cursor: already ? "default" : "pointer", opacity: already ? 0.45 : 1 }}>
-                <div className="flex items-center" style={{ gap: multi ? 9 : 0 }}>
+                <div className="flex items-center" style={{ gap: multi ? 9 : 6 }}>
                   {multi && (
                     <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${checked ? C.sage : C.border}`,
                       background: checked ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       {checked && <Check size={12} color="#fff" />}
                     </span>
                   )}
+                  <span role="button" onClick={(e) => toggleFavorite(n, e)} style={{ display: "flex", padding: 2, cursor: "pointer" }}>
+                    <Star size={13} color={fav ? C.apricot : C.border} fill={fav ? C.apricot : "none"} />
+                  </span>
                   <CatDot name={n} size={8} /><span style={{ fontSize: 13, color: C.ink }}>{n}</span>
                 </div>
                 <span style={{ fontSize: 11, color: cubes || fg ? C.muted : C.apricot }}>
@@ -1009,6 +1086,33 @@ function MealCopyPicker({ onPick, onClose }) {
   );
 }
 
+// "냉장고 비우기" 힌트: 냉장 보관 중이거나 냉동 보관기한이 임박한 재료를 식단 편집 화면에서 바로 추가할 수 있게 안내
+function UrgentStockHint({ currentNames, onAdd }) {
+  const { state } = useStore();
+  const currentSet = new Set(currentNames);
+  const urgent = urgentStockNames(state).filter((u) => !currentSet.has(u.name)).slice(0, 5);
+  if (urgent.length === 0) return null;
+  return (
+    <div style={{ background: C.apricotLight, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#9A4A1E", marginBottom: 8 }}>냉장고 비우기 — 곧 처리해야 할 재료</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {urgent.map((u) => (
+          <div key={u.name} className="flex items-center justify-between">
+            <div className="flex items-center" style={{ gap: 6 }}>
+              <CatDot name={u.name} size={7} />
+              <span style={{ fontSize: 12, color: C.ink, fontWeight: 600 }}>{u.name}</span>
+              <span style={{ fontSize: 10.5, color: "#9A4A1E" }}>
+                {u.fg > 0 ? `냉장 보관 중 (${u.fg}g)` : `보관기한 ~${u.frozenDaysLeft}일`}
+              </span>
+            </div>
+            <button onClick={() => onAdd(u.name)} style={{ background: "none", border: `1px solid #E0A579`, borderRadius: 8, padding: "3px 9px", fontSize: 11, fontWeight: 700, color: "#9A4A1E", cursor: "pointer" }}>추가</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* =====================================================================
    끼니 편집 화면 (식단 계획용)
    ===================================================================== */
@@ -1084,6 +1188,7 @@ function MealEditScreen({ date, meal, onBack }) {
       </div>
 
       <div style={{ padding: "0 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+        <GrowthStageHint birth={state.baby.birth} />
         <button onClick={() => setSlotPicker(true)} className="flex items-center justify-between" style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px", cursor: "pointer" }}>
           <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>끼니 종류</span>
           <span className="flex items-center" style={{ gap: 5, fontSize: 13, fontWeight: 700, color: label ? C.ink : C.muted }}>{label || "선택"} <ChevronRight size={14} color={C.muted} /></span>
@@ -1092,6 +1197,7 @@ function MealEditScreen({ date, meal, onBack }) {
         <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer" }}>
           다른 날짜 식단 복사해오기
         </button>
+        <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
 
         <div>
           <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
@@ -1270,6 +1376,9 @@ function BulkSaveScreen({ initialCursor, onBack }) {
           <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer", marginTop: 8, width: "100%" }}>
             다른 날짜 식단 복사해오기
           </button>
+          <div style={{ marginTop: 8 }}>
+            <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
+          </div>
         </div>
 
         <div>
@@ -1599,6 +1708,21 @@ function frozenStorageDaysLeft(state, name) {
   const t = todayISO();
   const diffMs = new Date(nearestExp + "T00:00:00") - new Date(t + "T00:00:00");
   return Math.round(diffMs / 86400000);
+}
+// "냉장고 비우기" 대상 재료: 냉장 보관 중(항상 임박으로 취급)이거나, 냉동 보관기한이 며칠 안 남은 재료
+function urgentStockNames(state, frozenDaysThreshold = 3) {
+  return Object.keys(state.stock)
+    .map((name) => {
+      const fg = stockFridgeG(state, name);
+      const fd = frozenStorageDaysLeft(state, name);
+      const urgent = fg > 0 || (fd != null && fd <= frozenDaysThreshold);
+      if (!urgent) return null;
+      // 정렬용 우선순위: 냉장 보관 중이면 가장 급함(-1), 아니면 냉동 보관기한 일수
+      const rank = fg > 0 ? -1 : fd;
+      return { name, fg, frozenDaysLeft: fd, rank };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.rank - b.rank);
 }
 function frozenAlerts(state) {
   return Object.keys(state.stock).map((name) => {
@@ -1984,7 +2108,9 @@ function BatchModal({ presetName, onClose }) {
   const save = () => {
     if (!name) return;
     dispatch({ type: "STOCK_ADD_BATCH", name, cat,
+      // frozenOriginal/fridgeOriginal: 제조 당시 생산량 기록(이후 소비돼도 변하지 않음) — 제조 이력 화면에서 사용
       batch: { date, unitG: Number(unitG), frozen: Number(frozen), fridgeG: Number(fridgeG),
+        frozenOriginal: Number(frozen), fridgeOriginal: Number(fridgeG),
         frozenExp: addDaysISO(date, 14), fridgeExp: Number(fridgeG) > 0 ? addDaysISO(date, keep) : null } });
     onClose();
   };
@@ -2160,6 +2286,54 @@ function StockDetailScreen({ name, onBack }) {
 }
 
 /* =====================================================================
+   제조 이력 화면 — 모든 재료의 제조 배치를 날짜순으로 모아 보여줌
+   (배치는 소진돼도 삭제되지 않고 수량만 0으로 남으므로, 이미 있는 데이터를 그대로 활용)
+   ===================================================================== */
+function ManufactureHistoryScreen({ onBack }) {
+  const { state } = useStore();
+  const [q, setQ] = useState("");
+  const all = [];
+  Object.keys(state.stock).forEach((name) => {
+    (state.stock[name].batches || []).forEach((b) => all.push({ name, ...b }));
+  });
+  const filtered = all
+    .filter((b) => !q || b.name.includes(q))
+    .sort((a, b) => b.date.localeCompare(a.date) || (b.id > a.id ? 1 : -1));
+
+  return (
+    <div style={{ paddingBottom: 90 }}>
+      <SubHeader title="제조 이력" onBack={onBack} />
+      <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
+          <Search size={15} color={C.muted} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료명으로 검색"
+            style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+        </div>
+        {filtered.length === 0 && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>제조 이력이 없습니다</div>}
+        {filtered.map((b) => {
+          const tracked = b.frozenOriginal != null; // 제조량 기록 이후 만든 배치인지 (이전 배치는 원본 수량을 모름)
+          const usedUp = (b.frozen || 0) <= 0 && (b.fridgeG || 0) <= 0;
+          return (
+            <div key={b.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 13, opacity: usedUp ? 0.55 : 1 }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+                <div className="flex items-center"><CatDot name={b.name} size={8} /><span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{b.name}</span></div>
+                <span style={{ fontSize: 11, color: C.muted }}>{b.date} 제조</span>
+              </div>
+              <div style={{ fontSize: 11.5, color: C.inkSoft, lineHeight: 1.5 }}>
+                {tracked
+                  ? <>냉동 {b.frozenOriginal}큐브 제조 → 현재 {b.frozen}큐브{b.fridgeOriginal ? <><br />냉장 {b.fridgeOriginal}g 제조 → 현재 {b.fridgeG || 0}g</> : ""}</>
+                  : <>현재 냉동 {b.frozen}큐브{b.fridgeG ? ` · 냉장 ${b.fridgeG}g` : ""} <span style={{ color: C.muted }}>(제조 당시 수량 기록 이전 배치)</span></>}
+              </div>
+              {usedUp && <div style={{ fontSize: 10, color: C.muted, marginTop: 5, fontWeight: 700 }}>소진됨</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
    장보기 / 제조 목록 화면
    ===================================================================== */
 function ShoppingScreen({ onBack }) {
@@ -2240,9 +2414,10 @@ function weeklyRates(state) {
   return out;
 }
 
-/* 월간 리포트: 급여 횟수 · 평균 섭취율 · 카테고리별 추정 섭취 비율(제공량 × 전체 섭취율) */
+/* 월간 리포트: 급여 횟수 · 평균 섭취율 · 카테고리별/재료별 추정 섭취 비율(제공량 × 전체 섭취율) */
 function monthStats(state, year, month) {
   const catTotals = { 탄수화물: 0, 단백질: 0, 채소: 0, 과일: 0 };
+  const ingredientTotals = {}; // 재료명 -> 추정 섭취 g
   let totalProv = 0, totalIntake = 0, count = 0;
   Object.keys(state.logs).forEach((d) => {
     const dt = new Date(d + "T00:00:00");
@@ -2257,11 +2432,30 @@ function monthStats(state, year, month) {
         const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
         const cat = catOf(state, it.name);
         catTotals[cat] = (catTotals[cat] || 0) + g * rate;
+        ingredientTotals[it.name] = (ingredientTotals[it.name] || 0) + g * rate;
       });
     });
   });
   const avgRate = totalProv ? Math.round((totalIntake / totalProv) * 100) : null;
-  return { count, totalProv: Math.round(totalProv), totalIntake: Math.round(totalIntake), avgRate, catTotals };
+  const topIngredients = Object.entries(ingredientTotals)
+    .map(([name, g]) => ({ name, g: Math.round(g) }))
+    .filter((x) => x.g > 0)
+    .sort((a, b) => b.g - a.g)
+    .slice(0, 5);
+  return { count, totalProv: Math.round(totalProv), totalIntake: Math.round(totalIntake), avgRate, catTotals, topIngredients };
+}
+/* 해당 월에 제조된 총량(g) — 재료별 배치의 제조 당시 기록(frozenOriginal/fridgeOriginal) 기준. 이 필드가 없는 옛 배치는 집계에서 제외됨 */
+function monthProducedG(state, year, month) {
+  let total = 0;
+  Object.values(state.stock).forEach((entry) => {
+    (entry.batches || []).forEach((b) => {
+      const dt = new Date(b.date + "T00:00:00");
+      if (dt.getFullYear() !== year || dt.getMonth() !== month) return;
+      if (b.frozenOriginal != null) total += b.frozenOriginal * (b.unitG || 15);
+      if (b.fridgeOriginal != null) total += b.fridgeOriginal;
+    });
+  });
+  return Math.round(total);
 }
 
 function RecordTab({ go }) {
@@ -2279,6 +2473,7 @@ function RecordTab({ go }) {
   const prevMonthDate = new Date(reportYM.y, reportYM.m - 1, 1);
   const prevReport = monthStats(state, prevMonthDate.getFullYear(), prevMonthDate.getMonth());
   const reportDiff = report.avgRate != null && prevReport.avgRate != null ? report.avgRate - prevReport.avgRate : null;
+  const producedG = monthProducedG(state, reportYM.y, reportYM.m);
 
   const yISO = addDaysISO(todayISO(), -1);
   const yLogs = state.logs[yISO] || [];
@@ -2342,6 +2537,37 @@ function RecordTab({ go }) {
               <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginBottom: 6 }}>카테고리별 추정 섭취 비율</div>
               <CategoryTotalsBar totals={report.catTotals} height={8} />
               <div style={{ marginTop: 8 }}><CategoryLegend /></div>
+
+              {report.topIngredients.length > 0 && (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${C.border}` }}>
+                  <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginBottom: 8 }}>이 달 많이 먹은 재료 TOP {report.topIngredients.length}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {report.topIngredients.map((ing, i) => (
+                      <div key={ing.name} className="flex items-center justify-between">
+                        <div className="flex items-center" style={{ gap: 6 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, width: 14 }}>{i + 1}</span>
+                          <CatDot name={ing.name} size={7} /><span style={{ fontSize: 12, color: C.ink }}>{ing.name}</span>
+                        </div>
+                        <span style={{ fontSize: 11.5, color: C.sageDeep, fontWeight: 700 }}>약 {ing.g}g</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${C.border}` }}>
+                <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제조량 대비 소비량</div>
+                {producedG > 0 ? (
+                  <div className="flex items-center justify-between">
+                    <span style={{ fontSize: 12, color: C.inkSoft }}>제조 {producedG}g · 재고 차감(제공) {report.totalProv}g</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: report.totalProv > producedG ? C.apricot : C.sageDeep }}>
+                      {Math.round((report.totalProv / producedG) * 100)}%
+                    </span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11.5, color: C.muted }}>이 달에 제조 기록(제조 이력)이 없어 비교할 수 없어요</div>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -2570,13 +2796,60 @@ function RecordHistoryScreen({ onBack }) {
    더보기 하위 화면들
    ===================================================================== */
 function SettingsScreen({ onBack }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const s = state.settings;
   const baby = state.baby;
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [importPending, setImportPending] = useState(null); // 검증 통과한 백업 데이터 (확인 대기)
+  const [importError, setImportError] = useState("");
+  const fileInputRef = useRef(null);
   const set = (key, value) => dispatch({ type: "SET_SETTING", key, value });
   const setBaby = (patch) => dispatch({ type: "BABY_SET", patch });
   const doReset = () => { dispatch({ type: "RESET" }); setConfirmingReset(false); };
+  const handleFileSelected = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // 같은 파일을 다시 선택해도 onChange가 동작하도록 초기화
+    if (!file) return;
+    setImportError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        // 최소한의 형태 검증 - 베이비큐브 백업 파일인지 확인 (핵심 필드 존재 + 재료 마스터가 비어있지 않은지)
+        const looksValid = parsed && typeof parsed === "object"
+          && parsed.ingredients && typeof parsed.ingredients === "object" && Object.keys(parsed.ingredients).length > 0
+          && parsed.stock && typeof parsed.stock === "object"
+          && parsed.logs && typeof parsed.logs === "object"
+          && parsed.plans && typeof parsed.plans === "object";
+        if (!looksValid) {
+          setImportError("올바른 베이비큐브 백업 파일이 아니거나, 재료 정보가 비어있는 파일입니다.");
+          return;
+        }
+        setImportPending(parsed);
+      } catch (err) {
+        setImportError("파일을 읽을 수 없습니다. JSON 백업 파일인지 확인해 주세요.");
+      }
+    };
+    reader.readAsText(file);
+  };
+  const doImport = () => {
+    const backup = state; // 실행취소용 현재 데이터 백업 (가져오기 직전 상태)
+    const migrated = migrateState(importPending);
+    dispatch({ type: "HYDRATE", state: migrated });
+    setImportPending(null);
+    // 가족 공유 앱 특성상, 실행취소를 누르는 시점에 이미 다른 기기(배우자 등)의 변경이 반영돼 있을 수 있음.
+    // 그 사이 변화가 없을 때만 조용히 되돌리고, 변화가 있었다면 그 변경을 덮어써도 되는지 다시 물어봄.
+    notify("백업 데이터를 가져왔습니다", (currentState) => {
+      const unchangedSinceImport = JSON.stringify(currentState) === JSON.stringify(migrated);
+      if (!unchangedSinceImport) {
+        const proceed = window.confirm(
+          "가져오기 이후 추가로 반영된 변경사항이 있어요(다른 가족 구성원의 변경일 수 있어요). 그래도 가져오기 이전 데이터로 되돌릴까요? 그 사이 변경사항은 사라집니다."
+        );
+        if (!proceed) return;
+      }
+      dispatch({ type: "HYDRATE", state: backup });
+    }, 15000);
+  };
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title="설정" onBack={onBack} />
@@ -2641,6 +2914,12 @@ function SettingsScreen({ onBack }) {
               style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
               전체 데이터 내보내기 (JSON 백업)
             </button>
+            <button onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
+              데이터 가져오기 (JSON 백업 복원)
+            </button>
+            <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleFileSelected} style={{ display: "none" }} />
+            {importError && <div style={{ fontSize: 11, color: C.apricot, fontWeight: 600, padding: "0 2px" }}>{importError}</div>}
             <button onClick={() => downloadFile(`babycube-feeding-logs-${todayISO()}.csv`, "﻿" + feedingLogsToCSV(state), "text/csv;charset=utf-8;")}
               style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
               급여 기록 내보내기 (CSV)
@@ -2659,6 +2938,17 @@ function SettingsScreen({ onBack }) {
           confirmLabel="초기화"
           onConfirm={doReset}
           onCancel={() => setConfirmingReset(false)}
+        />
+      )}
+      {importPending && (
+        <ConfirmModal
+          title="백업 데이터를 가져올까요?"
+          message="가져오기를 하면 현재 저장된 모든 데이터(식단·재고·기록 등)가 선택한 백업 파일 내용으로 완전히 교체됩니다. 가족 구성원 모두의 화면에 즉시 반영돼요."
+          warning="가져온 직후 잠시 동안은 하단 '실행취소'로 가져오기 전 데이터로 되돌릴 수 있습니다. 그 이후엔 되돌릴 수 없으니 신중하게 진행해 주세요."
+          confirmLabel="가져오기"
+          danger
+          onConfirm={doImport}
+          onCancel={() => setImportPending(null)}
         />
       )}
     </div>
@@ -2868,6 +3158,7 @@ function MealSlotEditModal({ slot, timeFmt, onClose }) {
 function MoreTab({ go }) {
   const items = [
     { key: "mealSlots", icon: Clock, label: "끼니 설정", sub: "끼니 이름·시간 관리" },
+    { key: "manufactureHistory", icon: History, label: "제조 이력", sub: "재료별 제조 배치 기록 조회" },
     { key: "members", icon: Users, label: "공유 멤버", sub: "초대 코드 · 구성원 관리" },
     { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
     { key: "settings", icon: Settings2, label: "설정", sub: "시간 형식 · 알림 · 아기 정보" },
@@ -2921,6 +3212,7 @@ function Shell() {
   else if (route === "mealSlots") content = <MealSlotsScreen onBack={back} />;
   else if (route === "stockDetail") content = <StockDetailScreen name={params.name} onBack={back} />;
   else if (route === "recordHistory") content = <RecordHistoryScreen onBack={back} />;
+  else if (route === "manufactureHistory") content = <ManufactureHistoryScreen onBack={back} />;
   else if (tab === "today") content = <TodayTab go={go} />;
   else if (tab === "plan") content = <MealPlanTab />;
   else if (tab === "stock") content = <StockTab go={go} />;
@@ -3156,12 +3448,12 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
   };
 
   const [toast, setToast] = useState(null); // { id, message, onUndo }
-  const notify = (message, onUndo) => {
+  const notify = (message, onUndo, duration = 5000) => {
     const id = uid();
     setToast({ id, message, onUndo });
     setTimeout(() => {
       setToast((t) => (t && t.id === id ? null : t));
-    }, 5000);
+    }, duration);
   };
 
   if (!ready) return <CenterMessage text="데이터를 불러오는 중..." />;
@@ -3178,7 +3470,7 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
         <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
           <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
             <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 600 }}>{toast.message}</span>
-            <button onClick={() => { if (toast.onUndo) toast.onUndo(); setToast(null); }}
+            <button onClick={() => { if (toast.onUndo) toast.onUndo(state); setToast(null); }}
               style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
           </div>
         </div>
