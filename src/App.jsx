@@ -13,9 +13,9 @@ import { doc, setDoc, getDoc, updateDoc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
 
 /* ============================================================================
-   이유식 공유 앱 (베이비큐브) — 단일 기기 완전 동작 버전
-   - 모든 데이터는 useReducer 스토어 + localStorage 영속 저장
-   - 부부 공유/배포는 동봉된 가이드 문서(Firebase) 참고
+   이유식 공유 앱 (베이비큐브) — Firebase 클라우드 동기화 버전
+   - 모든 데이터는 useReducer 스토어 + Firestore 실시간 동기화(FamilyStoreProvider)
+   - Google 로그인 후 가족(초대코드) 단위로 데이터를 공유 (배포 가이드 문서 참고)
    ========================================================================== */
 
 /* --------------------------------- 토큰 --------------------------------- */
@@ -64,7 +64,9 @@ const addDaysISO = (iso, n) => {
   d.setDate(d.getDate() + n);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 };
-const uid = () => Math.random().toString(36).slice(2, 9);
+const uid = () => (typeof crypto !== "undefined" && crypto.randomUUID)
+  ? crypto.randomUUID()
+  : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; // 구형 브라우저 대비 폴백
 
 function seedState() {
   const t = todayISO();
@@ -140,8 +142,7 @@ function seedState() {
   };
 }
 
-/* -------------------------------- 영속 저장 -------------------------------- */
-const STORAGE_KEY = "babycube_state_v1";
+/* -------------------------------- 상태 마이그레이션 -------------------------------- */
 // 구버전 상태(eaten/warnings 분리 구조 등)를 최신 구조로 변환
 function migrateState(s) {
   if (!s) return s;
@@ -187,13 +188,6 @@ function migrateState(s) {
     ];
   }
   return out;
-}
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return migrateState(JSON.parse(raw));
-  } catch (e) { /* ignore */ }
-  return seedState();
 }
 
 /* --------------------------------- 리듀서 -------------------------------- */
@@ -299,17 +293,28 @@ function reducer(state, action) {
     /* ---- 급여 기록 (재고 차감 + 섭취율) ---- */
     case "LOG_SAVE": {
       const { date, log } = action;
-      // 재고 차감: 선입선출
+      // 재고 차감: 선입선출, 재료별 deduct 플래그로 반영 여부 결정.
+      // 기존 기록을 수정하는 경우, 예전에 반영했던 재료의 차감분을 먼저 복원한 뒤 새로 차감 (이중차감 방지)
       let stock = JSON.parse(JSON.stringify(state.stock));
+      const dayLogs = state.logs[date] ? [...state.logs[date]] : [];
+      const idx = dayLogs.findIndex((l) => l.id === log.id);
+      if (idx >= 0) {
+        const oldLog = dayLogs[idx];
+        const oldGloballyOff = oldLog.stockAffected === false; // 구버전(전체 On/Off) 기록과의 호환
+        oldLog.items.forEach((it) => {
+          if (oldGloballyOff || it.deduct === false) return;
+          if (it.source === "fridge") restoreFridge(stock, it.name, it.qty);
+          else restoreFrozen(stock, it.name, it.qty);
+        });
+      }
       log.items.forEach((it) => {
+        if (it.deduct === false) return;
         if (it.source === "fridge") {
           deductFridge(stock, it.name, it.qty); // qty=g
         } else {
           deductFrozen(stock, it.name, it.qty); // qty=큐브
         }
       });
-      const dayLogs = state.logs[date] ? [...state.logs[date]] : [];
-      const idx = dayLogs.findIndex((l) => l.id === log.id);
       if (idx >= 0) dayLogs[idx] = log;
       else dayLogs.push(log);
       dayLogs.sort((a, b) => a.time.localeCompare(b.time));
@@ -427,6 +432,19 @@ function deductFridge(stock, name, grams) {
     remaining -= take;
   }
 }
+// 급여 기록 수정 시 기존에 차감했던 만큼 되돌리기 위한 복원 헬퍼 (가장 최근 배치에 복원)
+function restoreFrozen(stock, name, cubes) {
+  const cur = stock[name];
+  if (!cur || !cur.batches || cur.batches.length === 0 || !cubes) return;
+  const target = [...cur.batches].sort((a, b) => b.date.localeCompare(a.date))[0];
+  target.frozen = (target.frozen || 0) + cubes;
+}
+function restoreFridge(stock, name, grams) {
+  const cur = stock[name];
+  if (!cur || !cur.batches || cur.batches.length === 0 || !grams) return;
+  const target = [...cur.batches].sort((a, b) => (b.fridgeExp || "0").localeCompare(a.fridgeExp || "0"))[0];
+  target.fridgeG = (target.fridgeG || 0) + grams;
+}
 
 /* ----------------------------- 공통 계산 헬퍼 ----------------------------- */
 function catOf(state, name) {
@@ -502,16 +520,9 @@ function feedingLogsToCSV(state) {
 }
 
 /* --------------------------- 스토어 컨텍스트 --------------------------- */
+// 실제 앱은 Firebase 기반 FamilyStoreProvider(클라우드 동기화)만 사용합니다.
 const Store = createContext(null);
 const useStore = () => useContext(Store);
-
-function StoreProvider({ children }) {
-  const [state, dispatch] = useReducer(reducer, undefined, loadState);
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
-  }, [state]);
-  return <Store.Provider value={{ state, dispatch }}>{children}</Store.Provider>;
-}
 
 /* =====================================================================
    공통 UI 부품
@@ -636,7 +647,7 @@ function IngredientTable({ items, total }) {
         {sorted.map((it, i) => (
           <div key={it.name} className="flex items-center justify-between" style={{ padding: "7px 9px", borderTop: i === 0 ? "none" : `1px solid ${C.border}` }}>
             <div className="flex items-center"><CatDot name={it.name} /><span style={{ fontSize: 12, color: C.inkSoft }}>{it.name}</span></div>
-            <span style={{ fontSize: 12, color: C.muted }}>{it.gramsOverride != null ? `${gOf(state, it)}g` : `${it.qty}큐브 (${gOf(state, it)}g)`}</span>
+            <span style={{ fontSize: 12, color: C.muted }}>{it.gramsOverride != null ? `${gOf(state, it)}g` : `${gOf(state, it)}g (${it.qty}큐브)`}</span>
           </div>
         ))}
       </div>
@@ -724,12 +735,17 @@ function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min 
    확인 모달 (브라우저 confirm()은 미리보기 샌드박스에서 차단될 수 있어
    앱 내부에서 뜨는 확인창으로 대체)
    ===================================================================== */
-function ConfirmModal({ title, message, confirmLabel = "삭제", danger = true, onConfirm, onCancel }) {
+function ConfirmModal({ title, message, warning, confirmLabel = "삭제", danger = true, onConfirm, onCancel }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 26 }} onClick={onCancel}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, borderRadius: 18, padding: "20px 18px", width: "100%", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-        <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, marginBottom: message ? 6 : 16 }}>{title}</div>
-        {message && <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 16, lineHeight: 1.5 }}>{message}</div>}
+        <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, marginBottom: message || warning ? 6 : 16 }}>{title}</div>
+        {message && <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: warning ? 8 : 16, lineHeight: 1.5 }}>{message}</div>}
+        {warning && (
+          <div style={{ fontSize: 12, color: C.apricot, fontWeight: 700, marginBottom: 16, lineHeight: 1.5, background: C.apricotLight, borderRadius: 10, padding: "8px 10px" }}>
+            ⚠ {warning}
+          </div>
+        )}
         <div className="flex items-center" style={{ gap: 8 }}>
           <button onClick={onCancel} style={{ flex: 1, background: C.sageLight, border: "none", borderRadius: 10, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.inkSoft, cursor: "pointer" }}>취소</button>
           <button onClick={onConfirm} style={{ flex: 1, background: danger ? C.apricot : C.sage, border: "none", borderRadius: 10, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: "#fff", cursor: "pointer" }}>{confirmLabel}</button>
@@ -742,27 +758,51 @@ function ConfirmModal({ title, message, confirmLabel = "삭제", danger = true, 
 /* =====================================================================
    재료 선택 모달
    ===================================================================== */
-function IngredientPicker({ onPick, onClose }) {
+// multi=true면 체크박스로 여러 재료를 한 번에 골라 onPick(names[])으로 전달, false면 기존처럼 탭 즉시 onPick(name) 1건
+const SORT_OPTIONS = [
+  { key: "stockDesc", label: "재고 많은순" },
+  { key: "stockAsc", label: "재고 적은순" },
+  { key: "cat", label: "카테고리순" },
+];
+function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] }) {
   const { state, dispatch } = useStore();
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("전체");
   const [newCat, setNewCat] = useState("채소");
+  const [selected, setSelected] = useState([]);
+  const [sortMode, setSortMode] = useState("stockDesc");
   const names = Object.keys(state.ingredients);
-  const filtered = sortByCategory(state, names.filter((n) =>
-    (cat === "전체" || catOf(state, n) === cat) && n.includes(q)
-  ), (n) => n);
+  const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
+  const base = names.filter((n) => (cat === "전체" || catOf(state, n) === cat) && n.includes(q));
+  const filtered = sortMode === "cat"
+    ? sortByCategory(state, base, (n) => n)
+    : [...base].sort((a, b) => {
+        const sa = stockAmt(a), sb = stockAmt(b);
+        const aHas = sa > 0, bHas = sb > 0;
+        if (aHas !== bHas) return aHas ? -1 : 1; // 재고 있는 재료가 항상 먼저
+        return sortMode === "stockAsc" ? sa - sb : sb - sa;
+      });
   const isNew = q && !names.includes(q);
+  const addedSet = new Set(alreadyAdded);
 
   const confirmNew = () => {
     dispatch({ type: "INGREDIENT_ENSURE", name: q, cat: newCat });
-    onPick(q, newCat);
+    if (multi) {
+      setSelected((p) => p.includes(q) ? p : [...p, q]);
+      setQ("");
+    } else {
+      onPick(q, newCat);
+    }
   };
+
+  const toggle = (n) => setSelected((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n]);
+  const confirmSelection = () => { onPick(selected); onClose(); };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
         <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
-          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>재료 선택</span>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{multi ? `재료 선택${selected.length ? ` (${selected.length})` : ""}` : "재료 선택"}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
         </div>
         <div style={{ padding: "0 18px 10px" }}>
@@ -771,10 +811,17 @@ function IngredientPicker({ onPick, onClose }) {
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료 검색 또는 새 재료 입력"
               style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
           </div>
-          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
             {["전체", ...CATEGORIES].map((c) => (
               <button key={c} onClick={() => setCat(c)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
                 border: "none", background: cat === c ? C.sage : C.sageLight, color: cat === c ? "#fff" : C.sageDeep }}>{c}</button>
+            ))}
+          </div>
+          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬</span>
+            {SORT_OPTIONS.map((o) => (
+              <button key={o.key} onClick={() => setSortMode(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                border: `1px solid ${sortMode === o.key ? C.sage : C.border}`, background: sortMode === o.key ? C.sageLight : "transparent", color: sortMode === o.key ? C.sageDeep : C.muted }}>{o.label}</button>
             ))}
           </div>
         </div>
@@ -797,12 +844,24 @@ function IngredientPicker({ onPick, onClose }) {
           )}
           {filtered.map((n) => {
             const cubes = stockTotalCubes(state, n), fg = stockFridgeG(state, n);
+            const already = multi && addedSet.has(n);
+            const checked = selected.includes(n);
             return (
-              <button key={n} onClick={() => onPick(n)} className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
-                borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
-                <div className="flex items-center"><CatDot name={n} size={8} /><span style={{ fontSize: 13, color: C.ink }}>{n}</span></div>
+              <button key={n} onClick={() => (multi ? (already ? null : toggle(n)) : onPick(n))} disabled={already}
+                className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
+                borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid",
+                cursor: already ? "default" : "pointer", opacity: already ? 0.45 : 1 }}>
+                <div className="flex items-center" style={{ gap: multi ? 9 : 0 }}>
+                  {multi && (
+                    <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${checked ? C.sage : C.border}`,
+                      background: checked ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      {checked && <Check size={12} color="#fff" />}
+                    </span>
+                  )}
+                  <CatDot name={n} size={8} /><span style={{ fontSize: 13, color: C.ink }}>{n}</span>
+                </div>
                 <span style={{ fontSize: 11, color: cubes || fg ? C.muted : C.apricot }}>
-                  {cubes || fg ? `냉동 ${cubes}${fg ? ` · 냉장 ${fg}g` : ""}` : "재고없음"}
+                  {already ? "이미 담김" : cubes || fg ? `냉동 ${cubes}${fg ? ` · 냉장 ${fg}g` : ""}` : "재고없음"}
                 </span>
               </button>
             );
@@ -811,6 +870,14 @@ function IngredientPicker({ onPick, onClose }) {
             <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>검색 결과가 없습니다</div>
           )}
         </div>
+        {multi && (
+          <div style={{ padding: "10px 18px 20px", borderTop: `1px solid ${C.border}` }}>
+            <button onClick={confirmSelection} disabled={selected.length === 0}
+              style={{ ...primaryBtn, background: selected.length ? C.sage : C.sageLight, color: selected.length ? "#fff" : C.muted, cursor: selected.length ? "pointer" : "default" }}>
+              {selected.length > 0 ? `${selected.length}개 재료 추가` : "재료를 선택하세요"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -894,6 +961,55 @@ function MealSlotPicker({ slots, timeFmt, onPick, onClose }) {
 }
 
 /* =====================================================================
+   다른 날짜의 끼니를 복사해오는 선택기 (식단표 재료 재입력 수고를 줄이기 위함)
+   ===================================================================== */
+function MealCopyPicker({ onPick, onClose }) {
+  const { state } = useStore();
+  const [q, setQ] = useState("");
+  const timeFmt = state.settings.timeFmt;
+  const all = [];
+  Object.keys(state.plans).sort((a, b) => b.localeCompare(a)).forEach((d) => {
+    (state.plans[d] || []).forEach((m) => all.push({ date: d, meal: m }));
+  });
+  const filtered = all.filter(({ date, meal }) =>
+    !q || meal.label.includes(q) || date.includes(q) || meal.items.some((it) => it.name.includes(q))
+  );
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
+        <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>식단 복사</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
+        </div>
+        <div style={{ padding: "0 18px 10px" }}>
+          <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
+            <Search size={15} color={C.muted} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="날짜, 끼니 이름, 재료로 검색"
+              style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+          </div>
+          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8 }}>선택하면 현재 재료 목록이 해당 끼니 재료로 대체됩니다.</div>
+        </div>
+        <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
+          {filtered.map(({ date, meal }) => (
+            <button key={date + meal.id} onClick={() => { onPick(meal); onClose(); }} className="flex flex-col" style={{ width: "100%", textAlign: "left", padding: "10px 12px",
+              borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{date} · {meal.label}</span>
+                <span style={{ fontSize: 10.5, color: C.muted }}>{fmtTime(meal.time, timeFmt)}</span>
+              </div>
+              <MealItemList items={meal.items} fontSize={10.5} wrap />
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>복사할 수 있는 끼니 기록이 없습니다</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
    끼니 편집 화면 (식단 계획용)
    ===================================================================== */
 function MealEditScreen({ date, meal, onBack }) {
@@ -908,6 +1024,7 @@ function MealEditScreen({ date, meal, onBack }) {
   })));
   const [picker, setPicker] = useState(false);
   const [slotPicker, setSlotPicker] = useState(false);
+  const [copyPicker, setCopyPicker] = useState(false);
 
   const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: it.qty + d } : it).filter((it) => it.qty > 0));
   const upUnit = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, unitG: v } : it));
@@ -919,9 +1036,20 @@ function MealEditScreen({ date, meal, onBack }) {
     return { ...it, gramsOverride: null, qty: Math.max(1, Math.round(curG / (it.unitG || 15))) };
   }));
   const rm = (name) => setItems((p) => p.filter((it) => it.name !== name));
-  const addItem = (name) => {
+  const addItems = (names) => {
     setPicker(false);
-    setItems((p) => p.some((it) => it.name === name) ? p : [...p, { name, qty: 1, unitG: unitGOf(state, name), gramsOverride: null }]);
+    setItems((p) => {
+      const existing = new Set(p.map((it) => it.name));
+      const toAdd = names.filter((n) => !existing.has(n)).map((name) => ({ name, qty: 1, unitG: unitGOf(state, name), gramsOverride: null }));
+      return [...p, ...toAdd];
+    });
+  };
+  const copyMeal = (srcMeal) => {
+    setItems(srcMeal.items.map((it) => ({
+      ...it,
+      unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
+      gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
+    })));
   };
   const total = totalG(state, items);
 
@@ -961,6 +1089,9 @@ function MealEditScreen({ date, meal, onBack }) {
           <span className="flex items-center" style={{ gap: 5, fontSize: 13, fontWeight: 700, color: label ? C.ink : C.muted }}>{label || "선택"} <ChevronRight size={14} color={C.muted} /></span>
         </button>
         <TimePicker time={time} setTime={setTime} timeFmt={timeFmt} />
+        <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer" }}>
+          다른 날짜 식단 복사해오기
+        </button>
 
         <div>
           <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
@@ -1010,8 +1141,9 @@ function MealEditScreen({ date, meal, onBack }) {
 
         <button onClick={save} style={primaryBtn}>저장</button>
       </div>
-      {picker && <IngredientPicker onPick={addItem} onClose={() => setPicker(false)} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
+      {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>
   );
 }
@@ -1029,9 +1161,13 @@ function BulkSaveScreen({ initialCursor, onBack }) {
   const [items, setItems] = useState([]);
   const [picker, setPicker] = useState(false);
   const [slotPicker, setSlotPicker] = useState(false);
+  const [copyPicker, setCopyPicker] = useState(false);
   const [monthCursor, setMonthCursor] = useState(initialCursor);
   const [selectedDates, setSelectedDates] = useState([]);
   const [result, setResult] = useState(null); // { applied, skipped }
+  const [intervalStart, setIntervalStart] = useState(todayISO());
+  const [intervalDays, setIntervalDays] = useState(1);
+  const [intervalCount, setIntervalCount] = useState(4);
 
   const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: it.qty + d } : it).filter((it) => it.qty > 0));
   const upUnit = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, unitG: v } : it));
@@ -1043,9 +1179,21 @@ function BulkSaveScreen({ initialCursor, onBack }) {
     return { ...it, gramsOverride: null, qty: Math.max(1, Math.round(curG / (it.unitG || 15))) };
   }));
   const rm = (name) => setItems((p) => p.filter((it) => it.name !== name));
-  const addItem = (name) => {
+  const addItems = (names) => {
     setPicker(false);
-    setItems((p) => p.some((it) => it.name === name) ? p : [...p, { name, qty: 1, unitG: unitGOf(state, name), gramsOverride: null }]);
+    setItems((p) => {
+      const existing = new Set(p.map((it) => it.name));
+      const toAdd = names.filter((n) => !existing.has(n)).map((name) => ({ name, qty: 1, unitG: unitGOf(state, name), gramsOverride: null }));
+      return [...p, ...toAdd];
+    });
+  };
+  const copyMeal = (srcMeal) => {
+    setItems(srcMeal.items.map((it) => ({
+      ...it,
+      unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
+      gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
+    })));
+    if (!label) setLabel(srcMeal.label);
   };
 
   const pickSlot = (slotLabel, slotTime) => {
@@ -1065,6 +1213,16 @@ function BulkSaveScreen({ initialCursor, onBack }) {
   const toggleDate = (iso) => setSelectedDates((p) => p.includes(iso) ? p.filter((x) => x !== iso) : [...p, iso]);
   const shiftMonth = (n) => setMonthCursor(new Date(year, month + n, 1));
   const hasLabel = (iso) => label && (state.plans[iso] || []).some((m) => m.label === label);
+  const clearDates = () => setSelectedDates([]);
+  // N일 간격으로 시작일부터 지정 횟수만큼 자동으로 날짜를 선택(기존 선택에 추가)
+  const applyInterval = () => {
+    const days = Math.max(1, Number(intervalDays) || 1);
+    const count = Math.max(1, Math.min(60, Number(intervalCount) || 1));
+    const dates = Array.from({ length: count }, (_, i) => addDaysISO(intervalStart, i * days));
+    setSelectedDates((p) => Array.from(new Set([...p, ...dates])));
+    const [sy, sm] = intervalStart.split("-").map(Number);
+    setMonthCursor(new Date(sy, sm - 1, 1));
+  };
 
   const canSave = label && items.length > 0 && selectedDates.length > 0;
 
@@ -1109,6 +1267,9 @@ function BulkSaveScreen({ initialCursor, onBack }) {
             <span className="flex items-center" style={{ gap: 5, fontSize: 13, fontWeight: 700, color: label ? C.ink : C.muted }}>{label || "선택"} <ChevronRight size={14} color={C.muted} /></span>
           </button>
           <TimePicker time={time} setTime={setTime} timeFmt={timeFmt} />
+          <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer", marginTop: 8, width: "100%" }}>
+            다른 날짜 식단 복사해오기
+          </button>
         </div>
 
         <div>
@@ -1156,8 +1317,29 @@ function BulkSaveScreen({ initialCursor, onBack }) {
         <div>
           <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
             <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 700 }}>적용할 날짜 선택</span>
-            <span style={{ fontSize: 11.5, color: C.sageDeep, fontWeight: 700 }}>{selectedDates.length}일 선택됨</span>
+            <div className="flex items-center" style={{ gap: 8 }}>
+              <span style={{ fontSize: 11.5, color: C.sageDeep, fontWeight: 700 }}>{selectedDates.length}일 선택됨</span>
+              {selectedDates.length > 0 && (
+                <button onClick={clearDates} style={{ background: "none", border: "none", color: C.muted, fontSize: 11, cursor: "pointer", padding: 0 }}>초기화</button>
+              )}
+            </div>
           </div>
+
+          <div style={{ background: C.sageLight, borderRadius: 12, padding: 12, marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>N일 간격으로 자동 선택</div>
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+              <input type="date" value={intervalStart} onChange={(e) => setIntervalStart(e.target.value)}
+                style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 8px", fontSize: 12, color: C.ink, outline: "none", background: C.surface }} />
+              <div className="flex items-center" style={{ gap: 4 }}>
+                <NumInput value={intervalDays} onChange={setIntervalDays} width={34} suffix="일 간격" />
+              </div>
+              <div className="flex items-center" style={{ gap: 4 }}>
+                <NumInput value={intervalCount} onChange={setIntervalCount} width={34} suffix="회" />
+              </div>
+            </div>
+            <button onClick={applyInterval} style={{ ...primaryBtn, padding: "8px 0", fontSize: 12 }}>자동 선택 적용</button>
+          </div>
+
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
             <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
               <button onClick={() => shiftMonth(-1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronLeft size={16} color={C.muted} /></button>
@@ -1199,8 +1381,33 @@ function BulkSaveScreen({ initialCursor, onBack }) {
           {selectedDates.length > 0 ? `${selectedDates.length}개 날짜에 저장` : "날짜를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker onPick={addItem} onClose={() => setPicker(false)} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
+      {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
+    </div>
+  );
+}
+
+// 급여 기록 화면에서 재료별로 "저장하면 재고가 어떻게 바뀌는지" 안내 + 재고 반영 여부 체크박스
+// (재고가 아예 없는 재료는 반영할 재고 자체가 없으므로 체크박스를 넣지 않음)
+function StockChangeHint({ item, checked, onToggle }) {
+  const { state } = useStore();
+  const cur = item.source === "frozen" ? stockTotalCubes(state, item.name) : stockFridgeG(state, item.name);
+  if (cur <= 0) {
+    return <div style={{ textAlign: "right", fontSize: 10, color: C.muted, marginTop: 4 }}>재고에 없는 재료예요</div>;
+  }
+  const unit = item.source === "frozen" ? "큐브" : "g";
+  const used = item.source === "frozen" ? (item.qty || 0) : (item.fridgeG || 0);
+  const after = Math.max(0, cur - used);
+  const text = `재고 ${cur}${unit} → ${checked ? after : cur}${unit}`;
+  return (
+    <div className="flex items-center justify-end" style={{ gap: 7, marginTop: 4 }}>
+      <span style={{ fontSize: 10, color: C.muted }}>{text}</span>
+      <label className="flex items-center" style={{ gap: 4, cursor: "pointer" }}>
+        <input type="checkbox" checked={checked} onChange={onToggle}
+          style={{ width: 12, height: 12, cursor: "pointer", accentColor: C.sage }} />
+        <span style={{ fontSize: 10, color: checked ? C.sageDeep : C.muted, fontWeight: 700 }}>재고 반영</span>
+      </label>
     </div>
   );
 }
@@ -1213,12 +1420,32 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   const base = existingLog || planMeal;
   const [time] = useState(base.time || "12:00");
   const [label] = useState(base.label || "끼니");
-  // 제공 항목: 출처(냉동/냉장) + 수량
+  // 제공 항목: 출처(냉동/냉장) + 수량. 식단표에서 "그램으로 입력"(gramsOverride)한 재료는
+  // 실제 중량을 그대로 이어받도록 냉장(계량) 방식으로 옮겨온다 (기본 15g으로 뭉개지는 문제 방지)
   const [items, setItems] = useState(
     base.items.map((it) => {
+      const effectiveUnitG = it.unitG != null ? it.unitG : unitGOf(state, it.name);
+      // 기존 급여기록을 다시 불러오는 경우: 저장 당시의 source(냉동/냉장)를 그대로 존중해야
+      // 냉장(중량) 입력값이 냉동(큐브) 개수로 잘못 바뀌는 문제가 없음
+      if (it.source === "fridge") {
+        return { name: it.name, source: "fridge", qty: 1, fridgeG: it.qty || 0, unitG: effectiveUnitG, deduct: it.deduct !== false };
+      }
+      if (it.source === "frozen") {
+        return { name: it.name, source: "frozen", qty: it.qty || 1, fridgeG: effectiveUnitG * (it.qty || 1), unitG: effectiveUnitG, deduct: it.deduct !== false };
+      }
+      // 식단표 항목(아직 급여기록으로 저장된 적 없음, source 필드 없음)
+      const hasGramsOverride = it.gramsOverride != null;
+      const totalGForItem = hasGramsOverride ? it.gramsOverride : (it.qty || 1) * effectiveUnitG;
       const hasFridge = stockFridgeG(state, it.name) > 0;
-      return { name: it.name, source: hasFridge && it.name !== "죽" ? "fridge" : "frozen",
-        qty: it.qty || 1, fridgeG: it.unitG ? it.unitG * (it.qty || 1) : 15, unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name) };
+      const source = hasGramsOverride ? "fridge" : (hasFridge && it.name !== "죽" ? "fridge" : "frozen");
+      return {
+        name: it.name,
+        source,
+        qty: hasGramsOverride ? Math.max(1, Math.round(totalGForItem / (effectiveUnitG || 15))) : (it.qty || 1),
+        fridgeG: hasGramsOverride ? totalGForItem : (effectiveUnitG * (it.qty || 1)),
+        unitG: effectiveUnitG,
+        deduct: it.deduct !== false,
+      };
     })
   );
   const [picker, setPicker] = useState(false);
@@ -1229,16 +1456,25 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
 
   const setSource = (name, src) => setItems((p) => p.map((it) => it.name === name ? { ...it, source: src } : it));
   const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: Math.max(1, it.qty + d) } : it));
+  const upUnit = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, unitG: v } : it));
   const upFridge = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, fridgeG: v } : it));
+  const toggleDeduct = (name) => setItems((p) => p.map((it) => it.name === name ? { ...it, deduct: !it.deduct } : it));
   const rm = (name) => setItems((p) => p.filter((it) => it.name !== name));
-  const addItem = (name) => { setPicker(false); setItems((p) => p.some((it) => it.name === name) ? p : [...p, { name, source: "frozen", qty: 1, fridgeG: 15, unitG: unitGOf(state, name) }]); };
+  const addItems = (names) => {
+    setPicker(false);
+    setItems((p) => {
+      const existing = new Set(p.map((it) => it.name));
+      const toAdd = names.filter((n) => !existing.has(n)).map((name) => ({ name, source: "frozen", qty: 1, fridgeG: 15, unitG: unitGOf(state, name), deduct: true }));
+      return [...p, ...toAdd];
+    });
+  };
 
   const quick = [["완식", 1], ["3/4", 0.75], ["절반", 0.5], ["조금", 0.25], ["거부", 0]];
 
   const save = () => {
     const logItems = items.map((it) => it.source === "fridge"
-      ? { name: it.name, source: "fridge", qty: it.fridgeG, unitG: 1 }
-      : { name: it.name, source: "frozen", qty: it.qty, unitG: it.unitG });
+      ? { name: it.name, source: "fridge", qty: it.fridgeG, unitG: 1, deduct: it.deduct !== false }
+      : { name: it.name, source: "frozen", qty: it.qty, unitG: it.unitG, deduct: it.deduct !== false });
     dispatch({ type: "LOG_SAVE", date, log: { id: existingLog ? existingLog.id : uid(), label, time, items: logItems, intakeG: intake == null ? totalProvide : intake } });
     onBack();
   };
@@ -1248,7 +1484,7 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
       <SubHeader title={`${label} 급여 기록`} onBack={onBack} />
       <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 600, padding: "0 2px" }}>
-          {fmtTime(time, state.settings.timeFmt)} · 꺼낸 재료가 재고에서 차감됩니다
+          {fmtTime(time, state.settings.timeFmt)} · 재료별로 재고 반영 여부를 선택할 수 있어요
         </div>
 
         <div>
@@ -1268,7 +1504,10 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
                 </div>
                 {it.source === "frozen" ? (
                   <div className="flex items-center justify-between">
-                    <span style={{ fontSize: 10.5, color: C.muted }}>큐브당 {it.unitG}g</span>
+                    <div className="flex items-center" style={{ gap: 6 }}>
+                      <span style={{ fontSize: 10.5, color: C.muted }}>큐브당</span>
+                      <NumInput value={it.unitG} onChange={(v) => upUnit(it.name, v)} width={38} suffix="g" />
+                    </div>
                     <div className="flex items-center" style={{ gap: 8 }}>
                       <button onClick={() => upQty(it.name, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
                       <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}큐브</span>
@@ -1282,6 +1521,7 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
                   </div>
                 )}
                 <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 5 }}>제공 {provideG(it)}g</div>
+                <StockChangeHint item={it} checked={it.deduct !== false} onToggle={() => toggleDeduct(it.name)} />
               </div>
             ))}
           </div>
@@ -1323,7 +1563,7 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
 
         <button onClick={save} style={primaryBtn}>기록 저장</button>
       </div>
-      {picker && <IngredientPicker onPick={addItem} onClose={() => setPicker(false)} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
     </div>
   );
 }
@@ -1350,6 +1590,15 @@ function daysLeft(state, name) {
   const avg = avgDailyUse(state, name);
   if (avg <= 0) return null;
   return Math.floor(g / avg);
+}
+// 냉동 재료의 보관 마지노선(제조일 기준 14일)까지 남은 일수 — 가장 임박한 배치 기준
+function frozenStorageDaysLeft(state, name) {
+  const batches = stockBatches(state, name).filter((b) => b.frozen > 0 && b.frozenExp);
+  if (batches.length === 0) return null;
+  const nearestExp = batches.reduce((min, b) => (b.frozenExp < min ? b.frozenExp : min), batches[0].frozenExp);
+  const t = todayISO();
+  const diffMs = new Date(nearestExp + "T00:00:00") - new Date(t + "T00:00:00");
+  return Math.round(diffMs / 86400000);
 }
 function frozenAlerts(state) {
   return Object.keys(state.stock).map((name) => {
@@ -1793,8 +2042,8 @@ function StockTab({ go }) {
   const [batchModal, setBatchModal] = useState(false);
   const names = Object.keys(state.stock).filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
   const sorted = names.sort((a, b) => {
-    const da = daysLeft(state, a), db = daysLeft(state, b);
-    return (da == null ? 99 : da) - (db == null ? 99 : db);
+    const da = frozenStorageDaysLeft(state, a), db = frozenStorageDaysLeft(state, b);
+    return (da == null ? 999 : da) - (db == null ? 999 : db);
   });
 
   return (
@@ -1804,7 +2053,8 @@ function StockTab({ go }) {
         {sorted.map((name) => {
           const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
           const fgGrams = stockTotalFrozenG(state, name);
-          const dl = daysLeft(state, name);
+          const expDays = frozenStorageDaysLeft(state, name);
+          const expUrgent = expDays != null && expDays <= 3;
           return (
             <button key={name} onClick={() => go("stockDetail", { name })} className="flex flex-col" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${fg > 0 ? C.apricot : C.border}`, borderRadius: 16, padding: 14, cursor: "pointer" }}>
               <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
@@ -1816,7 +2066,9 @@ function StockTab({ go }) {
               </div>
               <div className="flex items-center justify-between" style={{ marginBottom: fg > 0 ? 8 : 0 }}>
                 <div className="flex items-center" style={{ gap: 9 }}><Snowflake size={14} color={C.sageDeep} /><CubeGrid filled={cubes} total={10} /></div>
-                <span style={{ fontSize: 11.5, color: C.muted }}>{cubes}큐브 ({fgGrams}g){dl != null ? ` · ~${dl}일` : ""}</span>
+                <span style={{ fontSize: 11.5, color: expUrgent ? C.apricot : C.muted, fontWeight: expUrgent ? 700 : 400 }}>
+                  {cubes}큐브 ({fgGrams}g){expDays != null ? ` · ${expDays < 0 ? "보관기한 지남" : `보관기한 ~${expDays}일`}` : ""}
+                </span>
               </div>
               {fg > 0 && (
                 <div className="flex items-center justify-between">
@@ -2286,7 +2538,8 @@ function RecordHistoryScreen({ onBack }) {
       {delDay && (
         <ConfirmModal
           title={`${delDay} 기록을 전체 삭제할까요?`}
-          message="이 날짜의 급여 기록이 모두 삭제됩니다. 재고는 자동으로 복원되지 않습니다."
+          message="이 날짜의 급여 기록이 모두 삭제됩니다."
+          warning="삭제해도 이미 차감된 재고 수량은 자동으로 복원되지 않습니다."
           onConfirm={() => {
             const logsBackup = state.logs[delDay] || [];
             dispatch({ type: "LOG_DELETE_DAY", date: delDay });
@@ -2299,7 +2552,7 @@ function RecordHistoryScreen({ onBack }) {
       {delEntry && (
         <ConfirmModal
           title={`'${delEntry.label}' 기록을 삭제할까요?`}
-          message="재고는 자동으로 복원되지 않습니다."
+          warning="삭제해도 이미 차감된 재고 수량은 자동으로 복원되지 않습니다."
           onConfirm={() => {
             const log = (state.logs[delEntry.date] || []).find((l) => l.id === delEntry.logId);
             dispatch({ type: "LOG_DELETE_ENTRY", date: delEntry.date, logId: delEntry.logId });
@@ -2843,6 +3096,7 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
   const [state, dispatch] = useReducer(reducer, undefined, () => seedState());
   const [ready, setReady] = useState(false);
   const [meta, setMeta] = useState({ members: [], memberInfo: {}, ownerUid: null });
+  const [syncError, setSyncError] = useState(false);
   const lastSentRef = useRef(null);
 
   useEffect(() => {
@@ -2863,8 +3117,31 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
     if (!ready) return; // 최초 원격 데이터 수신 전에는 로컬 seed로 덮어쓰지 않음
     const json = JSON.stringify(state);
     if (json === lastSentRef.current) return;
+    const prevSent = lastSentRef.current;
     lastSentRef.current = json;
-    setDoc(doc(db, "families", familyId), { state }, { merge: true });
+    setDoc(doc(db, "families", familyId), { state }, { merge: true })
+      .then(() => setSyncError(false))
+      .catch((err) => {
+        console.error("Firestore 저장 실패:", err);
+        // 저장이 실패하면 다음 변경 시 재시도될 수 있도록 되돌려 둠 (조용히 유실되는 것 방지)
+        lastSentRef.current = prevSent;
+        setSyncError(true);
+      });
+  }, [state, ready, familyId]);
+
+  // 네트워크가 복구되면 마지막으로 실패했던 저장을 다시 시도
+  useEffect(() => {
+    const retry = () => {
+      if (!ready) return;
+      const json = JSON.stringify(state);
+      if (json === lastSentRef.current) return;
+      lastSentRef.current = json;
+      setDoc(doc(db, "families", familyId), { state }, { merge: true })
+        .then(() => setSyncError(false))
+        .catch((err) => { console.error("Firestore 재시도 실패:", err); setSyncError(true); });
+    };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
   }, [state, ready, familyId]);
 
   const leaveFamily = async () => {
@@ -2892,6 +3169,11 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
   return (
     <Store.Provider value={{ state, dispatch, cloud: { familyId, user, meta, leaveFamily, logout: onLogout }, notify }}>
       <Shell />
+      {syncError && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 70, background: C.apricot, color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
+          저장에 실패했어요. 인터넷 연결을 확인해 주세요. 연결되면 자동으로 다시 저장을 시도합니다.
+        </div>
+      )}
       {toast && (
         <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
           <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
@@ -2943,6 +3225,41 @@ function AuthGate() {
   return <FamilyStoreProvider familyId={familyId} user={user} onLogout={logout} />;
 }
 
+/* ----------------------------- 에러 바운더리 ----------------------------- */
+// reducer나 렌더링 중 예기치 못한 오류가 나도 흰 화면 대신 복구 UI를 보여줌
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error, info) {
+    console.error("앱 오류:", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ minHeight: "100dvh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: C.bg, padding: 24, fontFamily: "'Noto Sans KR', sans-serif", gap: 14, textAlign: "center" }}>
+          <style>{FONT_IMPORT}</style>
+          <CubeMark size={36} />
+          <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>문제가 발생했어요</div>
+          <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.6, maxWidth: 280 }}>
+            화면을 표시하는 중 오류가 발생했습니다. 저장된 데이터는 안전하니 새로고침해 주세요.
+          </div>
+          <button onClick={() => window.location.reload()} style={{ ...primaryBtn, width: "auto", padding: "10px 28px" }}>새로고침</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
-  return <AuthGate />;
+  return (
+    <ErrorBoundary>
+      <AuthGate />
+    </ErrorBoundary>
+  );
 }
