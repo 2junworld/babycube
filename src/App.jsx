@@ -482,6 +482,11 @@ function gOf(state, item) {
 function totalG(state, items) {
   return items.reduce((s, it) => s + gOf(state, it), 0);
 }
+// 급여기록(log) 항목들의 총 제공량(g) - 냉장 항목은 qty가 이미 그램, 냉동 항목은 qty(큐브)*unitG
+// (급여기록 여러 곳에서 "제공량 중 섭취량 %"를 계산할 때 공통으로 씀)
+function logProvideG(log) {
+  return log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+}
 function catTotals(state, items) {
   const t = {}; CATEGORIES.forEach((c) => { t[c] = 0; });
   items.forEach((it) => { t[catOf(state, it.name)] += gOf(state, it); });
@@ -564,7 +569,7 @@ function feedingLogsToCSV(state) {
   const rows = [header];
   Object.keys(state.logs).sort().forEach((date) => {
     (state.logs[date] || []).forEach((log) => {
-      const prov = log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+      const prov = logProvideG(log);
       const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
       rows.push([date, log.label, log.time, prov, log.intakeG, pct]);
     });
@@ -1809,7 +1814,7 @@ function TodayTab({ go }) {
         {meals.map((m) => {
           const total = totalG(state, m.items);
           const intake = m.log ? m.log.intakeG : null;
-          const provided = m.log ? m.log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0) : total;
+          const provided = m.log ? logProvideG(m.log) : total;
           return (
             <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14 }}>
               <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
@@ -1883,6 +1888,20 @@ function weekMealLabels(state, days) {
   }));
   const extraLabels = Array.from(extra.entries()).sort((a, b) => a[1].localeCompare(b[1])).map(([l]) => l);
   return [...configured, ...extraLabels];
+}
+
+// 급여표(실제 기록) 그리드의 열 순서: 계획 라벨(weekMealLabels) 기준에, 그 주에 실제 기록만
+// 있고 계획은 없는 라벨(예: 계획을 나중에 삭제했지만 기록은 남아있는 경우)을 뒤에 합쳐서(union)
+// 계산함 - 계획 라벨만 쓰면 이런 "계획 없는 기록"이 급여표에서 조용히 안 보이게 됨
+function weekLogLabels(state, days) {
+  const planLabels = weekMealLabels(state, days);
+  const extra = new Map();
+  days.forEach((iso) => (state.logs[iso] || []).forEach((l) => {
+    if (planLabels.includes(l.label) || extra.has(l.label)) return;
+    extra.set(l.label, l.time || "99:99");
+  }));
+  const extraLabels = Array.from(extra.entries()).sort((a, b) => a[1].localeCompare(b[1])).map(([l]) => l);
+  return [...planLabels, ...extraLabels];
 }
 
 function WeekTable({ startISO, onPickDay }) {
@@ -2163,52 +2182,139 @@ function BatchModal({ presetName, onClose }) {
 /* =====================================================================
    재고 탭
    ===================================================================== */
+// 재고 탭 필터 칩: 전체 / 소진임박(urgentStockNames) / 냉동(냉동 수량 있음) / 냉장(냉장 수량 있음) / 카테고리별
+const STOCK_FILTERS = ["전체", "소진임박", "냉동", "냉장", ...CATEGORIES];
+// 재고 탭 정렬 옵션: 기본은 카테고리순(카테고리 → 가나다순), 그 외 이름순/재고량순 선택 가능
+const STOCK_SORT_OPTIONS = [
+  { key: "cat", label: "카테고리순" },
+  { key: "name", label: "이름순" },
+  { key: "stockDesc", label: "재고 많은순" },
+  { key: "stockAsc", label: "재고 적은순" },
+];
+
+// 소진임박 재료용 큰 카드 - 기존 재고 탭 카드 디자인을 그대로 유지
+function StockUrgentCard({ name, onClick }) {
+  const { state } = useStore();
+  const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
+  const fgGrams = stockTotalFrozenG(state, name);
+  const expDays = frozenStorageDaysLeft(state, name);
+  const expUrgent = expDays != null && expDays <= 3;
+  return (
+    <button onClick={onClick} className="flex flex-col" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${fg > 0 ? C.apricot : C.border}`, borderRadius: 16, padding: 14, cursor: "pointer" }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+        <div className="flex items-center"><CatDot name={name} size={8} /><span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{name}</span></div>
+        <div className="flex items-center" style={{ gap: 6 }}>
+          {fg > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.apricot }}>냉장 소진 임박</span>}
+          <ChevronRight size={15} color={C.muted} />
+        </div>
+      </div>
+      <div className="flex items-center justify-between" style={{ marginBottom: fg > 0 ? 8 : 0 }}>
+        <div className="flex items-center" style={{ gap: 9 }}><Snowflake size={14} color={C.sageDeep} /><CubeGrid filled={cubes} total={10} /></div>
+        <span style={{ fontSize: 11.5, color: expUrgent ? C.apricot : C.muted, fontWeight: expUrgent ? 700 : 400 }}>
+          {cubes}큐브 ({fgGrams}g){expDays != null ? ` · ${expDays < 0 ? "보관기한 지남" : `보관기한 ~${expDays}일`}` : ""}
+        </span>
+      </div>
+      {fg > 0 && (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center" style={{ gap: 9 }}><Refrigerator size={14} color={C.apricot} /><span style={{ fontSize: 12, color: C.inkSoft }}>냉장 보관</span></div>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: C.apricot }}>{fg}g</span>
+        </div>
+      )}
+    </button>
+  );
+}
+
+// 일반 재료용 컴팩트 리스트 행 - 한 줄로 게이지 + 수량만 보여줌
+function StockCompactRow({ name, onClick, urgent }) {
+  const { state } = useStore();
+  const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
+  return (
+    <button onClick={onClick} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
+      <div className="flex items-center" style={{ gap: 8, minWidth: 0, flex: 1 }}>
+        <CatDot name={name} size={7} />
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+        {urgent && <span style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>임박</span>}
+      </div>
+      <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
+        {cubes > 0 && <CubeGrid filled={Math.min(cubes, 10)} total={10} size={6} gap={2} />}
+        <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>
+          {cubes > 0 ? `${cubes}큐브` : ""}{cubes > 0 && fg > 0 ? " · " : ""}{fg > 0 ? `${fg}g` : ""}
+        </span>
+        <ChevronRight size={13} color={C.muted} />
+      </div>
+    </button>
+  );
+}
+
 function StockTab({ go }) {
   const { state } = useStore();
   const [batchModal, setBatchModal] = useState(false);
-  const names = Object.keys(state.stock).filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
-  const sorted = names.sort((a, b) => {
-    const da = frozenStorageDaysLeft(state, a), db = frozenStorageDaysLeft(state, b);
-    return (da == null ? 999 : da) - (db == null ? 999 : db);
-  });
+  const [filter, setFilter] = useState("전체");
+  const [sortMode, setSortMode] = useState("cat");
+
+  const allNames = Object.keys(state.stock).filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
+  const urgent = urgentStockNames(state); // 이미 긴급도순으로 정렬돼 있음(냉장 보관중 > 냉동 보관기한 임박순)
+  const urgentSet = new Set(urgent.map((u) => u.name));
+
+  const matchesFilter = (n) => {
+    if (filter === "전체") return true;
+    if (filter === "소진임박") return urgentSet.has(n);
+    if (filter === "냉동") return stockTotalCubes(state, n) > 0;
+    if (filter === "냉장") return stockFridgeG(state, n) > 0;
+    return catOf(state, n) === filter; // 카테고리 필터
+  };
+  const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
+  const sortNames = (list) => {
+    if (sortMode === "cat") return sortByCategory(state, list, (n) => n);
+    if (sortMode === "name") return [...list].sort((a, b) => a.localeCompare(b, "ko"));
+    return [...list].sort((a, b) => sortMode === "stockAsc" ? stockAmt(a) - stockAmt(b) : stockAmt(b) - stockAmt(a));
+  };
+
+  const filteredNames = allNames.filter(matchesFilter);
+  // "전체" 필터일 때만 소진임박을 별도 카드 섹션으로 분리하고, 나머지는 컴팩트 리스트로.
+  // "소진임박" 필터를 직접 선택했을 땐 전부 카드로, 그 외(냉동/냉장/카테고리) 필터는 분리 없이 컴팩트 리스트만.
+  const showUrgentSection = filter === "전체" || filter === "소진임박";
+  const urgentNames = showUrgentSection ? filteredNames.filter((n) => urgentSet.has(n)) : [];
+  const restNames = filter === "소진임박" ? [] : sortNames(filteredNames.filter((n) => !urgentSet.has(n)));
+  const isEmpty = urgentNames.length === 0 && restNames.length === 0;
 
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <ScreenHeader title="재고" right={<button onClick={() => go("shopping")} style={{ background: "none", border: "none", cursor: "pointer" }}><ShoppingCart size={18} color={C.inkSoft} /></button>} />
-      <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-        {sorted.map((name) => {
-          const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
-          const fgGrams = stockTotalFrozenG(state, name);
-          const expDays = frozenStorageDaysLeft(state, name);
-          const expUrgent = expDays != null && expDays <= 3;
-          return (
-            <button key={name} onClick={() => go("stockDetail", { name })} className="flex flex-col" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${fg > 0 ? C.apricot : C.border}`, borderRadius: 16, padding: 14, cursor: "pointer" }}>
-              <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
-                <div className="flex items-center"><CatDot name={name} size={8} /><span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{name}</span></div>
-                <div className="flex items-center" style={{ gap: 6 }}>
-                  {fg > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.apricot }}>냉장 소진 임박</span>}
-                  <ChevronRight size={15} color={C.muted} />
-                </div>
-              </div>
-              <div className="flex items-center justify-between" style={{ marginBottom: fg > 0 ? 8 : 0 }}>
-                <div className="flex items-center" style={{ gap: 9 }}><Snowflake size={14} color={C.sageDeep} /><CubeGrid filled={cubes} total={10} /></div>
-                <span style={{ fontSize: 11.5, color: expUrgent ? C.apricot : C.muted, fontWeight: expUrgent ? 700 : 400 }}>
-                  {cubes}큐브 ({fgGrams}g){expDays != null ? ` · ${expDays < 0 ? "보관기한 지남" : `보관기한 ~${expDays}일`}` : ""}
-                </span>
-              </div>
-              {fg > 0 && (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center" style={{ gap: 9 }}><Refrigerator size={14} color={C.apricot} /><span style={{ fontSize: 12, color: C.inkSoft }}>냉장 보관</span></div>
-                  <span style={{ fontSize: 11.5, fontWeight: 700, color: C.apricot }}>{fg}g</span>
-                </div>
-              )}
-            </button>
-          );
-        })}
-        {sorted.length === 0 && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>재고가 없습니다. 제조 기록을 추가해 보세요.</div>}
-        <button onClick={() => setBatchModal(true)} className="flex items-center justify-center" style={{ gap: 7, background: C.sage, border: "none", borderRadius: 14, padding: "13px 0", fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", marginTop: 4 }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 15, background: C.bg, padding: "0 18px 10px" }}>
+        <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 9 }}>
+          {STOCK_FILTERS.map((f) => (
+            <button key={f} onClick={() => setFilter(f)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+              border: "none", background: filter === f ? C.sage : C.sageLight, color: filter === f ? "#fff" : C.sageDeep }}>{f}</button>
+          ))}
+        </div>
+        <button onClick={() => setBatchModal(true)} className="flex items-center justify-center" style={{ gap: 7, background: C.sage, border: "none", borderRadius: 14, padding: "11px 0", fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", width: "100%" }}>
           <Plus size={15} /> 제조 기록 추가
         </button>
+      </div>
+      <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+        {urgentNames.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {filter === "전체" && <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px" }}>소진임박 재료</div>}
+            {urgentNames.map((name) => <StockUrgentCard key={name} name={name} onClick={() => go("stockDetail", { name })} />)}
+          </div>
+        )}
+        {restNames.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {filter === "전체" && <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px", marginTop: urgentNames.length > 0 ? 4 : 0 }}>재료 목록</div>}
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬</span>
+              {STOCK_SORT_OPTIONS.map((o) => (
+                <button key={o.key} onClick={() => setSortMode(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                  border: `1px solid ${sortMode === o.key ? C.sage : C.border}`, background: sortMode === o.key ? C.sageLight : "transparent", color: sortMode === o.key ? C.sageDeep : C.muted }}>{o.label}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {restNames.map((name) => <StockCompactRow key={name} name={name} urgent={urgentSet.has(name)} onClick={() => go("stockDetail", { name })} />)}
+            </div>
+          </div>
+        )}
+        {isEmpty && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>{filter === "전체" ? "재고가 없습니다. 제조 기록을 추가해 보세요." : "해당하는 재료가 없습니다."}</div>}
       </div>
       {batchModal && <BatchModal onClose={() => setBatchModal(false)} />}
     </div>
@@ -2405,7 +2511,7 @@ function weeklyRates(state) {
     for (let d = 0; d < 7; d++) {
       const iso = addDaysISO(t, -(w * 7 + d));
       (state.logs[iso] || []).forEach((log) => {
-        const prov = log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+        const prov = logProvideG(log);
         provSum += prov; intSum += log.intakeG;
       });
     }
@@ -2423,7 +2529,7 @@ function monthStats(state, year, month) {
     const dt = new Date(d + "T00:00:00");
     if (dt.getFullYear() !== year || dt.getMonth() !== month) return;
     (state.logs[d] || []).forEach((log) => {
-      const prov = log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+      const prov = logProvideG(log);
       const rate = prov ? log.intakeG / prov : 0;
       totalProv += prov;
       totalIntake += log.intakeG;
@@ -2458,6 +2564,71 @@ function monthProducedG(state, year, month) {
   return Math.round(total);
 }
 
+/* =====================================================================
+   급여표 - 식단표의 주별 그리드(WeekTable)를 참고해 실제 급여기록(state.logs) 기준으로
+   같은 구조로 그려주는 컴포넌트. 기록이 없는 칸은 계획 유무/미래 날짜 구분 없이 항상 빈 칸.
+   ===================================================================== */
+function FeedingWeekPanel({ go }) {
+  const { state } = useStore();
+  const [cursor, setCursor] = useState(todayISO());
+  const weekStart = addDaysISO(cursor, -new Date(cursor + "T00:00:00").getDay());
+  const days = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i));
+  const labels = weekLogLabels(state, days);
+  const wide = labels.length > 3;
+  const cols = `34px repeat(${labels.length}, minmax(58px, 1fr))`;
+  const t = todayISO();
+  const headLabel = `${weekStart.slice(5)} ~ ${addDaysISO(weekStart, 6).slice(5)}`;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="flex items-center" style={{ gap: 10 }}>
+        <button onClick={() => setCursor(addDaysISO(cursor, -7))} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronLeft size={17} color={C.muted} /></button>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{headLabel}</span>
+        <button onClick={() => setCursor(addDaysISO(cursor, 7))} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronRight size={17} color={C.muted} /></button>
+      </div>
+      <div style={{ overflowX: wide ? "auto" : "visible" }}>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", minWidth: wide ? 34 + labels.length * 68 : "auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: cols, background: C.sageLight, padding: "9px 6px" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep }}>요일</span>
+            {labels.map((h) => <span key={h} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, textAlign: "center" }}>{h}</span>)}
+          </div>
+          {days.map((iso, i) => {
+            const dow = new Date(iso + "T00:00:00").getDay();
+            const isToday = iso === t;
+            const dayLogs = state.logs[iso] || [];
+            const findLog = (lab) => dayLogs.find((l) => l.label === lab);
+            return (
+              <div key={iso} style={{ display: "grid", gridTemplateColumns: cols, padding: "13px 6px",
+                borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: isToday ? C.sageLight : C.surface }}>
+                <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: isToday ? C.sageDeep : C.ink }}>{WD[dow]}</div>
+                  <div style={{ fontSize: 10.5, color: C.muted }}>{iso.slice(5)}</div>
+                </div>
+                {labels.map((lab) => {
+                  const log = findLog(lab);
+                  // 기록이 없는 칸: 계획만 있음/계획도 없음/미래 날짜 모두 구분 없이 빈 칸으로 표시
+                  if (!log) return <div key={lab} />;
+                  const prov = logProvideG(log);
+                  const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
+                  return (
+                    <button key={lab} onClick={() => go("feedCompare", { date: iso, label: lab })}
+                      style={{ padding: "0 4px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 2,
+                        background: "none", border: "none", cursor: "pointer" }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 800, color: pct >= 85 ? C.sageDeep : C.apricot }}>{pct}%</span>
+                      <span style={{ fontSize: 9.5, color: C.muted }}>{log.intakeG}g</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {wide && <div style={{ fontSize: 9.5, color: C.muted, textAlign: "center" }}>← 옆으로 밀어서 더 보기 →</div>}
+    </div>
+  );
+}
+
 function RecordTab({ go }) {
   const { state, dispatch, notify } = useStore();
   const trend = weeklyRates(state).filter((x) => x.rate != null);
@@ -2466,6 +2637,7 @@ function RecordTab({ go }) {
   const diff = thisWeek != null && lastWeek != null ? thisWeek - lastWeek : null;
   const [editIntro, setEditIntro] = useState(null); // null | 'new' | introObj
   const [delIntro, setDelIntro] = useState(null); // 삭제 확인 대상 introObj
+  const [view, setView] = useState("table"); // "table"(급여표, 기본) | "history"(기존 히스토리·통계)
   const [reportYM, setReportYM] = useState(() => { const t = todayISO(); return { y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) - 1 }; });
 
   const shiftReportMonth = (n) => setReportYM((p) => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
@@ -2490,6 +2662,17 @@ function RecordTab({ go }) {
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <ScreenHeader title="기록" />
+      <div style={{ padding: "0 18px 14px" }}>
+        <Segmented value={view} onChange={setView} options={[{ value: "table", label: "급여표" }, { value: "history", label: "히스토리" }]} />
+      </div>
+
+      {view === "table" && (
+        <div style={{ padding: "0 18px" }}>
+          <FeedingWeekPanel go={go} />
+        </div>
+      )}
+
+      {view === "history" && (
       <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ background: C.sageLight, borderRadius: 16, padding: 16 }}>
           <div style={{ fontSize: 12, color: C.sageDeep, fontWeight: 600 }}>이번 주 평균 섭취율</div>
@@ -2585,7 +2768,7 @@ function RecordTab({ go }) {
             {yLogs.length === 0 ? (
               <div style={{ fontSize: 12, color: C.muted }}>급여 기록이 없습니다</div>
             ) : yLogs.map((log) => {
-              const prov = log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+              const prov = logProvideG(log);
               const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
               return (
                 <div key={log.id} className="flex items-center justify-between" style={{ marginBottom: 3 }}>
@@ -2629,6 +2812,7 @@ function RecordTab({ go }) {
           </div>
         </div>
       </div>
+      )}
       {editIntro && <IntroEditModal intro={editIntro} onClose={() => setEditIntro(null)} />}
       {delIntro && (
         <ConfirmModal
@@ -2744,7 +2928,7 @@ function RecordHistoryScreen({ onBack }) {
               </button>
             </div>
             {(state.logs[d] || []).map((log) => {
-              const prov = log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+              const prov = logProvideG(log);
               const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
               return (
                 <div key={log.id} className="flex items-center justify-between" style={{ marginBottom: 3, gap: 8 }}>
@@ -2788,6 +2972,50 @@ function RecordHistoryScreen({ onBack }) {
           onCancel={() => setDelEntry(null)}
         />
       )}
+    </div>
+  );
+}
+
+/* =====================================================================
+   급여표 셀 상세 - 계획(식단표) vs 실제(급여기록) 비교
+   ===================================================================== */
+function FeedingCompareScreen({ date, label, onBack }) {
+  const { state } = useStore();
+  const plan = (state.plans[date] || []).find((m) => m.label === label);
+  const log = (state.logs[date] || []).find((l) => l.label === label);
+  const planTotal = plan ? totalG(state, plan.items) : 0;
+  const provTotal = log ? logProvideG(log) : 0;
+  const pct = log && provTotal ? Math.round((log.intakeG / provTotal) * 100) : 0;
+  // 급여기록 항목을 IngredientTable에 맞게 정리 - 냉장(중량) 항목은 gramsOverride로 넘겨서
+  // "80g (80큐브)"처럼 그램값이 큐브 개수로 잘못 표시되는 걸 방지함
+  const logDisplayItems = log ? log.items.map((it) => it.source === "fridge"
+    ? { name: it.name, qty: it.qty, unitG: 1, gramsOverride: it.qty }
+    : { name: it.name, qty: it.qty, unitG: it.unitG }
+  ) : [];
+
+  return (
+    <div style={{ paddingBottom: 90 }}>
+      <SubHeader title={`${date.slice(5)} · ${label}`} onBack={onBack} />
+      <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>계획</span>
+            {plan && <span style={{ fontSize: 11.5, color: C.muted }}>{planTotal}g</span>}
+          </div>
+          {plan
+            ? <IngredientTable items={plan.items} total={planTotal} />
+            : <div style={{ textAlign: "center", padding: "16px 0", fontSize: 12, color: C.muted }}>이 끼니의 계획 정보가 없습니다(삭제되었을 수 있어요)</div>}
+        </div>
+        <div style={{ background: C.sageLight, borderRadius: 16, padding: 14 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep }}>실제 급여</span>
+            {log && <span style={{ fontSize: 12.5, fontWeight: 800, color: C.sageDeep }}>{provTotal}g 중 {log.intakeG}g ({pct}%)</span>}
+          </div>
+          {log
+            ? <IngredientTable items={logDisplayItems} total={provTotal} />
+            : <div style={{ textAlign: "center", padding: "16px 0", fontSize: 12, color: C.muted }}>급여 기록이 없습니다</div>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -3212,6 +3440,7 @@ function Shell() {
   else if (route === "mealSlots") content = <MealSlotsScreen onBack={back} />;
   else if (route === "stockDetail") content = <StockDetailScreen name={params.name} onBack={back} />;
   else if (route === "recordHistory") content = <RecordHistoryScreen onBack={back} />;
+  else if (route === "feedCompare") content = <FeedingCompareScreen date={params.date} label={params.label} onBack={back} />;
   else if (route === "manufactureHistory") content = <ManufactureHistoryScreen onBack={back} />;
   else if (tab === "today") content = <TodayTab go={go} />;
   else if (tab === "plan") content = <MealPlanTab />;
@@ -3389,7 +3618,17 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
   const [ready, setReady] = useState(false);
   const [meta, setMeta] = useState({ members: [], memberInfo: {}, ownerUid: null });
   const [syncError, setSyncError] = useState(false);
-  const lastSentRef = useRef(null);
+  // lastSyncedRef: 마지막으로 로컬↔원격이 일치했던 state 객체(전체) - 다음 저장 시 "무엇이 바뀌었는지" 비교하는 기준점
+  const lastSyncedRef = useRef(null);
+  // stateRef: 최신 state를 항상 가리키는 ref - retry 등 이벤트 리스너 콜백이 오래된 클로저 값을 참조하지 않도록 함
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  // pendingRef: 현재 진행 중인 저장 요청(Promise). 동시에 두 개 이상의 updateDoc 요청이 겹치면,
+  // 먼저 실패한 요청의 lastSyncedRef 롤백이 나중에 성공한 요청의 동기화 기록을 덮어써서
+  // "실제로는 저장 안 된 변경이 동기화된 것으로 착각"하는 레이스가 생길 수 있어 항상 순차적으로만 보냄.
+  const pendingRef = useRef(null);
+  // queuedRef: 진행 중인 요청이 끝난 뒤, 그 사이 바뀐 최신 state로 한 번 더 동기화가 필요한지
+  const queuedRef = useRef(false);
 
   useEffect(() => {
     const famRef = doc(db, "families", familyId);
@@ -3397,7 +3636,7 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
       if (!snap.exists()) return;
       const data = snap.data();
       const migrated = migrateState(data.state);
-      lastSentRef.current = JSON.stringify(migrated);
+      lastSyncedRef.current = migrated;
       dispatch({ type: "HYDRATE", state: migrated });
       setMeta({ members: data.members || [], memberInfo: data.memberInfo || {}, ownerUid: data.ownerUid });
       setReady(true);
@@ -3405,36 +3644,54 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
     return unsub;
   }, [familyId]);
 
-  useEffect(() => {
-    if (!ready) return; // 최초 원격 데이터 수신 전에는 로컬 seed로 덮어쓰지 않음
-    const json = JSON.stringify(state);
-    if (json === lastSentRef.current) return;
-    const prevSent = lastSentRef.current;
-    lastSentRef.current = json;
-    setDoc(doc(db, "families", familyId), { state }, { merge: true })
+  // 로컬 state 중 마지막 동기화 시점과 달라진 최상위 항목(재고/식단/기록 등)만 골라
+  // "state.항목명" 경로로 부분 업데이트함. 예: 내가 재고만 바꿨다면 state.stock만 보내고,
+  // 배우자가 그 사이 식단(state.plans)만 바꿔서 먼저 저장했더라도 그 값은 건드리지 않음.
+  // (기존에는 state 전체를 통째로 덮어써서, 서로 다른 항목을 거의 동시에 바꾸면 한쪽이 사라질 수 있었음)
+  const syncToCloud = () => {
+    if (pendingRef.current) {
+      // 이미 저장 요청이 진행 중이면 새 요청을 겹쳐 보내지 않고, 그 요청이 끝난 뒤
+      // 최신 state 기준으로 다시 한번 동기화하도록 예약만 해둠 (요청 순차 처리)
+      queuedRef.current = true;
+      return;
+    }
+    const current = stateRef.current;
+    const prevSynced = lastSyncedRef.current;
+    const changedKeys = Object.keys(current).filter(
+      (k) => JSON.stringify(current[k]) !== JSON.stringify(prevSynced ? prevSynced[k] : undefined)
+    );
+    if (changedKeys.length === 0) return;
+    const updates = {};
+    changedKeys.forEach((k) => { updates[`state.${k}`] = current[k]; });
+    lastSyncedRef.current = current;
+    pendingRef.current = updateDoc(doc(db, "families", familyId), updates)
       .then(() => setSyncError(false))
       .catch((err) => {
         console.error("Firestore 저장 실패:", err);
         // 저장이 실패하면 다음 변경 시 재시도될 수 있도록 되돌려 둠 (조용히 유실되는 것 방지)
-        lastSentRef.current = prevSent;
+        lastSyncedRef.current = prevSynced;
         setSyncError(true);
+      })
+      .finally(() => {
+        pendingRef.current = null;
+        if (queuedRef.current) {
+          queuedRef.current = false;
+          syncToCloud(); // 진행 중이던 요청이 끝나는 사이 쌓인 변경사항을 최신 state 기준으로 다시 동기화
+        }
       });
+  };
+
+  useEffect(() => {
+    if (!ready) return; // 최초 원격 데이터 수신 전에는 로컬 seed로 덮어쓰지 않음
+    syncToCloud();
   }, [state, ready, familyId]);
 
   // 네트워크가 복구되면 마지막으로 실패했던 저장을 다시 시도
   useEffect(() => {
-    const retry = () => {
-      if (!ready) return;
-      const json = JSON.stringify(state);
-      if (json === lastSentRef.current) return;
-      lastSentRef.current = json;
-      setDoc(doc(db, "families", familyId), { state }, { merge: true })
-        .then(() => setSyncError(false))
-        .catch((err) => { console.error("Firestore 재시도 실패:", err); setSyncError(true); });
-    };
+    const retry = () => { if (ready) syncToCloud(); };
     window.addEventListener("online", retry);
     return () => window.removeEventListener("online", retry);
-  }, [state, ready, familyId]);
+  }, [ready, familyId]);
 
   const leaveFamily = async () => {
     const ref = doc(db, "families", familyId);
