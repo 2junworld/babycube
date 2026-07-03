@@ -1714,6 +1714,15 @@ function frozenStorageDaysLeft(state, name) {
   const diffMs = new Date(nearestExp + "T00:00:00") - new Date(t + "T00:00:00");
   return Math.round(diffMs / 86400000);
 }
+// 냉장 보관 재료의 보관 마지노선까지 남은 일수 — 가장 임박한 배치 기준 (냉동과 동일한 방식)
+function fridgeStorageDaysLeft(state, name) {
+  const batches = stockBatches(state, name).filter((b) => (b.fridgeG || 0) > 0 && b.fridgeExp);
+  if (batches.length === 0) return null;
+  const nearestExp = batches.reduce((min, b) => (b.fridgeExp < min ? b.fridgeExp : min), batches[0].fridgeExp);
+  const t = todayISO();
+  const diffMs = new Date(nearestExp + "T00:00:00") - new Date(t + "T00:00:00");
+  return Math.round(diffMs / 86400000);
+}
 // "냉장고 비우기" 대상 재료: 냉장 보관 중(항상 임박으로 취급)이거나, 냉동 보관기한이 며칠 안 남은 재료
 function urgentStockNames(state, frozenDaysThreshold = 3) {
   return Object.keys(state.stock)
@@ -1724,7 +1733,7 @@ function urgentStockNames(state, frozenDaysThreshold = 3) {
       if (!urgent) return null;
       // 정렬용 우선순위: 냉장 보관 중이면 가장 급함(-1), 아니면 냉동 보관기한 일수
       const rank = fg > 0 ? -1 : fd;
-      return { name, fg, frozenDaysLeft: fd, rank };
+      return { name, fg, frozenDaysLeft: fd, fridgeDaysLeft: fg > 0 ? fridgeStorageDaysLeft(state, name) : null, rank };
     })
     .filter(Boolean)
     .sort((a, b) => a.rank - b.rank);
@@ -2191,26 +2200,66 @@ const STOCK_SORT_OPTIONS = [
   { key: "stockDesc", label: "재고 많은순" },
   { key: "stockAsc", label: "재고 적은순" },
 ];
+// 재고 탭 표시 방식: 한줄 리스트 / 2열 그리드 / 3열 그리드
+const STOCK_LAYOUTS = [
+  { key: "row", label: "한줄" },
+  { key: "grid2", label: "2열" },
+  { key: "grid3", label: "3열" },
+];
 
-// 재료 목록 한 줄 행 - 게이지 + 수량만 보여주는 컴팩트 디자인.
-// 소진임박 재료도 별도 카드 디자인 없이 이 컴포넌트를 그대로 쓰고, urgent=true면 테두리 강조 + "임박" 배지만 붙임
-function StockCompactRow({ name, onClick, urgent }) {
+// 소진임박 재료의 데드라인 텍스트 - 냉장 보관중이면 냉장 만료 기준, 아니면 냉동 만료 기준
+function urgentDeadlineText(u) {
+  if (u.fg > 0) {
+    if (u.fridgeDaysLeft == null) return "냉장 보관중";
+    if (u.fridgeDaysLeft < 0) return "냉장 기한 지남";
+    return u.fridgeDaysLeft === 0 ? "냉장 오늘까지" : `냉장 ~${u.fridgeDaysLeft}일`;
+  }
+  if (u.frozenDaysLeft == null) return null;
+  if (u.frozenDaysLeft < 0) return "기한 지남";
+  return u.frozenDaysLeft === 0 ? "오늘까지" : `~${u.frozenDaysLeft}일`;
+}
+
+// 재료 목록 항목 - layout("row"|"grid2"|"grid3")에 따라 한 줄 행 또는 카드형 그리드로 표시.
+// 소진임박 재료도 별도 섹션/디자인 없이 이 컴포넌트를 그대로 쓰고, urgent=true면 테두리 강조 + 데드라인 텍스트만 붙임
+function StockItem({ name, onClick, urgent, deadlineText, layout }) {
   const { state } = useStore();
   const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
+  const border = `1px solid ${urgent ? C.apricot : C.border}`;
+  const badge = urgent && deadlineText ? (
+    <span style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0, whiteSpace: "nowrap" }}>{deadlineText}</span>
+  ) : null;
+
+  if (layout === "row") {
+    return (
+      <button onClick={onClick} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
+        <div className="flex items-center" style={{ gap: 8, minWidth: 0, flex: 1 }}>
+          <CatDot name={name} size={7} />
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+          {badge}
+        </div>
+        <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
+          {cubes > 0 && <CubeGrid filled={Math.min(cubes, 10)} total={10} size={6} gap={2} />}
+          <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>
+            {cubes > 0 ? `${cubes}큐브` : ""}{cubes > 0 && fg > 0 ? " · " : ""}{fg > 0 ? `${fg}g` : ""}
+          </span>
+          <ChevronRight size={13} color={C.muted} />
+        </div>
+      </button>
+    );
+  }
+
+  // grid2 / grid3: 세로 배치 카드형
   return (
-    <button onClick={onClick} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${urgent ? C.apricot : C.border}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
-      <div className="flex items-center" style={{ gap: 8, minWidth: 0, flex: 1 }}>
-        <CatDot name={name} size={7} />
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-        {urgent && <span style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>임박</span>}
+    <button onClick={onClick} style={{ textAlign: "left", background: C.surface, border, borderRadius: 12, padding: layout === "grid3" ? "9px 8px" : "10px 10px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
+      <div className="flex items-center" style={{ gap: 5, minWidth: 0 }}>
+        <CatDot name={name} size={6} />
+        <span style={{ fontSize: layout === "grid3" ? 11.5 : 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>{name}</span>
       </div>
-      <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
-        {cubes > 0 && <CubeGrid filled={Math.min(cubes, 10)} total={10} size={6} gap={2} />}
-        <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>
-          {cubes > 0 ? `${cubes}큐브` : ""}{cubes > 0 && fg > 0 ? " · " : ""}{fg > 0 ? `${fg}g` : ""}
-        </span>
-        <ChevronRight size={13} color={C.muted} />
-      </div>
+      {cubes > 0 && <CubeGrid filled={Math.min(cubes, 10)} total={10} size={5} gap={1.5} />}
+      <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>
+        {cubes > 0 ? `${cubes}큐브` : ""}{cubes > 0 && fg > 0 ? " · " : ""}{fg > 0 ? `${fg}g` : ""}
+      </span>
+      {badge && <span style={{ alignSelf: "flex-start" }}>{badge}</span>}
     </button>
   );
 }
@@ -2220,14 +2269,15 @@ function StockTab({ go }) {
   const [batchModal, setBatchModal] = useState(false);
   const [filter, setFilter] = useState("전체");
   const [sortMode, setSortMode] = useState("cat");
+  const [layout, setLayout] = useState("row");
 
   const allNames = Object.keys(state.stock).filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
   const urgent = urgentStockNames(state); // 이미 긴급도순으로 정렬돼 있음(냉장 보관중 > 냉동 보관기한 임박순)
-  const urgentSet = new Set(urgent.map((u) => u.name));
+  const urgentMap = new Map(urgent.map((u) => [u.name, u]));
 
   const matchesFilter = (n) => {
     if (filter === "전체") return true;
-    if (filter === "소진임박") return urgentSet.has(n);
+    if (filter === "소진임박") return urgentMap.has(n);
     if (filter === "냉동") return stockTotalCubes(state, n) > 0;
     if (filter === "냉장") return stockFridgeG(state, n) > 0;
     return catOf(state, n) === filter; // 카테고리 필터
@@ -2239,13 +2289,13 @@ function StockTab({ go }) {
     return [...list].sort((a, b) => sortMode === "stockAsc" ? stockAmt(a) - stockAmt(b) : stockAmt(b) - stockAmt(a));
   };
 
-  const filteredNames = allNames.filter(matchesFilter);
-  // "전체" 필터일 때만 소진임박을 별도 카드 섹션으로 분리하고, 나머지는 컴팩트 리스트로.
-  // "소진임박" 필터를 직접 선택했을 땐 전부 카드로, 그 외(냉동/냉장/카테고리) 필터는 분리 없이 컴팩트 리스트만.
-  const showUrgentSection = filter === "전체" || filter === "소진임박";
-  const urgentNames = showUrgentSection ? filteredNames.filter((n) => urgentSet.has(n)) : [];
-  const restNames = filter === "소진임박" ? [] : sortNames(filteredNames.filter((n) => !urgentSet.has(n)));
-  const isEmpty = urgentNames.length === 0 && restNames.length === 0;
+  // 필터를 통과한 재료를 정렬해서 하나의 리스트로 표시. 소진임박 재료도 별도 섹션으로 분리하지 않고
+  // 같은 리스트 안에서 테두리 강조 + 데드라인 텍스트로만 구분 (필터를 냉동/냉장/카테고리로 바꿔도 계속 보임)
+  const names = sortNames(allNames.filter(matchesFilter));
+  const isEmpty = names.length === 0;
+  const gridStyle = layout === "row"
+    ? { display: "flex", flexDirection: "column", gap: 8 }
+    : { display: "grid", gridTemplateColumns: layout === "grid2" ? "1fr 1fr" : "1fr 1fr 1fr", gap: 8 };
 
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
@@ -2262,25 +2312,36 @@ function StockTab({ go }) {
         </button>
       </div>
       <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-        {urgentNames.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {filter === "전체" && <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px" }}>소진임박 재료</div>}
-            {urgentNames.map((name) => <StockCompactRow key={name} name={name} urgent onClick={() => go("stockDetail", { name })} />)}
+        <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 6 }}>
+          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬</span>
+            {STOCK_SORT_OPTIONS.map((o) => (
+              <button key={o.key} onClick={() => setSortMode(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                border: `1px solid ${sortMode === o.key ? C.sage : C.border}`, background: sortMode === o.key ? C.sageLight : "transparent", color: sortMode === o.key ? C.sageDeep : C.muted }}>{o.label}</button>
+            ))}
           </div>
-        )}
-        {restNames.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {filter === "전체" && <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px", marginTop: urgentNames.length > 0 ? 4 : 0 }}>재료 목록</div>}
-            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬</span>
-              {STOCK_SORT_OPTIONS.map((o) => (
-                <button key={o.key} onClick={() => setSortMode(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
-                  border: `1px solid ${sortMode === o.key ? C.sage : C.border}`, background: sortMode === o.key ? C.sageLight : "transparent", color: sortMode === o.key ? C.sageDeep : C.muted }}>{o.label}</button>
-              ))}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {restNames.map((name) => <StockCompactRow key={name} name={name} urgent={urgentSet.has(name)} onClick={() => go("stockDetail", { name })} />)}
-            </div>
+          <div className="flex items-center" style={{ gap: 4 }}>
+            {STOCK_LAYOUTS.map((l) => (
+              <button key={l.key} onClick={() => setLayout(l.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                border: `1px solid ${layout === l.key ? C.sage : C.border}`, background: layout === l.key ? C.sageLight : "transparent", color: layout === l.key ? C.sageDeep : C.muted }}>{l.label}</button>
+            ))}
+          </div>
+        </div>
+        {!isEmpty && (
+          <div style={gridStyle}>
+            {names.map((name) => {
+              const u = urgentMap.get(name);
+              return (
+                <StockItem
+                  key={name}
+                  name={name}
+                  layout={layout}
+                  urgent={!!u}
+                  deadlineText={u ? urgentDeadlineText(u) : null}
+                  onClick={() => go("stockDetail", { name })}
+                />
+              );
+            })}
           </div>
         )}
         {isEmpty && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>{filter === "전체" ? "재고가 없습니다. 제조 기록을 추가해 보세요." : "해당하는 재료가 없습니다."}</div>}
