@@ -552,6 +552,101 @@ function GrowthStageHint({ birth }) {
   );
 }
 
+/* ----------------------------- 재료 궁합 (영양학적 근거 기반) ----------------------------- */
+// 포함 기준(엄격):
+//  1) 사람 대상 연구로 확립된 '영양소 수준'의 상호작용만 수록 (예: 비타민C↔철분). 민간 음식궁합 속설은 제외
+//  2) 근거 등급 표시 - A: 기전·임상 근거 모두 확립(NIH/WHO/영양학 교과서 수준), B: 근거는 있으나 한 끼 단위 효과 크기가 제한적일 수 있음
+//  3) 태그가 등록되지 않은 재료는 추천하지 않음 (모르는 재료에 대해 추측하지 않음 - 보수적 원칙)
+const NUTRIENT_TAGS = {
+  // 단백질·지방·철분(헴철)
+  소고기: ["iron", "fat"], 닭고기: ["iron", "fat"], 돼지고기: ["iron", "fat"],
+  달걀노른자: ["iron", "fat"], 연어: ["fat"], 아보카도: ["fat"], 치즈: ["fat", "calcium"],
+  // 식물성 철분(비헴철)·칼슘
+  두부: ["iron", "calcium"], 콩: ["iron"], 렌틸콩: ["iron"], 병아리콩: ["iron"], "잡곡(귀리)": ["iron"],
+  // 비타민C
+  브로콜리: ["vitc"], 파프리카: ["vitc"], 토마토: ["vitc"], 청경채: ["vitc", "calcium"],
+  양배추: ["vitc"], 딸기: ["vitc"], 귤: ["vitc"], 키위: ["vitc"], 감자: ["vitc"],
+  // 베타카로틴 (지용성 - 지방과 함께 흡수↑)
+  당근: ["betacarotene"], 단호박: ["betacarotene"], 고구마: ["betacarotene", "vitc"],
+  // 옥살산 (칼슘 흡수 방해)
+  시금치: ["iron", "betacarotene", "oxalate"], 근대: ["oxalate"], 비트: ["oxalate"],
+};
+const PAIRING_RULES = [
+  { tagA: "iron", tagB: "vitc", type: "good", grade: "A", text: "비타민 C가 철분 흡수를 높여줘요" },
+  { tagA: "betacarotene", tagB: "fat", type: "good", grade: "A", text: "베타카로틴은 지방과 함께 먹으면 흡수가 잘 돼요" },
+  { tagA: "oxalate", tagB: "calcium", type: "avoid", grade: "A", text: "옥살산이 칼슘과 결합해 칼슘 흡수를 방해할 수 있어요" },
+  { tagA: "calcium", tagB: "iron", type: "avoid", grade: "B", text: "같은 끼니의 많은 칼슘이 철분 흡수를 낮출 수 있다는 연구가 있어요" },
+];
+const tagsOf = (name) => NUTRIENT_TAGS[name] || [];
+// 현재 담긴 재료 기준으로 (1) 재고에 있는 재료 중 궁합 좋은 추천, (2) 현재 조합 안의 주의 조합 계산
+function pairingSuggestions(state, currentNames) {
+  const curSet = new Set(currentNames);
+  const stopped = new Set(state.intros.filter((it) => it.status === "중단" || it.status === "주의").map((it) => it.name));
+  const stockNames = Object.keys(state.stock).filter((n) =>
+    !curSet.has(n) && !stopped.has(n) && (stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0));
+  const good = [];
+  const seen = new Set();
+  stockNames.forEach((cand) => {
+    const candTags = tagsOf(cand);
+    PAIRING_RULES.filter((r) => r.type === "good").forEach((r) => {
+      if (seen.has(cand)) return;
+      const withA = currentNames.filter((n) => tagsOf(n).includes(r.tagA));
+      const withB = currentNames.filter((n) => tagsOf(n).includes(r.tagB));
+      if (candTags.includes(r.tagB) && withA.length > 0) { good.push({ name: cand, text: r.text, grade: r.grade, withNames: withA }); seen.add(cand); }
+      else if (candTags.includes(r.tagA) && withB.length > 0) { good.push({ name: cand, text: r.text, grade: r.grade, withNames: withB }); seen.add(cand); }
+    });
+  });
+  const avoid = [];
+  PAIRING_RULES.filter((r) => r.type === "avoid").forEach((r) => {
+    const aNames = currentNames.filter((n) => tagsOf(n).includes(r.tagA));
+    const bNames = currentNames.filter((n) => tagsOf(n).includes(r.tagB) && !aNames.includes(n));
+    if (aNames.length > 0 && bNames.length > 0) avoid.push({ a: aNames, b: bNames, text: r.text, grade: r.grade });
+  });
+  return { good: good.slice(0, 5), avoid };
+}
+// 끼니 편집 화면에서 현재 재료 조합 기준 궁합 추천/주의 안내 카드
+function PairingHint({ currentNames, onAdd }) {
+  const { state } = useStore();
+  const { good, avoid } = pairingSuggestions(state, currentNames);
+  if (currentNames.length === 0 || (good.length === 0 && avoid.length === 0)) return null;
+  const gradeBadge = (g) => (
+    <span style={{ fontSize: 8.5, fontWeight: 800, color: g === "A" ? C.sageDeep : "#9A7416", background: g === "A" ? C.sageLight : C.butterLight, borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>근거 {g}</span>
+  );
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>재료 궁합 — 지금 재고에서 추천</div>
+      {good.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: avoid.length > 0 ? 10 : 0 }}>
+          {good.map((g) => (
+            <div key={g.name} className="flex items-center justify-between" style={{ gap: 8 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="flex items-center" style={{ gap: 5, marginBottom: 1 }}>
+                  <CatDot name={g.name} size={7} />
+                  <span style={{ fontSize: 12, color: C.ink, fontWeight: 700 }}>{g.name}</span>
+                  {gradeBadge(g.grade)}
+                </div>
+                <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>{g.withNames.join("·")}와(과) 함께 — {g.text}</div>
+              </div>
+              <button onClick={() => onAdd(g.name)} style={{ background: "none", border: `1px solid ${C.sage}`, borderRadius: 8, padding: "3px 9px", fontSize: 11, fontWeight: 700, color: C.sageDeep, cursor: "pointer", flexShrink: 0 }}>추가</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {avoid.map((a, i) => (
+        <div key={i} style={{ background: C.apricotLight, borderRadius: 8, padding: "7px 9px", marginBottom: 4 }}>
+          <div className="flex items-center" style={{ gap: 5, marginBottom: 1 }}>
+            <AlertTriangle size={11} color={C.apricot} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#9A4A1E" }}>{a.a.join("·")} + {a.b.join("·")}</span>
+            {gradeBadge(a.grade)}
+          </div>
+          <div style={{ fontSize: 10, color: "#A85B30", lineHeight: 1.4 }}>{a.text}</div>
+        </div>
+      ))}
+      <div style={{ fontSize: 9.5, color: C.muted, marginTop: 6, lineHeight: 1.4 }}>* 확립된 영양소 상호작용만 안내하는 참고 정보예요. 흡수율에 관한 내용으로, 함께 먹여도 위험한 조합은 아니에요.</div>
+    </div>
+  );
+}
+
 /* ----------------------------- 데이터 내보내기 ----------------------------- */
 function downloadFile(filename, content, mime) {
   const blob = new Blob([content], { type: mime });
@@ -968,14 +1063,14 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
 /* =====================================================================
    끼니 시간 선택기
    ===================================================================== */
-function TimePicker({ time, setTime, timeFmt }) {
+// bare=true면 카드(테두리) 없이 행만 렌더링 - 다른 카드 안에 합쳐 넣을 때 사용
+function TimePicker({ time, setTime, timeFmt, bare = false, labelColor }) {
   const [h0, m0] = time.split(":").map(Number);
   const setH = (h24) => setTime(`${String(h24).padStart(2, "0")}:${String(m0).padStart(2, "0")}`);
   const setM = (mm) => setTime(`${String(h0).padStart(2, "0")}:${String(mm).padStart(2, "0")}`);
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px" }}>
+  const row = (
       <div className="flex items-center justify-between">
-        <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>끼니 시간</span>
+        <span style={{ fontSize: 12.5, color: labelColor || C.inkSoft, fontWeight: 600 }}>끼니 시간</span>
         <div className="flex items-center" style={{ gap: 6 }}>
           {timeFmt === "ampm" && (
             <select value={h0 < 12 ? "오전" : "오후"} onChange={(e) => {
@@ -996,6 +1091,11 @@ function TimePicker({ time, setTime, timeFmt }) {
           </select>
         </div>
       </div>
+  );
+  if (bare) return row;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px" }}>
+      {row}
       <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 6 }}>{fmtTime(time, timeFmt)}</div>
     </div>
   );
@@ -1181,28 +1281,31 @@ function MealEditScreen({ date, meal, onBack }) {
       <div style={{ position: "sticky", top: 0, zIndex: 15, background: C.bg, padding: "0 18px 10px" }}>
         <div className="flex items-center justify-between" style={{ padding: "0 2px 8px" }}>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{date} ({WD[new Date(date + "T00:00:00").getDay()]})</span>
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: label ? C.sageDeep : C.muted }}>{label || "끼니 선택 전"}</span>
         </div>
-        <div style={{ background: C.sageLight, borderRadius: 14, padding: 14, boxShadow: "0 4px 10px rgba(0,0,0,0.05)" }}>
-          <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep }}>끼니 총량</span>
-            <span style={{ fontSize: 16, fontWeight: 900, color: C.sageDeep }}>{total}g</span>
+        {/* 끼니 종류 · 시간 · 총량을 하나의 상단 고정 카드로 통합 */}
+        <div style={{ background: C.sageLight, borderRadius: 14, padding: 14, boxShadow: "0 4px 10px rgba(0,0,0,0.05)", display: "flex", flexDirection: "column", gap: 9 }}>
+          <button onClick={() => setSlotPicker(true)} className="flex items-center justify-between" style={{ width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer" }}>
+            <span style={{ fontSize: 12.5, color: C.sageDeep, fontWeight: 600 }}>끼니 종류</span>
+            <span className="flex items-center" style={{ gap: 5, fontSize: 13, fontWeight: 800, color: label ? C.sageDeep : C.muted }}>{label || "선택"} <ChevronRight size={14} color={C.sageDeep} /></span>
+          </button>
+          <TimePicker bare time={time} setTime={setTime} timeFmt={timeFmt} labelColor={C.sageDeep} />
+          <div style={{ borderTop: `1px dashed ${C.sage}`, paddingTop: 9 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep }}>끼니 총량</span>
+              <span style={{ fontSize: 16, fontWeight: 900, color: C.sageDeep }}>{total}g</span>
+            </div>
+            <CategoryBar items={items} height={8} />
           </div>
-          <CategoryBar items={items} height={8} />
         </div>
       </div>
 
       <div style={{ padding: "0 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
         <GrowthStageHint birth={state.baby.birth} />
-        <button onClick={() => setSlotPicker(true)} className="flex items-center justify-between" style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px", cursor: "pointer" }}>
-          <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>끼니 종류</span>
-          <span className="flex items-center" style={{ gap: 5, fontSize: 13, fontWeight: 700, color: label ? C.ink : C.muted }}>{label || "선택"} <ChevronRight size={14} color={C.muted} /></span>
-        </button>
-        <TimePicker time={time} setTime={setTime} timeFmt={timeFmt} />
         <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer" }}>
           다른 날짜 식단 복사해오기
         </button>
         <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
+        <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
 
         <div>
           <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
@@ -1384,6 +1487,9 @@ function BulkSaveScreen({ initialCursor, onBack }) {
           <div style={{ marginTop: 8 }}>
             <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
           </div>
+          <div style={{ marginTop: 8 }}>
+            <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
+          </div>
         </div>
 
         <div>
@@ -1564,6 +1670,7 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   );
   const [picker, setPicker] = useState(false);
   const [intake, setIntake] = useState(existingLog ? existingLog.intakeG : null);
+  const [confirmingSave, setConfirmingSave] = useState(false);
 
   const provideG = (it) => it.source === "fridge" ? it.fridgeG : it.qty * it.unitG;
   const totalProvide = items.reduce((s, it) => s + provideG(it), 0);
@@ -1589,9 +1696,22 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     const logItems = items.map((it) => it.source === "fridge"
       ? { name: it.name, source: "fridge", qty: it.fridgeG, unitG: 1, deduct: it.deduct !== false }
       : { name: it.name, source: "frozen", qty: it.qty, unitG: it.unitG, deduct: it.deduct !== false });
-    dispatch({ type: "LOG_SAVE", date, log: { id: existingLog ? existingLog.id : uid(), label, time, items: logItems, intakeG: intake == null ? totalProvide : intake } });
+    // 저장 시점의 식단표(계획)를 스냅샷으로 함께 저장 - 이후 식단표가 수정·삭제돼도
+    // 급여표의 '계획 대비 비교'는 기록 저장 당시의 계획 기준으로 유지됨.
+    // 기존 기록을 수정하는 경우엔 최초 저장 때 담아둔 스냅샷을 그대로 보존.
+    const planSnapshot = existingLog && existingLog.planSnapshot
+      ? existingLog.planSnapshot
+      : (planMeal && planMeal.items && planMeal.items.length > 0
+        ? { label: planMeal.label, time: planMeal.time,
+            items: planMeal.items.map(({ name, qty, unitG, gramsOverride }) => ({
+              name, qty, unitG: unitG != null ? unitG : unitGOf(state, name),
+              gramsOverride: gramsOverride != null ? gramsOverride : null })) }
+        : null);
+    dispatch({ type: "LOG_SAVE", date, log: { id: existingLog ? existingLog.id : uid(), label, time, items: logItems, intakeG: intake == null ? totalProvide : intake, planSnapshot } });
     onBack();
   };
+  const intakeVal = intake == null ? totalProvide : intake;
+  const deductCount = items.filter((it) => it.deduct !== false).length;
 
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
@@ -1675,9 +1795,19 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
           )}
         </div>
 
-        <button onClick={save} style={primaryBtn}>기록 저장</button>
+        <button onClick={() => setConfirmingSave(true)} style={primaryBtn}>기록 저장</button>
       </div>
       {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
+      {confirmingSave && (
+        <ConfirmModal
+          title={`${label} 급여 기록을 저장할까요?`}
+          message={`제공 ${totalProvide}g 중 섭취 ${intakeVal}g${totalProvide ? ` (${Math.round((intakeVal / totalProvide) * 100)}%)` : ""}${deductCount > 0 ? ` · 재고 반영이 켜진 재료 ${deductCount}개의 재고가 차감됩니다.` : ""}`}
+          confirmLabel="저장"
+          danger={false}
+          onConfirm={() => { setConfirmingSave(false); save(); }}
+          onCancel={() => setConfirmingSave(false)}
+        />
+      )}
     </div>
   );
 }
@@ -2264,12 +2394,25 @@ function StockItem({ name, onClick, urgent, deadlineText, layout }) {
   );
 }
 
+// 재고 탭 정렬·표시 설정을 기기에 저장 (탭 이동·앱 재시작 후에도 유지)
+function readStockPref(key, fallback, validKeys) {
+  try {
+    const v = localStorage.getItem(key);
+    return v && validKeys.includes(v) ? v : fallback;
+  } catch { return fallback; }
+}
+function writeStockPref(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* 저장 불가 환경이면 무시 */ }
+}
+
 function StockTab({ go }) {
   const { state } = useStore();
   const [batchModal, setBatchModal] = useState(false);
   const [filter, setFilter] = useState("전체");
-  const [sortMode, setSortMode] = useState("cat");
-  const [layout, setLayout] = useState("row");
+  const [sortMode, setSortModeRaw] = useState(() => readStockPref("bc_stock_sort", "cat", STOCK_SORT_OPTIONS.map((o) => o.key)));
+  const [layout, setLayoutRaw] = useState(() => readStockPref("bc_stock_layout", "row", STOCK_LAYOUTS.map((l) => l.key)));
+  const setSortMode = (v) => { setSortModeRaw(v); writeStockPref("bc_stock_sort", v); };
+  const setLayout = (v) => { setLayoutRaw(v); writeStockPref("bc_stock_layout", v); };
 
   const allNames = Object.keys(state.stock).filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
   const urgent = urgentStockNames(state); // 이미 긴급도순으로 정렬돼 있음(냉장 보관중 > 냉동 보관기한 임박순)
@@ -2605,7 +2748,8 @@ function FeedingWeekPanel({ go }) {
   const days = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i));
   const labels = weekLogLabels(state, days);
   const wide = labels.length > 3;
-  const cols = `34px repeat(${labels.length}, minmax(58px, 1fr))`;
+  // 마지막 열: 해당 일자 총 섭취량(합계)
+  const cols = `34px repeat(${labels.length}, minmax(58px, 1fr)) 48px`;
   const t = todayISO();
   const headLabel = `${weekStart.slice(5)} ~ ${addDaysISO(weekStart, 6).slice(5)}`;
 
@@ -2617,16 +2761,18 @@ function FeedingWeekPanel({ go }) {
         <button onClick={() => setCursor(addDaysISO(cursor, 7))} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronRight size={17} color={C.muted} /></button>
       </div>
       <div style={{ overflowX: wide ? "auto" : "visible" }}>
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", minWidth: wide ? 34 + labels.length * 68 : "auto" }}>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", minWidth: wide ? 34 + labels.length * 68 + 52 : "auto" }}>
           <div style={{ display: "grid", gridTemplateColumns: cols, background: C.sageLight, padding: "9px 6px" }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep }}>요일</span>
             {labels.map((h) => <span key={h} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, textAlign: "center" }}>{h}</span>)}
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, textAlign: "center" }}>합계</span>
           </div>
           {days.map((iso, i) => {
             const dow = new Date(iso + "T00:00:00").getDay();
             const isToday = iso === t;
             const dayLogs = state.logs[iso] || [];
             const findLog = (lab) => dayLogs.find((l) => l.label === lab);
+            const dayIntakeG = dayLogs.reduce((s, l) => s + (l.intakeG || 0), 0);
             return (
               <div key={iso} style={{ display: "grid", gridTemplateColumns: cols, padding: "13px 6px",
                 borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: isToday ? C.sageLight : C.surface }}>
@@ -2640,21 +2786,106 @@ function FeedingWeekPanel({ go }) {
                   if (!log) return <div key={lab} />;
                   const prov = logProvideG(log);
                   const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
+                  // 중량(섭취 g)을 크게 강조, 섭취율은 보조 표기
                   return (
                     <button key={lab} onClick={() => go("feedCompare", { date: iso, label: lab })}
                       style={{ padding: "0 4px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 2,
                         background: "none", border: "none", cursor: "pointer" }}>
-                      <span style={{ fontSize: 12.5, fontWeight: 800, color: pct >= 85 ? C.sageDeep : C.apricot }}>{pct}%</span>
-                      <span style={{ fontSize: 9.5, color: C.muted }}>{log.intakeG}g</span>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{log.intakeG}g</span>
+                      <span style={{ fontSize: 9.5, fontWeight: 700, color: pct >= 85 ? C.sageDeep : C.apricot }}>{pct}%</span>
                     </button>
                   );
                 })}
+                <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
+                  {dayLogs.length > 0 && <span style={{ fontSize: 12, fontWeight: 800, color: C.sageDeep }}>{dayIntakeG}g</span>}
+                </div>
               </div>
             );
           })}
         </div>
       </div>
       {wide && <div style={{ fontSize: 9.5, color: C.muted, textAlign: "center" }}>← 옆으로 밀어서 더 보기 →</div>}
+    </div>
+  );
+}
+
+/* =====================================================================
+   급여표 - 월별 뷰: 달력에서 일자별 총 섭취량을 보고, 날짜를 선택하면 끼니별 상세 확인
+   ===================================================================== */
+function FeedingMonthPanel({ go }) {
+  const { state } = useStore();
+  const t = todayISO();
+  const [ym, setYm] = useState(() => ({ y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) - 1 }));
+  const [selected, setSelected] = useState(t);
+  const shiftMonth = (n) => setYm((p) => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+
+  const first = new Date(ym.y, ym.m, 1);
+  const startPad = first.getDay();
+  const daysInMonth = new Date(ym.y, ym.m + 1, 0).getDate();
+  const cells = [...Array(startPad).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const isoOf = (d) => `${ym.y}-${pad2(ym.m + 1)}-${pad2(d)}`;
+  const dayIntakeG = (iso) => (state.logs[iso] || []).reduce((s, l) => s + (l.intakeG || 0), 0);
+  const monthTotal = cells.reduce((s, d) => d ? s + dayIntakeG(isoOf(d)) : s, 0);
+  const selLogs = state.logs[selected] || [];
+  const selTotal = selLogs.reduce((s, l) => s + (l.intakeG || 0), 0);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center" style={{ gap: 10 }}>
+          <button onClick={() => shiftMonth(-1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronLeft size={17} color={C.muted} /></button>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{ym.y}년 {ym.m + 1}월</span>
+          <button onClick={() => shiftMonth(1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronRight size={17} color={C.muted} /></button>
+        </div>
+        {monthTotal > 0 && <span style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep }}>이 달 총 {monthTotal}g</span>}
+      </div>
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+          {WD.map((d) => <span key={d} style={{ fontSize: 10, color: C.muted, fontWeight: 700, textAlign: "center" }}>{d}</span>)}
+          {cells.map((d, i) => {
+            if (!d) return <div key={i} />;
+            const iso = isoOf(d);
+            const g = dayIntakeG(iso);
+            const isToday = iso === t, isSel = iso === selected;
+            return (
+              <button key={i} onClick={() => setSelected(iso)} className="flex flex-col items-center justify-center"
+                style={{ height: 46, borderRadius: 10, background: isSel ? C.sageLight : "transparent", cursor: "pointer",
+                  border: isToday ? `1.5px solid ${C.sage}` : isSel ? `1px solid ${C.sage}` : "1px solid transparent", padding: 0 }}>
+                <span style={{ fontSize: 11.5, fontWeight: isToday ? 800 : 500, color: isToday ? C.sageDeep : C.inkSoft }}>{d}</span>
+                <span style={{ fontSize: 9, fontWeight: 800, color: g > 0 ? C.sageDeep : "transparent", marginTop: 2 }}>{g > 0 ? `${g}g` : "-"}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <div className="flex items-center justify-between" style={{ marginBottom: 8, padding: "0 4px" }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{selected.slice(5)} ({WD[new Date(selected + "T00:00:00").getDay()]})</span>
+          {selLogs.length > 0 && <span style={{ fontSize: 12.5, fontWeight: 800, color: C.sageDeep }}>총 {selTotal}g</span>}
+        </div>
+        {selLogs.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {selLogs.map((log) => {
+              const prov = logProvideG(log);
+              const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
+              return (
+                <button key={log.id} onClick={() => go("feedCompare", { date: selected, label: log.label })}
+                  className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 13px", cursor: "pointer" }}>
+                  <div className="flex items-center" style={{ gap: 8 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{log.label}</span>
+                    <span style={{ fontSize: 10.5, color: C.muted }}>{fmtTime(log.time, state.settings.timeFmt)}</span>
+                  </div>
+                  <div className="flex items-center" style={{ gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{log.intakeG}g</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: pct >= 85 ? C.sageDeep : C.apricot }}>{pct}%</span>
+                    <ChevronRight size={13} color={C.muted} />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : <div style={{ textAlign: "center", padding: "18px 0", fontSize: 12, color: C.muted }}>이 날짜엔 급여 기록이 없습니다</div>}
+      </div>
     </div>
   );
 }
@@ -2668,6 +2899,7 @@ function RecordTab({ go }) {
   const [editIntro, setEditIntro] = useState(null); // null | 'new' | introObj
   const [delIntro, setDelIntro] = useState(null); // 삭제 확인 대상 introObj
   const [view, setView] = useState("table"); // "table"(급여표, 기본) | "history"(기존 히스토리·통계)
+  const [tableRange, setTableRange] = useState("week"); // 급여표 주별/월별 뷰
   const [reportYM, setReportYM] = useState(() => { const t = todayISO(); return { y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) - 1 }; });
 
   const shiftReportMonth = (n) => setReportYM((p) => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
@@ -2697,8 +2929,9 @@ function RecordTab({ go }) {
       </div>
 
       {view === "table" && (
-        <div style={{ padding: "0 18px" }}>
-          <FeedingWeekPanel go={go} />
+        <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <Segmented value={tableRange} onChange={setTableRange} options={[{ value: "week", label: "주별" }, { value: "month", label: "월별" }]} />
+          {tableRange === "week" ? <FeedingWeekPanel go={go} /> : <FeedingMonthPanel go={go} />}
         </div>
       )}
 
@@ -3011,39 +3244,100 @@ function RecordHistoryScreen({ onBack }) {
    ===================================================================== */
 function FeedingCompareScreen({ date, label, onBack }) {
   const { state } = useStore();
-  const plan = (state.plans[date] || []).find((m) => m.label === label);
   const log = (state.logs[date] || []).find((l) => l.label === label);
+  const planLive = (state.plans[date] || []).find((m) => m.label === label);
+  // 기록 저장 당시의 식단표 스냅샷을 우선 사용 (이후 식단표가 바뀌어도 저장 당시 기준으로 비교).
+  // 스냅샷이 없는 옛 기록은 현재 식단표로 대체
+  const snapshotUsed = !!(log && log.planSnapshot);
+  const plan = snapshotUsed ? log.planSnapshot : planLive;
   const planTotal = plan ? totalG(state, plan.items) : 0;
   const provTotal = log ? logProvideG(log) : 0;
   const pct = log && provTotal ? Math.round((log.intakeG / provTotal) * 100) : 0;
-  // 급여기록 항목을 IngredientTable에 맞게 정리 - 냉장(중량) 항목은 gramsOverride로 넘겨서
-  // "80g (80큐브)"처럼 그램값이 큐브 개수로 잘못 표시되는 걸 방지함
-  const logDisplayItems = log ? log.items.map((it) => it.source === "fridge"
-    ? { name: it.name, qty: it.qty, unitG: 1, gramsOverride: it.qty }
-    : { name: it.name, qty: it.qty, unitG: it.unitG }
-  ) : [];
+
+  // 항목별 계획 g / 실제 제공 g 비교 데이터
+  const planG = {};
+  (plan ? plan.items : []).forEach((it) => { planG[it.name] = (planG[it.name] || 0) + gOf(state, it); });
+  const actualG = {};
+  (log ? log.items : []).forEach((it) => { actualG[it.name] = (actualG[it.name] || 0) + (it.source === "fridge" ? it.qty : it.qty * it.unitG); });
+  const allNames = sortByCategory(state, Array.from(new Set([...Object.keys(planG), ...Object.keys(actualG)])), (n) => n);
+  const totalDiff = provTotal - planTotal;
+
+  const diffText = (d) => (d > 0 ? `+${d}g` : d < 0 ? `${d}g` : "—");
+  const diffColor = (d) => (d > 0 ? C.apricot : d < 0 ? "#4A7FB5" : C.muted);
+  const cellStyle = { fontSize: 11.5, color: C.inkSoft, textAlign: "right" };
+  const gridCols = "minmax(64px,1.4fr) 1fr 1fr 1fr";
 
   return (
     <div style={{ paddingBottom: 90 }}>
       <SubHeader title={`${date.slice(5)} · ${label}`} onBack={onBack} />
       <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14 }}>
-          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>계획</span>
-            {plan && <span style={{ fontSize: 11.5, color: C.muted }}>{planTotal}g</span>}
-          </div>
-          {plan
-            ? <IngredientTable items={plan.items} total={planTotal} />
-            : <div style={{ textAlign: "center", padding: "16px 0", fontSize: 12, color: C.muted }}>이 끼니의 계획 정보가 없습니다(삭제되었을 수 있어요)</div>}
-        </div>
+
+        {/* 섭취 요약 */}
         <div style={{ background: C.sageLight, borderRadius: 16, padding: 14 }}>
-          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep }}>실제 급여</span>
-            {log && <span style={{ fontSize: 12.5, fontWeight: 800, color: C.sageDeep }}>{provTotal}g 중 {log.intakeG}g ({pct}%)</span>}
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep }}>섭취 요약</span>
+            {log
+              ? <span style={{ fontSize: 12.5, fontWeight: 800, color: C.sageDeep }}>{provTotal}g 중 {log.intakeG}g ({pct}%)</span>
+              : <span style={{ fontSize: 12, color: C.muted }}>급여 기록 없음</span>}
           </div>
-          {log
-            ? <IngredientTable items={logDisplayItems} total={provTotal} />
-            : <div style={{ textAlign: "center", padding: "16px 0", fontSize: 12, color: C.muted }}>급여 기록이 없습니다</div>}
+        </div>
+
+        {/* 항목별 계획 대비 기록 비교표 */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>계획 대비 기록</span>
+            <span style={{ fontSize: 9.5, color: C.muted, fontWeight: 600 }}>
+              {snapshotUsed ? "기록 저장 당시 식단표 기준" : plan ? "현재 식단표 기준 (저장 당시 스냅샷 없음)" : ""}
+            </span>
+          </div>
+          {!plan && !log && <div style={{ textAlign: "center", padding: "16px 0", fontSize: 12, color: C.muted }}>계획·기록 정보가 없습니다</div>}
+          {(plan || log) && (
+            <>
+              {!plan && <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 6 }}>이 끼니의 계획 정보가 없어 기록만 표시합니다(계획이 삭제되었을 수 있어요)</div>}
+              <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 4, padding: "6px 8px", background: C.sageLight, borderRadius: "8px 8px 0 0", marginTop: 6 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.sageDeep }}>재료</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.sageDeep, textAlign: "right" }}>계획</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.sageDeep, textAlign: "right" }}>기록(제공)</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.sageDeep, textAlign: "right" }}>증감</span>
+              </div>
+              <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px" }}>
+                {allNames.map((name, i) => {
+                  const p = planG[name]; const a = actualG[name];
+                  const added = p == null;   // 계획엔 없고 기록에만 있음
+                  const removed = a == null; // 계획에 있었지만 기록에서 빠짐
+                  const d = (a || 0) - (p || 0);
+                  return (
+                    <div key={name} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 4, alignItems: "center", padding: "7px 8px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, opacity: removed ? 0.75 : 1 }}>
+                      <div className="flex items-center" style={{ minWidth: 0, gap: 2 }}>
+                        <CatDot name={name} />
+                        <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                      </div>
+                      <span style={cellStyle}>{p != null ? `${p}g` : "—"}</span>
+                      <span style={{ ...cellStyle, fontWeight: 700, color: C.ink }}>{a != null ? `${a}g` : "—"}</span>
+                      <span style={{ fontSize: 11, fontWeight: 800, textAlign: "right",
+                        color: added ? C.sageDeep : removed ? C.apricot : diffColor(d) }}>
+                        {added ? "추가" : removed ? "빠짐" : diffText(d)}
+                      </span>
+                    </div>
+                  );
+                })}
+                {/* 합계 행 */}
+                <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 4, alignItems: "center", padding: "8px 8px", borderTop: `1px dashed ${C.border}`, background: C.bg }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>합계</span>
+                  <span style={{ ...cellStyle, fontWeight: 700 }}>{plan ? `${planTotal}g` : "—"}</span>
+                  <span style={{ ...cellStyle, fontWeight: 800, color: C.ink }}>{log ? `${provTotal}g` : "—"}</span>
+                  <span style={{ fontSize: 11, fontWeight: 800, textAlign: "right", color: plan && log ? diffColor(totalDiff) : C.muted }}>
+                    {plan && log ? diffText(totalDiff) : "—"}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center" style={{ gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 9.5, color: C.sageDeep, fontWeight: 700 }}>추가 = 계획에 없던 재료</span>
+                <span style={{ fontSize: 9.5, color: C.apricot, fontWeight: 700 }}>빠짐 = 계획엔 있었지만 안 준 재료</span>
+                <span style={{ fontSize: 9.5, color: C.muted, fontWeight: 700 }}>증감 = 제공량 기준</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -3434,7 +3728,7 @@ function MoreTab({ go }) {
         ))}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
-        베이비큐브 · v1.0
+        베이비큐브 · v1.1
       </div>
     </div>
   );
