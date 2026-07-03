@@ -126,6 +126,7 @@ function seedState() {
   return {
     ingredients: { ...SEED_INGREDIENTS },
     ingredientUsage: {},
+    ingredientTags: {},
     stock, plans, logs, intros,
     shopping: [
       { id: uid(), name: "새송이버섯", reason: "식단표 추가 (재고없음)", done: false },
@@ -190,6 +191,8 @@ function migrateState(s) {
   }
   // 재료 검색 - 최근 사용순 정렬용 사용 이력 (없으면 빈 객체로 시작)
   if (!out.ingredientUsage) out.ingredientUsage = {};
+  // 재료별 사용자 지정 영양 태그 (궁합 추천용, 기본 DB에 없는 재료 대응)
+  if (!out.ingredientTags) out.ingredientTags = {};
   return out;
 }
 
@@ -379,6 +382,13 @@ function reducer(state, action) {
       return { ...state, ingredients: { ...state.ingredients, [name]: { ...cur, favorite: !cur.favorite } } };
     }
 
+    /* ---- 재료별 영양 태그 지정 (궁합 추천용) ---- */
+    case "INGREDIENT_TAGS_SET": {
+      const { name, tags } = action;
+      if (!name) return state;
+      return { ...state, ingredientTags: { ...state.ingredientTags, [name]: tags } };
+    }
+
     /* ---- 재료 선택(사용) 시각 기록 - 최근 사용순 정렬용 ---- */
     case "INGREDIENT_TOUCH": {
       const names = action.names || (action.name ? [action.name] : []);
@@ -558,26 +568,44 @@ function GrowthStageHint({ birth }) {
 //  2) 근거 등급 표시 - A: 기전·임상 근거 모두 확립(NIH/WHO/영양학 교과서 수준), B: 근거는 있으나 한 끼 단위 효과 크기가 제한적일 수 있음
 //  3) 태그가 등록되지 않은 재료는 추천하지 않음 (모르는 재료에 대해 추측하지 않음 - 보수적 원칙)
 const NUTRIENT_TAGS = {
-  // 단백질·지방·철분(헴철)
+  // 육류·알 (철분·지방)
   소고기: ["iron", "fat"], 닭고기: ["iron", "fat"], 돼지고기: ["iron", "fat"],
-  달걀노른자: ["iron", "fat"], 연어: ["fat"], 아보카도: ["fat"], 치즈: ["fat", "calcium"],
-  // 식물성 철분(비헴철)·칼슘
-  두부: ["iron", "calcium"], 콩: ["iron"], 렌틸콩: ["iron"], 병아리콩: ["iron"], "잡곡(귀리)": ["iron"],
-  // 비타민C
-  브로콜리: ["vitc"], 파프리카: ["vitc"], 토마토: ["vitc"], 청경채: ["vitc", "calcium"],
-  양배추: ["vitc"], 딸기: ["vitc"], 귤: ["vitc"], 키위: ["vitc"], 감자: ["vitc"],
-  // 베타카로틴 (지용성 - 지방과 함께 흡수↑)
+  오리고기: ["iron", "fat"], 양고기: ["iron", "fat"], 소간: ["iron"],
+  달걀노른자: ["iron", "fat"], 메추리알: ["iron", "fat"],
+  // 생선 (지방·칼슘)
+  연어: ["fat"], 고등어: ["fat"], 삼치: ["fat"], 장어: ["fat"], 멸치: ["calcium"],
+  // 콩·두부·곡물 (식물성 철분·칼슘)
+  두부: ["iron", "calcium"], 순두부: ["iron", "calcium"], 콩: ["iron"], 검은콩: ["iron"],
+  완두콩: ["iron", "vitc"], 렌틸콩: ["iron"], 병아리콩: ["iron"],
+  "잡곡(귀리)": ["iron"], 귀리: ["iron"], 오트밀: ["iron"], 퀴노아: ["iron"],
+  // 채소 (비타민C·베타카로틴·칼슘·옥살산)
+  브로콜리: ["vitc"], 콜리플라워: ["vitc"], 파프리카: ["vitc", "betacarotene"], 피망: ["vitc"],
+  토마토: ["vitc"], 청경채: ["vitc", "calcium"], 양배추: ["vitc"], 배추: ["vitc"],
+  케일: ["vitc", "betacarotene", "calcium"], 감자: ["vitc"],
   당근: ["betacarotene"], 단호박: ["betacarotene"], 고구마: ["betacarotene", "vitc"],
-  // 옥살산 (칼슘 흡수 방해)
   시금치: ["iron", "betacarotene", "oxalate"], 근대: ["oxalate"], 비트: ["oxalate"],
+  // 과일 (비타민C·베타카로틴)
+  딸기: ["vitc"], 귤: ["vitc"], 오렌지: ["vitc"], 키위: ["vitc"],
+  망고: ["vitc", "betacarotene"], 파인애플: ["vitc"], 살구: ["betacarotene"],
+  // 유제품·지방원
+  치즈: ["fat", "calcium"], 아기치즈: ["fat", "calcium"], 요거트: ["fat", "calcium"],
+  아보카도: ["fat"], 참기름: ["fat"], 들기름: ["fat"],
 };
+// 태그 한글 이름 (재료 정보 화면의 태그 편집 UI에서 사용)
+const TAG_LABELS = { iron: "철분", vitc: "비타민C", betacarotene: "베타카로틴", fat: "지방", calcium: "칼슘", oxalate: "옥살산" };
+const TAG_KEYS = Object.keys(TAG_LABELS);
 const PAIRING_RULES = [
   { tagA: "iron", tagB: "vitc", type: "good", grade: "A", text: "비타민 C가 철분 흡수를 높여줘요" },
   { tagA: "betacarotene", tagB: "fat", type: "good", grade: "A", text: "베타카로틴은 지방과 함께 먹으면 흡수가 잘 돼요" },
   { tagA: "oxalate", tagB: "calcium", type: "avoid", grade: "A", text: "옥살산이 칼슘과 결합해 칼슘 흡수를 방해할 수 있어요" },
   { tagA: "calcium", tagB: "iron", type: "avoid", grade: "B", text: "같은 끼니의 많은 칼슘이 철분 흡수를 낮출 수 있다는 연구가 있어요" },
 ];
-const tagsOf = (name) => NUTRIENT_TAGS[name] || [];
+// 재료의 영양 태그: 사용자가 직접 지정한 태그(ingredientTags)가 있으면 우선, 없으면 기본 DB
+const tagsOf = (state, name) => {
+  const custom = state.ingredientTags && state.ingredientTags[name];
+  if (custom != null) return custom;
+  return NUTRIENT_TAGS[name] || [];
+};
 // 현재 담긴 재료 기준으로 (1) 재고에 있는 재료 중 궁합 좋은 추천, (2) 현재 조합 안의 주의 조합 계산
 function pairingSuggestions(state, currentNames) {
   const curSet = new Set(currentNames);
@@ -587,22 +615,45 @@ function pairingSuggestions(state, currentNames) {
   const good = [];
   const seen = new Set();
   stockNames.forEach((cand) => {
-    const candTags = tagsOf(cand);
+    const candTags = tagsOf(state, cand);
     PAIRING_RULES.filter((r) => r.type === "good").forEach((r) => {
       if (seen.has(cand)) return;
-      const withA = currentNames.filter((n) => tagsOf(n).includes(r.tagA));
-      const withB = currentNames.filter((n) => tagsOf(n).includes(r.tagB));
+      const withA = currentNames.filter((n) => tagsOf(state, n).includes(r.tagA));
+      const withB = currentNames.filter((n) => tagsOf(state, n).includes(r.tagB));
       if (candTags.includes(r.tagB) && withA.length > 0) { good.push({ name: cand, text: r.text, grade: r.grade, withNames: withA }); seen.add(cand); }
       else if (candTags.includes(r.tagA) && withB.length > 0) { good.push({ name: cand, text: r.text, grade: r.grade, withNames: withB }); seen.add(cand); }
     });
   });
   const avoid = [];
   PAIRING_RULES.filter((r) => r.type === "avoid").forEach((r) => {
-    const aNames = currentNames.filter((n) => tagsOf(n).includes(r.tagA));
-    const bNames = currentNames.filter((n) => tagsOf(n).includes(r.tagB) && !aNames.includes(n));
+    const aNames = currentNames.filter((n) => tagsOf(state, n).includes(r.tagA));
+    const bNames = currentNames.filter((n) => tagsOf(state, n).includes(r.tagB) && !aNames.includes(n));
     if (aNames.length > 0 && bNames.length > 0) avoid.push({ a: aNames, b: bNames, text: r.text, grade: r.grade });
   });
   return { good: good.slice(0, 5), avoid };
+}
+// 특정 재료 하나를 기준으로, 등록된 모든 재료 중 궁합 좋은 재료 / 주의 조합 재료 목록 계산
+// (재료 정보 화면에서 사용 - 재고 유무와 무관하게 전체를 보여주되 재고 있는 재료를 앞에 배치)
+function ingredientPairsFor(state, name) {
+  const myTags = tagsOf(state, name);
+  const others = Object.keys(state.ingredients).filter((n) => n !== name);
+  const good = [];
+  const avoid = [];
+  others.forEach((other) => {
+    const ot = tagsOf(state, other);
+    PAIRING_RULES.forEach((r) => {
+      const match = (myTags.includes(r.tagA) && ot.includes(r.tagB)) || (myTags.includes(r.tagB) && ot.includes(r.tagA));
+      if (!match) return;
+      const list = r.type === "good" ? good : avoid;
+      if (list.some((x) => x.name === other)) return;
+      list.push({ name: other, text: r.text, grade: r.grade, inStock: stockTotalCubes(state, other) > 0 || stockFridgeG(state, other) > 0 });
+    });
+  });
+  const sortList = (l) => {
+    const byCat = sortByCategory(state, l);
+    return [...byCat.filter((x) => x.inStock), ...byCat.filter((x) => !x.inStock)];
+  };
+  return { good: sortList(good), avoid: sortList(avoid) };
 }
 // 끼니 편집 화면에서 현재 재료 조합 기준 궁합 추천/주의 안내 카드
 function PairingHint({ currentNames, onAdd }) {
@@ -3056,7 +3107,7 @@ function RecordTab({ go }) {
                 <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 5 }}>{cat} ({introsByCat[cat].length})</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {introsByCat[cat].map((it) => (
-                    <Chip key={it.id} cat={it.cat} onClick={() => setEditIntro(it)} onDelete={() => setDelIntro(it)}>{it.name}</Chip>
+                    <Chip key={it.id} cat={it.cat} onClick={() => go("ingredientInfo", { name: it.name })} onDelete={() => setDelIntro(it)}>{it.name}</Chip>
                   ))}
                 </div>
               </div>
@@ -3066,7 +3117,7 @@ function RecordTab({ go }) {
                 <div style={{ fontSize: 11, color: C.apricot, fontWeight: 700, marginBottom: 5 }}>⚠ 주의/중단</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {warnIntros.map((it) => (
-                    <Chip key={it.id} tone="warn" onClick={() => setEditIntro(it)} onDelete={() => setDelIntro(it)}>{it.name}{it.memo ? ` — ${it.memo}` : ""}</Chip>
+                    <Chip key={it.id} tone="warn" onClick={() => go("ingredientInfo", { name: it.name })} onDelete={() => setDelIntro(it)}>{it.name}{it.memo ? ` — ${it.memo}` : ""}</Chip>
                   ))}
                 </div>
               </div>
@@ -3340,6 +3391,164 @@ function FeedingCompareScreen({ date, label, onBack }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   재료 정보 화면 - 영양 태그(편집 가능) · 궁합 좋은 재료/주의 조합 · 재고 · 최근 급여 이력
+   (기록 탭 '지금까지 먹어본 재료'에서 재료를 탭하면 진입)
+   ===================================================================== */
+function IngredientInfoScreen({ name, onBack }) {
+  const { state, dispatch } = useStore();
+  const [editIntro, setEditIntro] = useState(false);
+  const intro = state.intros.find((it) => it.name === name);
+  const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
+  const myTags = tagsOf(state, name);
+  const { good, avoid } = ingredientPairsFor(state, name);
+  const isCustomized = state.ingredientTags && state.ingredientTags[name] != null;
+
+  const toggleTag = (t) => {
+    const next = myTags.includes(t) ? myTags.filter((x) => x !== t) : [...myTags, t];
+    dispatch({ type: "INGREDIENT_TAGS_SET", name, tags: next });
+  };
+
+  // 최근 급여 이력 (최신순 5회)
+  const history = [];
+  Object.keys(state.logs).sort((a, b) => b.localeCompare(a)).forEach((d) => {
+    (state.logs[d] || []).forEach((log) => {
+      log.items.forEach((it) => {
+        if (it.name !== name) return;
+        history.push({ date: d, label: log.label, g: it.source === "fridge" ? it.qty : it.qty * it.unitG });
+      });
+    });
+  });
+  const recent = history.slice(0, 5);
+
+  const gradeBadge = (g) => (
+    <span style={{ fontSize: 8.5, fontWeight: 800, color: g === "A" ? C.sageDeep : "#9A7416", background: g === "A" ? C.sageLight : C.butterLight, borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>근거 {g}</span>
+  );
+  const stockBadge = (inStock) => (
+    <span style={{ fontSize: 9.5, fontWeight: 700, color: inStock ? C.sageDeep : C.muted, border: `1px solid ${inStock ? C.sage : C.border}`, borderRadius: 8, padding: "2px 8px", flexShrink: 0, whiteSpace: "nowrap" }}>{inStock ? "재고 있음" : "재고 없음"}</span>
+  );
+
+  return (
+    <div style={{ paddingBottom: 90, position: "relative" }}>
+      <SubHeader title={`${name} 재료 정보`} onBack={onBack} />
+      <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 12 }}>
+
+        {/* 요약 카드 */}
+        <div className="flex items-center justify-between" style={{ background: C.sageLight, borderRadius: 14, padding: "12px 14px" }}>
+          <div className="flex items-center" style={{ gap: 8, minWidth: 0 }}>
+            <CatDot name={name} size={9} />
+            <span style={{ fontSize: 14, fontWeight: 800, color: C.sageDeep }}>{name}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, background: C.surface, color: C.sageDeep, borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap" }}>
+              {catOf(state, name)}{intro ? ` · ${intro.status}` : ""}
+            </span>
+          </div>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, flexShrink: 0 }}>
+            {cubes > 0 || fg > 0 ? `냉동 ${cubes}큐브${fg > 0 ? ` · 냉장 ${fg}g` : ""}` : "재고 없음"}
+          </span>
+        </div>
+
+        {/* 영양 태그 (탭해서 편집) */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.ink }}>영양 태그 <span style={{ fontWeight: 400, color: C.muted }}>— 탭해서 켜고 끄기</span></span>
+            {isCustomized && (
+              <button onClick={() => dispatch({ type: "INGREDIENT_TAGS_SET", name, tags: null })} style={{ background: "none", border: "none", fontSize: 10, color: C.muted, cursor: "pointer", padding: 0, textDecoration: "underline" }}>기본값으로</button>
+            )}
+          </div>
+          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+            {TAG_KEYS.map((t) => {
+              const on = myTags.includes(t);
+              return (
+                <button key={t} onClick={() => toggleTag(t)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+                  border: "none", background: on ? C.sage : C.sageLight, color: on ? "#fff" : C.sageDeep }}>{TAG_LABELS[t]}</button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>
+            {NUTRIENT_TAGS[name] ? "기본 영양 DB에 등록된 재료예요. 태그는 궁합 추천 계산에 바로 반영돼요." : "기본 DB에 없는 재료예요. 영양 태그를 지정하면 이 재료도 궁합 추천에 포함돼요."}
+          </div>
+        </div>
+
+        {/* 궁합 좋은 재료 / 주의 조합 */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>궁합 좋은 재료 ({good.length})</div>
+          {good.length === 0 && <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>등록된 재료 중 궁합 정보가 있는 재료가 없어요</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {good.map((g) => (
+              <div key={g.name} className="flex items-center justify-between" style={{ gap: 8 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div className="flex items-center" style={{ gap: 5 }}>
+                    <CatDot name={g.name} size={7} />
+                    <span style={{ fontSize: 12, color: C.ink, fontWeight: 700 }}>{g.name}</span>
+                    {gradeBadge(g.grade)}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4, marginTop: 1 }}>{g.text}</div>
+                </div>
+                {stockBadge(g.inStock)}
+              </div>
+            ))}
+          </div>
+          {avoid.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.apricot, margin: "12px 0 6px" }}>주의 조합 ({avoid.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {avoid.map((a) => (
+                  <div key={a.name} style={{ background: C.apricotLight, borderRadius: 8, padding: "7px 9px" }}>
+                    <div className="flex items-center justify-between" style={{ gap: 8 }}>
+                      <div className="flex items-center" style={{ gap: 5 }}>
+                        <AlertTriangle size={11} color={C.apricot} />
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: "#9A4A1E" }}>{a.name}</span>
+                        {gradeBadge(a.grade)}
+                      </div>
+                      {stockBadge(a.inStock)}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#A85B30", lineHeight: 1.4, marginTop: 2 }}>{a.text}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>* 확립된 영양소 상호작용만 안내하는 참고 정보예요. 흡수율에 관한 내용으로, 함께 먹여도 위험한 조합은 아니에요.</div>
+        </div>
+
+        {/* 최근 급여 이력 */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>최근 급여 이력</div>
+          {recent.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.muted }}>아직 급여 기록이 없어요</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {recent.map((h, i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <span style={{ fontSize: 12, color: C.inkSoft }}>{h.date.slice(5)} · {h.label}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{h.g}g</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 반응 기록·메모 */}
+        {intro ? (
+          <button onClick={() => setEditIntro(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 13px", cursor: "pointer" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>반응 기록 · 메모 수정</div>
+              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{intro.status}{intro.memo ? ` — ${intro.memo}` : ""}</div>
+            </div>
+            <ChevronRight size={15} color={C.muted} />
+          </button>
+        ) : (
+          <button onClick={() => dispatch({ type: "INTRO_UPSERT", intro: { name, cat: catOf(state, name), status: "이상없음", memo: "", date: todayISO() } })}
+            className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+            <Plus size={14} /> 먹어본 재료로 등록
+          </button>
+        )}
+      </div>
+      {editIntro && intro && <IntroEditModal intro={intro} onClose={() => setEditIntro(false)} />}
     </div>
   );
 }
@@ -3728,7 +3937,7 @@ function MoreTab({ go }) {
         ))}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
-        베이비큐브 · v1.1
+        베이비큐브 · v1.2
       </div>
     </div>
   );
@@ -3765,6 +3974,7 @@ function Shell() {
   else if (route === "stockDetail") content = <StockDetailScreen name={params.name} onBack={back} />;
   else if (route === "recordHistory") content = <RecordHistoryScreen onBack={back} />;
   else if (route === "feedCompare") content = <FeedingCompareScreen date={params.date} label={params.label} onBack={back} />;
+  else if (route === "ingredientInfo") content = <IngredientInfoScreen name={params.name} onBack={back} />;
   else if (route === "manufactureHistory") content = <ManufactureHistoryScreen onBack={back} />;
   else if (tab === "today") content = <TodayTab go={go} />;
   else if (tab === "plan") content = <MealPlanTab />;
