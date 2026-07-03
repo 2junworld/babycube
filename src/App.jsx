@@ -68,6 +68,10 @@ const uid = () => (typeof crypto !== "undefined" && crypto.randomUUID)
   ? crypto.randomUUID()
   : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`; // 구형 브라우저 대비 폴백
 
+// 탭 내부 화면 상태(서브탭·뷰 선택)를 세션 동안 기억 - 하위 화면(재료 정보 등)에 다녀와도
+// 탭이 리셋되지 않고 보던 화면으로 복귀하도록 함
+const UI_STATE = { recordView: "table", recordTableRange: "week", stockSubTab: "stock" };
+
 function seedState() {
   const t = todayISO();
   // 재고: 재료별 냉동 배치 + 냉장 보관
@@ -382,6 +386,14 @@ function reducer(state, action) {
       return { ...state, ingredients: { ...state.ingredients, [name]: { ...cur, favorite: !cur.favorite } } };
     }
 
+    /* ---- 재료 메타 정보 (기본 재료 연결 baseOf · 혼합 큐브 구성 components) ---- */
+    case "INGREDIENT_SET_META": {
+      const { name, patch } = action;
+      if (!name) return state;
+      const cur = state.ingredients[name] || { cat: DB_CATEGORY[name] || "채소", unitG: 15 };
+      return { ...state, ingredients: { ...state.ingredients, [name]: { ...cur, ...patch } } };
+    }
+
     /* ---- 재료별 영양 태그 지정 (궁합 추천용) ---- */
     case "INGREDIENT_TAGS_SET": {
       const { name, tags } = action;
@@ -479,7 +491,9 @@ function restoreFridge(stock, name, grams) {
 
 /* ----------------------------- 공통 계산 헬퍼 ----------------------------- */
 function catOf(state, name) {
-  return (state.ingredients[name] || SEED_INGREDIENTS[name] || { cat: "채소" }).cat;
+  const reg = state.ingredients[name] || SEED_INGREDIENTS[name];
+  if (reg) return reg.cat;
+  return DB_CATEGORY[name] || "채소"; // 등록 전이라도 영양 DB에 있는 재료는 올바른 카테고리로 표시
 }
 function unitGOf(state, name) {
   return (state.ingredients[name] || SEED_INGREDIENTS[name] || { unitG: 15 }).unitG;
@@ -594,17 +608,40 @@ const NUTRIENT_TAGS = {
 // 태그 한글 이름 (재료 정보 화면의 태그 편집 UI에서 사용)
 const TAG_LABELS = { iron: "철분", vitc: "비타민C", betacarotene: "베타카로틴", fat: "지방", calcium: "칼슘", oxalate: "옥살산" };
 const TAG_KEYS = Object.keys(TAG_LABELS);
+// 영양 DB 재료의 기본 카테고리 (아직 앱에 등록하지 않은 재료를 위키·카테고리 점 색상에 표시할 때 사용)
+const DB_CATEGORY = {
+  소고기: "단백질", 닭고기: "단백질", 돼지고기: "단백질", 오리고기: "단백질", 양고기: "단백질", 소간: "단백질",
+  달걀노른자: "단백질", 메추리알: "단백질", 연어: "단백질", 고등어: "단백질", 삼치: "단백질", 장어: "단백질", 멸치: "단백질",
+  두부: "단백질", 순두부: "단백질", 콩: "단백질", 검은콩: "단백질", 완두콩: "단백질", 렌틸콩: "단백질", 병아리콩: "단백질",
+  치즈: "단백질", 아기치즈: "단백질", 요거트: "단백질", 참기름: "단백질", 들기름: "단백질",
+  "잡곡(귀리)": "탄수화물", 귀리: "탄수화물", 오트밀: "탄수화물", 퀴노아: "탄수화물",
+  브로콜리: "채소", 콜리플라워: "채소", 파프리카: "채소", 피망: "채소", 토마토: "채소", 청경채: "채소",
+  양배추: "채소", 배추: "채소", 케일: "채소", 감자: "채소", 고구마: "채소", 당근: "채소", 단호박: "채소",
+  시금치: "채소", 근대: "채소", 비트: "채소",
+  딸기: "과일", 귤: "과일", 오렌지: "과일", 키위: "과일", 망고: "과일", 파인애플: "과일", 살구: "과일",
+};
 const PAIRING_RULES = [
   { tagA: "iron", tagB: "vitc", type: "good", grade: "A", text: "비타민 C가 철분 흡수를 높여줘요" },
   { tagA: "betacarotene", tagB: "fat", type: "good", grade: "A", text: "베타카로틴은 지방과 함께 먹으면 흡수가 잘 돼요" },
   { tagA: "oxalate", tagB: "calcium", type: "avoid", grade: "A", text: "옥살산이 칼슘과 결합해 칼슘 흡수를 방해할 수 있어요" },
   { tagA: "calcium", tagB: "iron", type: "avoid", grade: "B", text: "같은 끼니의 많은 칼슘이 철분 흡수를 낮출 수 있다는 연구가 있어요" },
 ];
-// 재료의 영양 태그: 사용자가 직접 지정한 태그(ingredientTags)가 있으면 우선, 없으면 기본 DB
-const tagsOf = (state, name) => {
+// 재료의 영양 태그 결정 순서: ① 사용자가 직접 지정한 태그 → ② 기본 영양 DB →
+// ③ 변형 재료면 기본 재료의 태그 상속 (예: 사과퓨레 → 사과) → ④ 혼합 큐브면 구성 재료 태그 합산
+const tagsOf = (state, name, depth = 0) => {
   const custom = state.ingredientTags && state.ingredientTags[name];
   if (custom != null) return custom;
-  return NUTRIENT_TAGS[name] || [];
+  if (NUTRIENT_TAGS[name]) return NUTRIENT_TAGS[name];
+  const meta = state.ingredients[name];
+  if (meta && depth < 3) { // depth 제한: 순환 연결로 인한 무한 재귀 방지
+    if (meta.baseOf && meta.baseOf !== name) return tagsOf(state, meta.baseOf, depth + 1);
+    if (meta.components && meta.components.length > 0) {
+      const set = new Set();
+      meta.components.forEach((c) => { if (c !== name) tagsOf(state, c, depth + 1).forEach((t) => set.add(t)); });
+      return Array.from(set);
+    }
+  }
+  return [];
 };
 // 현재 담긴 재료 기준으로 (1) 재고에 있는 재료 중 궁합 좋은 추천, (2) 현재 조합 안의 주의 조합 계산
 function pairingSuggestions(state, currentNames) {
@@ -2460,6 +2497,9 @@ function StockTab({ go }) {
   const { state } = useStore();
   const [batchModal, setBatchModal] = useState(false);
   const [filter, setFilter] = useState("전체");
+  // 서브탭: 재고 / 재료 정보(위키). 하위 화면에 다녀와도 보던 서브탭으로 복귀
+  const [subTab, setSubTabRaw] = useState(UI_STATE.stockSubTab);
+  const setSubTab = (v) => { UI_STATE.stockSubTab = v; setSubTabRaw(v); };
   const [sortMode, setSortModeRaw] = useState(() => readStockPref("bc_stock_sort", "cat", STOCK_SORT_OPTIONS.map((o) => o.key)));
   const [layout, setLayoutRaw] = useState(() => readStockPref("bc_stock_layout", "row", STOCK_LAYOUTS.map((l) => l.key)));
   const setSortMode = (v) => { setSortModeRaw(v); writeStockPref("bc_stock_sort", v); };
@@ -2494,52 +2534,60 @@ function StockTab({ go }) {
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <ScreenHeader title="재고" right={<button onClick={() => go("shopping")} style={{ background: "none", border: "none", cursor: "pointer" }}><ShoppingCart size={18} color={C.inkSoft} /></button>} />
-      <div style={{ position: "sticky", top: 0, zIndex: 15, background: C.bg, padding: "0 18px 10px" }}>
-        <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 9 }}>
-          {STOCK_FILTERS.map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
-              border: "none", background: filter === f ? C.sage : C.sageLight, color: filter === f ? "#fff" : C.sageDeep }}>{f}</button>
-          ))}
-        </div>
-        <button onClick={() => setBatchModal(true)} className="flex items-center justify-center" style={{ gap: 7, background: C.sage, border: "none", borderRadius: 14, padding: "11px 0", fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", width: "100%" }}>
-          <Plus size={15} /> 제조 기록 추가
-        </button>
+      <div style={{ padding: "0 18px 12px" }}>
+        <Segmented value={subTab} onChange={setSubTab} options={[{ value: "stock", label: "재고" }, { value: "wiki", label: "재료 정보" }]} />
       </div>
-      <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-        <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 6 }}>
-          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬</span>
-            {STOCK_SORT_OPTIONS.map((o) => (
-              <button key={o.key} onClick={() => setSortMode(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
-                border: `1px solid ${sortMode === o.key ? C.sage : C.border}`, background: sortMode === o.key ? C.sageLight : "transparent", color: sortMode === o.key ? C.sageDeep : C.muted }}>{o.label}</button>
-            ))}
+      {subTab === "wiki" && <IngredientWikiPanel go={go} />}
+      {subTab === "stock" && (
+        <>
+          <div style={{ position: "sticky", top: 0, zIndex: 15, background: C.bg, padding: "0 18px 10px" }}>
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 9 }}>
+              {STOCK_FILTERS.map((f) => (
+                <button key={f} onClick={() => setFilter(f)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+                  border: "none", background: filter === f ? C.sage : C.sageLight, color: filter === f ? "#fff" : C.sageDeep }}>{f}</button>
+              ))}
+            </div>
+            <button onClick={() => setBatchModal(true)} className="flex items-center justify-center" style={{ gap: 7, background: C.sage, border: "none", borderRadius: 14, padding: "11px 0", fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", width: "100%" }}>
+              <Plus size={15} /> 제조 기록 추가
+            </button>
           </div>
-          <div className="flex items-center" style={{ gap: 4 }}>
-            {STOCK_LAYOUTS.map((l) => (
-              <button key={l.key} onClick={() => setLayout(l.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
-                border: `1px solid ${layout === l.key ? C.sage : C.border}`, background: layout === l.key ? C.sageLight : "transparent", color: layout === l.key ? C.sageDeep : C.muted }}>{l.label}</button>
-            ))}
+          <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 6 }}>
+              <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬</span>
+                {STOCK_SORT_OPTIONS.map((o) => (
+                  <button key={o.key} onClick={() => setSortMode(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                    border: `1px solid ${sortMode === o.key ? C.sage : C.border}`, background: sortMode === o.key ? C.sageLight : "transparent", color: sortMode === o.key ? C.sageDeep : C.muted }}>{o.label}</button>
+                ))}
+              </div>
+              <div className="flex items-center" style={{ gap: 4 }}>
+                {STOCK_LAYOUTS.map((l) => (
+                  <button key={l.key} onClick={() => setLayout(l.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                    border: `1px solid ${layout === l.key ? C.sage : C.border}`, background: layout === l.key ? C.sageLight : "transparent", color: layout === l.key ? C.sageDeep : C.muted }}>{l.label}</button>
+                ))}
+              </div>
+            </div>
+            {!isEmpty && (
+              <div style={gridStyle}>
+                {names.map((name) => {
+                  const u = urgentMap.get(name);
+                  return (
+                    <StockItem
+                      key={name}
+                      name={name}
+                      layout={layout}
+                      urgent={!!u}
+                      deadlineText={u ? urgentDeadlineText(u) : null}
+                      onClick={() => go("stockDetail", { name })}
+                    />
+                  );
+                })}
+              </div>
+            )}
+            {isEmpty && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>{filter === "전체" ? "재고가 없습니다. 제조 기록을 추가해 보세요." : "해당하는 재료가 없습니다."}</div>}
           </div>
-        </div>
-        {!isEmpty && (
-          <div style={gridStyle}>
-            {names.map((name) => {
-              const u = urgentMap.get(name);
-              return (
-                <StockItem
-                  key={name}
-                  name={name}
-                  layout={layout}
-                  urgent={!!u}
-                  deadlineText={u ? urgentDeadlineText(u) : null}
-                  onClick={() => go("stockDetail", { name })}
-                />
-              );
-            })}
-          </div>
-        )}
-        {isEmpty && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>{filter === "전체" ? "재고가 없습니다. 제조 기록을 추가해 보세요." : "해당하는 재료가 없습니다."}</div>}
-      </div>
+        </>
+      )}
       {batchModal && <BatchModal onClose={() => setBatchModal(false)} />}
     </div>
   );
@@ -2949,8 +2997,11 @@ function RecordTab({ go }) {
   const diff = thisWeek != null && lastWeek != null ? thisWeek - lastWeek : null;
   const [editIntro, setEditIntro] = useState(null); // null | 'new' | introObj
   const [delIntro, setDelIntro] = useState(null); // 삭제 확인 대상 introObj
-  const [view, setView] = useState("table"); // "table"(급여표, 기본) | "history"(기존 히스토리·통계)
-  const [tableRange, setTableRange] = useState("week"); // 급여표 주별/월별 뷰
+  // 하위 화면에 다녀와도 보던 뷰로 복귀하도록 UI_STATE에 마지막 선택을 기억
+  const [view, setViewRaw] = useState(UI_STATE.recordView); // "table"(급여표, 기본) | "history"(기존 히스토리·통계)
+  const setView = (v) => { UI_STATE.recordView = v; setViewRaw(v); };
+  const [tableRange, setTableRangeRaw] = useState(UI_STATE.recordTableRange); // 급여표 주별/월별 뷰
+  const setTableRange = (v) => { UI_STATE.recordTableRange = v; setTableRangeRaw(v); };
   const [reportYM, setReportYM] = useState(() => { const t = todayISO(); return { y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) - 1 }; });
 
   const shiftReportMonth = (n) => setReportYM((p) => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
@@ -3402,11 +3453,27 @@ function FeedingCompareScreen({ date, label, onBack }) {
 function IngredientInfoScreen({ name, onBack }) {
   const { state, dispatch } = useStore();
   const [editIntro, setEditIntro] = useState(false);
+  const [basePicker, setBasePicker] = useState(false);
+  const [compPicker, setCompPicker] = useState(false);
   const intro = state.intros.find((it) => it.name === name);
   const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
   const myTags = tagsOf(state, name);
   const { good, avoid } = ingredientPairsFor(state, name);
   const isCustomized = state.ingredientTags && state.ingredientTags[name] != null;
+
+  // 분류: 변형 재료(기본 재료 연결) · 혼합 큐브(구성 재료)
+  const meta = state.ingredients[name] || {};
+  const baseOf = meta.baseOf || null;
+  const components = meta.components || [];
+  const setMeta = (patch) => dispatch({ type: "INGREDIENT_SET_META", name, patch });
+  // 자동 제안: 이름이 다른 재료명으로 시작하면 변형일 가능성 (예: '사과퓨레' → '사과').
+  // 재료 자체가 영양 DB에 있으면(예: '배추'가 '배'로 시작) 오인식이므로 제안하지 않음
+  const allKnownNames = Array.from(new Set([...Object.keys(NUTRIENT_TAGS), ...Object.keys(state.ingredients)]));
+  const baseSuggestion = (!baseOf && components.length === 0 && !NUTRIENT_TAGS[name])
+    ? allKnownNames.filter((n) => n !== name && n.length >= 2 && name.startsWith(n)).sort((a, b) => b.length - a.length)[0] || null
+    : null;
+  // 태그 출처 (안내 문구용)
+  const tagSource = isCustomized ? "custom" : NUTRIENT_TAGS[name] ? "db" : baseOf ? "base" : components.length > 0 ? "blend" : "none";
 
   const toggleTag = (t) => {
     const next = myTags.includes(t) ? myTags.filter((x) => x !== t) : [...myTags, t];
@@ -3451,6 +3518,45 @@ function IngredientInfoScreen({ name, onBack }) {
           </span>
         </div>
 
+        {/* 재료 분류 - 변형(기본 재료 연결) · 혼합 큐브 구성 */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>재료 분류</div>
+          {baseSuggestion && (
+            <div className="flex items-center justify-between" style={{ background: C.sageLight, borderRadius: 8, padding: "7px 9px", marginBottom: 8, gap: 8 }}>
+              <span style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.4 }}>'{baseSuggestion}'를 조리 방식만 바꾼 재료인가요? 연결하면 영양·궁합 정보를 물려받아요.</span>
+              <button onClick={() => setMeta({ baseOf: baseSuggestion })} style={{ background: C.sage, border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer", flexShrink: 0 }}>연결</button>
+            </div>
+          )}
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: C.inkSoft }}>기본 재료 연결 <span style={{ fontSize: 9.5, color: C.muted }}>(변형 재료용)</span></span>
+            {baseOf ? (
+              <span className="flex items-center" style={{ gap: 6 }}>
+                <span className="flex items-center" style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}><CatDot name={baseOf} size={7} />{baseOf}</span>
+                <button onClick={() => setMeta({ baseOf: null })} style={{ background: "none", border: "none", fontSize: 10, color: C.muted, cursor: "pointer", padding: 0, textDecoration: "underline" }}>해제</button>
+              </span>
+            ) : (
+              <button onClick={() => setBasePicker(true)} style={{ background: C.sageLight, border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>선택</button>
+            )}
+          </div>
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 12, color: C.inkSoft }}>혼합 큐브 구성 <span style={{ fontSize: 9.5, color: C.muted }}>(여러 재료 섞인 큐브용)</span></span>
+            <button onClick={() => setCompPicker(true)} style={{ background: C.sageLight, border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>{components.length > 0 ? "추가" : "선택"}</button>
+          </div>
+          {components.length > 0 && (
+            <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap", marginTop: 8 }}>
+              {components.map((c) => (
+                <span key={c} className="flex items-center" style={{ gap: 4, fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "3px 5px 3px 9px" }}>
+                  <CatDot name={c} size={6} />{c}
+                  <button onClick={() => setMeta({ components: components.filter((x) => x !== c) })} style={{ background: "rgba(0,0,0,0.08)", border: "none", width: 14, height: 14, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}><X size={8} color={C.sageDeep} /></button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>
+            변형 재료(예: 사과퓨레→사과)는 기본 재료의 영양·궁합 정보를 물려받고, 혼합 큐브(예: 감뚝큐브=배·무·양파)는 구성 재료의 정보를 합쳐서 계산해요. 재고와 급여 기록은 이 재료 단위로 그대로 관리돼요.
+          </div>
+        </div>
+
         {/* 영양 태그 (탭해서 편집) */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
@@ -3469,7 +3575,11 @@ function IngredientInfoScreen({ name, onBack }) {
             })}
           </div>
           <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>
-            {NUTRIENT_TAGS[name] ? "기본 영양 DB에 등록된 재료예요. 태그는 궁합 추천 계산에 바로 반영돼요." : "기본 DB에 없는 재료예요. 영양 태그를 지정하면 이 재료도 궁합 추천에 포함돼요."}
+            {tagSource === "custom" ? "직접 지정한 태그를 사용 중이에요. '기본값으로'를 누르면 자동 계산으로 돌아가요."
+              : tagSource === "db" ? "기본 영양 DB에 등록된 재료예요. 태그는 궁합 추천 계산에 바로 반영돼요."
+              : tagSource === "base" ? `기본 재료 '${baseOf}'의 태그를 물려받고 있어요. 태그를 직접 바꾸면 이 재료만의 태그로 저장돼요.`
+              : tagSource === "blend" ? "혼합 큐브라서 구성 재료의 태그를 합쳐서 계산 중이에요. 직접 바꾸면 그 값이 우선돼요."
+              : "기본 DB에 없는 재료예요. 영양 태그를 지정하거나 위 '재료 분류'에서 기본 재료를 연결하면 궁합 추천에 포함돼요."}
           </div>
         </div>
 
@@ -3549,6 +3659,85 @@ function IngredientInfoScreen({ name, onBack }) {
         )}
       </div>
       {editIntro && intro && <IntroEditModal intro={intro} onClose={() => setEditIntro(false)} />}
+      {basePicker && <IngredientPicker onPick={(n) => { if (n !== name) setMeta({ baseOf: n }); setBasePicker(false); }} onClose={() => setBasePicker(false)} />}
+      {compPicker && <IngredientPicker multi alreadyAdded={[...components, name]} onPick={(names) => { setMeta({ components: Array.from(new Set([...components, ...names.filter((n) => n !== name)])) }); }} onClose={() => setCompPicker(false)} />}
+    </div>
+  );
+}
+
+/* =====================================================================
+   재료 정보(위키) - 영양 DB 전체 + 앱에 등록된 재료를 카테고리별로 나열.
+   먹어본 재료는 진하게(활성) 표시, 탭하면 재료 정보 화면으로 이동
+   ===================================================================== */
+function IngredientWikiPanel({ go }) {
+  const { state } = useStore();
+  const [q, setQ] = useState("");
+  // 먹어본 재료: intros 등록분 + 변형 재료를 먹었다면 그 기본 재료도 먹은 것으로 간주 (예: 사과퓨레 → 사과)
+  const eaten = new Set();
+  state.intros.forEach((it) => {
+    eaten.add(it.name);
+    const b = (state.ingredients[it.name] || {}).baseOf;
+    if (b) eaten.add(b);
+  });
+  const warned = new Set(state.intros.filter((it) => it.status === "주의" || it.status === "중단").map((it) => it.name));
+  const allNames = Array.from(new Set([...Object.keys(NUTRIENT_TAGS), ...Object.keys(state.ingredients)]));
+  const filtered = allNames.filter((n) => !q || n.includes(q));
+  const byCat = {};
+  CATEGORIES.forEach((c) => { byCat[c] = []; });
+  filtered.forEach((n) => { (byCat[catOf(state, n)] || byCat["채소"]).push(n); });
+  CATEGORIES.forEach((c) => {
+    byCat[c].sort((a, b) => {
+      const ea = eaten.has(a), eb = eaten.has(b);
+      if (ea !== eb) return ea ? -1 : 1; // 먹어본 재료 먼저
+      return a.localeCompare(b, "ko");
+    });
+  });
+  const eatenCount = filtered.filter((n) => eaten.has(n)).length;
+
+  return (
+    <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
+        <Search size={15} color={C.muted} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료 검색"
+          style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+      </div>
+      <div className="flex items-center justify-between">
+        <span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>먹어본 재료는 진하게 표시돼요 · 탭하면 상세 정보</span>
+        <span style={{ fontSize: 10.5, color: C.sageDeep, fontWeight: 700 }}>{eatenCount}/{filtered.length} 먹어봄</span>
+      </div>
+      {CATEGORIES.map((cat) => byCat[cat].length > 0 && (
+        <div key={cat}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 6px", padding: "0 2px" }}>{cat} ({byCat[cat].length})</div>
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+            {byCat[cat].map((n, i) => {
+              const isEaten = eaten.has(n);
+              const isWarned = warned.has(n);
+              const tags = tagsOf(state, n);
+              const meta = state.ingredients[n] || {};
+              const sub = meta.baseOf ? `${meta.baseOf}의 변형`
+                : (meta.components && meta.components.length > 0) ? `혼합: ${meta.components.join("·")}`
+                : tags.length > 0 ? tags.map((t) => TAG_LABELS[t]).filter(Boolean).join(" · ") : "";
+              return (
+                <button key={n} onClick={() => go("ingredientInfo", { name: n })} className="flex items-center justify-between"
+                  style={{ width: "100%", textAlign: "left", padding: "10px 12px", background: C.surface, border: "none",
+                    borderTop: i === 0 ? "none" : `1px solid ${C.border}`, cursor: "pointer", opacity: isEaten ? 1 : 0.5 }}>
+                  <div className="flex items-center" style={{ gap: 7, minWidth: 0, flex: 1 }}>
+                    <CatDot name={n} size={7} />
+                    <span style={{ fontSize: 12.5, fontWeight: isEaten ? 800 : 500, color: C.ink, whiteSpace: "nowrap" }}>{n}</span>
+                    {isEaten && !isWarned && <Check size={12} color={C.sage} />}
+                    {isWarned && <span style={{ fontSize: 9, fontWeight: 700, color: C.apricot, background: C.apricotLight, borderRadius: 999, padding: "1px 6px" }}>주의·중단</span>}
+                    {sub && <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sub}</span>}
+                  </div>
+                  <ChevronRight size={13} color={C.muted} style={{ flexShrink: 0 }} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.5, padding: "0 2px 4px" }}>
+        영양 DB {Object.keys(NUTRIENT_TAGS).length}개 재료 + 직접 등록한 재료가 함께 표시돼요. 새 재료는 식단표·제조 기록·기록 탭에서 추가하면 여기에 나타나요.
+      </div>
     </div>
   );
 }
@@ -3937,7 +4126,7 @@ function MoreTab({ go }) {
         ))}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
-        베이비큐브 · v1.2
+        베이비큐브 · v1.3
       </div>
     </div>
   );
