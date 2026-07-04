@@ -271,7 +271,7 @@ function reducer(state, action) {
       // 재료 마스터에 없으면 추가
       const ingredients = state.ingredients[name]
         ? state.ingredients
-        : { ...state.ingredients, [name]: { cat: action.cat || "채소", unitG: batch.unitG } };
+        : { ...state.ingredients, [name]: { cat: action.cat || DB_CATEGORY[name] || "채소", unitG: batch.unitG } };
       const cat = (ingredients[name] || {}).cat || action.cat || "채소";
       // 먹어본 재료 목록에도 반영 (없으면 새로 추가)
       let intros = state.intros;
@@ -371,11 +371,14 @@ function reducer(state, action) {
     case "INTRO_DELETE":
       return { ...state, intros: state.intros.filter((it) => it.id !== action.id) };
 
-    /* ---- 재료 마스터에 카테고리 지정하여 등록 (신규 재료 추가시) ---- */
+    /* ---- 재료 마스터에 카테고리 지정하여 등록 (신규 재료 추가시) ----
+       카테고리를 명시하지 않으면 영양 DB의 카테고리를 우선 사용, baseOf가 오면 변형 재료로 연결 */
     case "INGREDIENT_ENSURE": {
-      const { name, cat } = action;
+      const { name, cat, baseOf } = action;
       if (!name || state.ingredients[name]) return state;
-      return { ...state, ingredients: { ...state.ingredients, [name]: { cat: cat || "채소", unitG: 15, favorite: false } } };
+      const entry = { cat: cat || DB_CATEGORY[name] || "채소", unitG: 15, favorite: false };
+      if (baseOf && baseOf !== name) entry.baseOf = baseOf;
+      return { ...state, ingredients: { ...state.ingredients, [name]: entry } };
     }
 
     /* ---- 재료 즐겨찾기 토글 ---- */
@@ -643,6 +646,14 @@ const tagsOf = (state, name, depth = 0) => {
   }
   return [];
 };
+// 변형 재료 자동 제안: 이름이 다른 알려진 재료명으로 시작하면 그 재료의 변형일 가능성 (예: '사과퓨레' → '사과').
+// 재료 자체가 영양 DB에 있으면(예: '배추'가 '배'로 시작) 오인식이므로 제안하지 않음. 가장 긴 일치를 선택
+function suggestBaseFor(state, name) {
+  if (!name || NUTRIENT_TAGS[name]) return null;
+  const known = Array.from(new Set([...Object.keys(NUTRIENT_TAGS), ...Object.keys(state.ingredients)]));
+  return known.filter((n) => n !== name && n.length >= 2 && name.startsWith(n)).sort((a, b) => b.length - a.length)[0] || null;
+}
+
 // 현재 담긴 재료 기준으로 (1) 재고에 있는 재료 중 궁합 좋은 추천, (2) 현재 조합 안의 주의 조합 계산
 function pairingSuggestions(state, currentNames) {
   const curSet = new Set(currentNames);
@@ -1014,7 +1025,15 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
   const [newCat, setNewCat] = useState("채소");
   const [selected, setSelected] = useState([]);
   const [sortMode, setSortMode] = useState("stockDesc");
+  const [linkBase, setLinkBase] = useState(true); // 변형 재료 자동 연결 여부 (기본 켬)
   const names = Object.keys(state.ingredients);
+  // 새 재료 입력 시: 영양 DB에 있으면 카테고리 자동 선택, 변형 재료로 보이면 기본 재료의 카테고리를 미리 선택
+  const newSuggestion = q && !names.includes(q) ? suggestBaseFor(state, q) : null;
+  useEffect(() => {
+    setLinkBase(true);
+    if (DB_CATEGORY[q]) setNewCat(DB_CATEGORY[q]);
+    else if (newSuggestion) setNewCat(catOf(state, newSuggestion));
+  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
   const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
   const isFavorite = (n) => !!(state.ingredients[n] && state.ingredients[n].favorite);
   const usageOf = (n) => (state.ingredientUsage && state.ingredientUsage[n]) || 0;
@@ -1044,7 +1063,8 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
   const addedSet = new Set(alreadyAdded);
 
   const confirmNew = () => {
-    dispatch({ type: "INGREDIENT_ENSURE", name: q, cat: newCat });
+    // 변형 재료 연결이 켜져 있으면 baseOf까지 함께 등록 → 영양 태그·궁합 특성이 즉시 따라옴
+    dispatch({ type: "INGREDIENT_ENSURE", name: q, cat: newCat, baseOf: linkBase && newSuggestion ? newSuggestion : undefined });
     dispatch({ type: "INGREDIENT_TOUCH", name: q });
     if (multi) {
       setSelected((p) => p.includes(q) ? p : [...p, q]);
@@ -1100,7 +1120,19 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
                     border: "none", background: newCat === c ? C.sage : C.surface, color: newCat === c ? "#fff" : C.sageDeep }}>{c}</button>
                 ))}
               </div>
+              {newSuggestion && (
+                <button onClick={() => setLinkBase((v) => !v)} className="flex items-center" style={{ gap: 8, background: C.surface, border: "none", borderRadius: 10, padding: "8px 10px", marginBottom: 10, width: "100%", cursor: "pointer", textAlign: "left" }}>
+                  <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${linkBase ? C.sage : C.border}`,
+                    background: linkBase ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {linkBase && <Check size={12} color="#fff" />}
+                  </span>
+                  <span style={{ fontSize: 11.5, color: C.sageDeep, lineHeight: 1.4 }}>'{newSuggestion}'의 변형으로 연결 — 영양·궁합 특성을 물려받아요</span>
+                </button>
+              )}
               <button onClick={confirmNew} style={{ ...primaryBtn, padding: "9px 0", fontSize: 12.5 }}>'{q}' 추가하기</button>
+              <div style={{ fontSize: 9.5, color: C.sageDeep, marginTop: 8, lineHeight: 1.4, opacity: 0.8 }}>
+                여러 재료가 섞인 혼합 큐브라면, 추가 후 재고 탭 → 재료 정보에서 구성 재료를 지정하면 궁합 계산에 반영돼요.
+              </div>
             </div>
           )}
           {filtered.map((n) => {
@@ -3466,12 +3498,8 @@ function IngredientInfoScreen({ name, onBack }) {
   const baseOf = meta.baseOf || null;
   const components = meta.components || [];
   const setMeta = (patch) => dispatch({ type: "INGREDIENT_SET_META", name, patch });
-  // 자동 제안: 이름이 다른 재료명으로 시작하면 변형일 가능성 (예: '사과퓨레' → '사과').
-  // 재료 자체가 영양 DB에 있으면(예: '배추'가 '배'로 시작) 오인식이므로 제안하지 않음
-  const allKnownNames = Array.from(new Set([...Object.keys(NUTRIENT_TAGS), ...Object.keys(state.ingredients)]));
-  const baseSuggestion = (!baseOf && components.length === 0 && !NUTRIENT_TAGS[name])
-    ? allKnownNames.filter((n) => n !== name && n.length >= 2 && name.startsWith(n)).sort((a, b) => b.length - a.length)[0] || null
-    : null;
+  // 자동 제안: 이름이 다른 재료명으로 시작하면 변형일 가능성 (예: '사과퓨레' → '사과')
+  const baseSuggestion = (!baseOf && components.length === 0) ? suggestBaseFor(state, name) : null;
   // 태그 출처 (안내 문구용)
   const tagSource = isCustomized ? "custom" : NUTRIENT_TAGS[name] ? "db" : baseOf ? "base" : components.length > 0 ? "blend" : "none";
 
