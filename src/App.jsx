@@ -394,7 +394,13 @@ function reducer(state, action) {
       const { name, patch } = action;
       if (!name) return state;
       const cur = state.ingredients[name] || { cat: DB_CATEGORY[name] || "채소", unitG: 15 };
-      return { ...state, ingredients: { ...state.ingredients, [name]: { ...cur, ...patch } } };
+      const next = { ...state, ingredients: { ...state.ingredients, [name]: { ...cur, ...patch } } };
+      // 분류(기본 재료 연결·혼합 구성)를 바꾸면 이전에 직접 지정했던 태그를 초기화해
+      // 상속·합산 결과가 바로 반영되게 함 (옛 지정값이 새 분류를 가리는 문제 방지)
+      if (("baseOf" in patch || "components" in patch) && state.ingredientTags && state.ingredientTags[name] != null) {
+        next.ingredientTags = { ...state.ingredientTags, [name]: null };
+      }
+      return next;
     }
 
     /* ---- 재료별 영양 태그 지정 (궁합 추천용) ---- */
@@ -633,16 +639,17 @@ const PAIRING_RULES = [
 // ③ 변형 재료면 기본 재료의 태그 상속 (예: 사과퓨레 → 사과) → ④ 혼합 큐브면 구성 재료 태그 합산
 const tagsOf = (state, name, depth = 0) => {
   const custom = state.ingredientTags && state.ingredientTags[name];
-  if (custom != null) return custom;
+  // 빈 배열은 '지정 안 함'으로 간주하고 상속·합산으로 넘어감 (태그를 켰다 껐던 흔적이 상속을 막지 않도록)
+  if (custom != null && custom.length > 0) return custom;
   if (NUTRIENT_TAGS[name]) return NUTRIENT_TAGS[name];
   const meta = state.ingredients[name];
   if (meta && depth < 3) { // depth 제한: 순환 연결로 인한 무한 재귀 방지
-    if (meta.baseOf && meta.baseOf !== name) return tagsOf(state, meta.baseOf, depth + 1);
+    const set = new Set();
+    if (meta.baseOf && meta.baseOf !== name) tagsOf(state, meta.baseOf, depth + 1).forEach((t) => set.add(t));
     if (meta.components && meta.components.length > 0) {
-      const set = new Set();
       meta.components.forEach((c) => { if (c !== name) tagsOf(state, c, depth + 1).forEach((t) => set.add(t)); });
-      return Array.from(set);
     }
+    if (set.size > 0) return Array.from(set); // 기본 재료 연결 + 혼합 구성이 둘 다 있으면 합집합
   }
   return [];
 };
@@ -3491,7 +3498,7 @@ function IngredientInfoScreen({ name, onBack }) {
   const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
   const myTags = tagsOf(state, name);
   const { good, avoid } = ingredientPairsFor(state, name);
-  const isCustomized = state.ingredientTags && state.ingredientTags[name] != null;
+  const isCustomized = !!(state.ingredientTags && state.ingredientTags[name] && state.ingredientTags[name].length > 0);
 
   // 분류: 변형 재료(기본 재료 연결) · 혼합 큐브(구성 재료)
   const meta = state.ingredients[name] || {};
