@@ -457,14 +457,17 @@ function reducer(state, action) {
 function stockBatches(state, name) {
   return (state.stock[name] || { batches: [] }).batches;
 }
+// 배치의 frozen/fridgeG는 항상 0 이상이어야 하는데, 예전엔 NumInput이 직접 입력한 음수를 그대로 저장할 수 있어서
+// (min 속성은 스핀 버튼에만 적용되고 타이핑으로 입력한 음수는 막아주지 못함) 이미 음수로 저장된 배치가 있을 수 있음.
+// 집계 시점에 Math.max(0, ...)로 걸러내서 과거에 잘못 저장된 값이 있어도 화면엔 음수로 보이지 않게 함(자체 치유).
 function stockTotalCubes(state, name) {
-  return stockBatches(state, name).reduce((s, b) => s + b.frozen, 0);
+  return stockBatches(state, name).reduce((s, b) => s + Math.max(0, b.frozen || 0), 0);
 }
 function stockTotalFrozenG(state, name) {
-  return stockBatches(state, name).reduce((s, b) => s + b.frozen * b.unitG, 0);
+  return stockBatches(state, name).reduce((s, b) => s + Math.max(0, b.frozen || 0) * b.unitG, 0);
 }
 function stockFridgeG(state, name) {
-  return stockBatches(state, name).reduce((s, b) => s + (b.fridgeG || 0), 0);
+  return stockBatches(state, name).reduce((s, b) => s + Math.max(0, b.fridgeG || 0), 0);
 }
 function deductFrozen(stock, name, cubes) {
   const batches = (stock[name] || { batches: [] }).batches;
@@ -690,6 +693,51 @@ function pairingSuggestions(state, currentNames) {
     if (aNames.length > 0 && bNames.length > 0) avoid.push({ a: aNames, b: bNames, text: r.text, grade: r.grade });
   });
   return { good: good.slice(0, 5), avoid };
+}
+// 특정 날짜의 급여 기록에 사용된 재료 -> 그 날짜에 제공된 총 g. 재료 검색의 "오늘 사용 재료 제외" 필터/배지와
+// 끼니 편집 화면의 "오늘 이미 준 재료" 힌트가 공용으로 사용. date 기준은 실제 오늘이 아니라 "끼니 계획을 세우는 날짜"임 —
+// 끼니 편집·일괄 저장 화면에서는 편집 중인 날짜를 넘겨받고, 그 외(제조 기록 추가 등 날짜 개념이 없는 곳)만 실제 오늘을 기본값으로 씀
+function usedTodayMap(state, date = todayISO()) {
+  const usedG = new Map();
+  (state.logs[date] || []).forEach((log) => {
+    log.items.forEach((it) => {
+      const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
+      usedG.set(it.name, (usedG.get(it.name) || 0) + g);
+    });
+  });
+  return usedG;
+}
+// 재료 검색에서 "궁합 좋은 재료" 정렬에 쓸 순위: 현재 조합(currentNames)과 좋은 궁합이면 0(근거 A) 또는 1(근거 B), 없으면 null.
+// pairingSuggestions와 달리 재고 유무·상위 5개 제한 없이 전체 재료를 대상으로 계산함(검색 목록 전체를 정렬해야 하므로)
+function pairingRankFor(state, currentNames, name) {
+  if (!currentNames || currentNames.length === 0) return null;
+  const tags = tagsOf(state, name);
+  let best = null;
+  PAIRING_RULES.filter((r) => r.type === "good").forEach((r) => {
+    const withA = currentNames.some((n) => tagsOf(state, n).includes(r.tagA));
+    const withB = currentNames.some((n) => tagsOf(state, n).includes(r.tagB));
+    if ((tags.includes(r.tagB) && withA) || (tags.includes(r.tagA) && withB)) {
+      const rank = r.grade === "A" ? 0 : 1;
+      if (best === null || rank < best) best = rank;
+    }
+  });
+  return best;
+}
+// 재료 검색에서 궁합 배지에 표시할 정보: 후보 재료(name)가 현재 조합(currentNames)의 어떤 재료와
+// 궁합이 좋은지/비추천인지를 실제 재료 이름 목록으로 반환 (근거 등급 대신 사람이 바로 알아볼 수 있는 이름을 보여주기 위함)
+function pairingInfoFor(state, currentNames, name) {
+  const goodWith = new Set();
+  const avoidWith = new Set();
+  if (!currentNames || currentNames.length === 0) return { goodWith: [], avoidWith: [] };
+  const tags = tagsOf(state, name);
+  PAIRING_RULES.forEach((r) => {
+    const withA = currentNames.filter((n) => n !== name && tagsOf(state, n).includes(r.tagA));
+    const withB = currentNames.filter((n) => n !== name && tagsOf(state, n).includes(r.tagB));
+    const target = r.type === "good" ? goodWith : avoidWith;
+    if (tags.includes(r.tagB) && withA.length > 0) withA.forEach((n) => target.add(n));
+    else if (tags.includes(r.tagA) && withB.length > 0) withB.forEach((n) => target.add(n));
+  });
+  return { goodWith: Array.from(goodWith), avoidWith: Array.from(avoidWith) };
 }
 // 특정 재료 하나를 기준으로, 등록된 모든 재료 중 궁합 좋은 재료 / 주의 조합 재료 목록 계산
 // (재료 정보 화면에서 사용 - 재고 유무와 무관하게 전체를 보여주되 재고 있는 재료를 앞에 배치)
@@ -971,7 +1019,11 @@ const primaryBtn = { background: C.sage, border: "none", borderRadius: 14, paddi
    숫자 입력 (0 지웠을 때 "020"처럼 되는 현상 방지)
    - 값이 0이면 입력창을 빈칸으로 표시 → 이어서 입력해도 선행 0이 남지 않음
    ===================================================================== */
-function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min }) {
+// min 기본값 0: 이 컴포넌트는 항상 재고 그램·큐브 수·일수 등 음수가 나올 수 없는 값에만 쓰이는데,
+// 숫자 입력창(type=number)의 HTML min 속성은 스핀 버튼에만 적용되고 직접 타이핑으로 음수를 넣는 건 막아주지 않아서
+// (예: 냉장 보관량을 직접 편집하다 "-" 부호가 남는 경우) 재고 중량이 음수로 표시되는 버그가 있었음.
+// onChange에서 Math.max로 실제로 clamp해서 근본적으로 막음.
+function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min = 0 }) {
   return (
     <div className="flex items-center" style={{ gap: 6 }}>
       <input
@@ -984,7 +1036,7 @@ function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min 
           const raw = e.target.value;
           if (raw === "") { onChange(0); return; }
           const n = Number(raw);
-          if (!Number.isNaN(n)) onChange(n);
+          if (!Number.isNaN(n)) onChange(min != null ? Math.max(min, n) : n);
         }}
         style={{ width, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px",
           fontSize: 12, textAlign: "center", color: C.ink, outline: "none" }}
@@ -1018,24 +1070,44 @@ function ConfirmModal({ title, message, warning, confirmLabel = "삭제", danger
   );
 }
 
+// iOS Safari에서 키보드가 올라오면 레이아웃 뷰포트는 그대로인데 실제 보이는 영역(visualViewport)만 줄어들어서,
+// position:fixed 바텀시트가 키보드 뒤에 가려지는 문제가 있음(재료 검색창이 대표적). 실제 보이는 영역의 높이/위치를 추적해서
+// 시트를 그 영역 안에 맞추는 데 사용.
+function useVisualViewport() {
+  const getSnapshot = () => (
+    window.visualViewport
+      ? { height: window.visualViewport.height, offsetTop: window.visualViewport.offsetTop }
+      : { height: window.innerHeight, offsetTop: 0 }
+  );
+  const [vv, setVv] = useState(getSnapshot);
+  useEffect(() => {
+    if (!window.visualViewport) return;
+    const update = () => setVv(getSnapshot());
+    window.visualViewport.addEventListener("resize", update);
+    window.visualViewport.addEventListener("scroll", update);
+    return () => {
+      window.visualViewport.removeEventListener("resize", update);
+      window.visualViewport.removeEventListener("scroll", update);
+    };
+  }, []);
+  return vv;
+}
+
 /* =====================================================================
    재료 선택 모달
    ===================================================================== */
 // multi=true면 체크박스로 여러 재료를 한 번에 골라 onPick(names[])으로 전달, false면 기존처럼 탭 즉시 onPick(name) 1건
-const SORT_OPTIONS = [
-  { key: "stockDesc", label: "재고 많은순" },
-  { key: "stockAsc", label: "재고 적은순" },
-  { key: "cat", label: "카테고리순" },
-  { key: "recent", label: "최근 사용순" },
-  { key: "favorite", label: "즐겨찾기순" },
-];
-function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] }) {
+// 정렬은 여러 기준을 동시에 켤 수 있음(중복 선택) — 아래 고정된 우선순위(즐겨찾기 > 오늘 사용 재료 > 궁합 좋은 재료 >
+// 재고순 > 카테고리순) 순서로 앞 기준이 같을 때만 다음 기준으로 넘어가며, 마지막엔 항상 이름순으로 마무리함.
+// 재고순만 한 칩을 반복 클릭하면 꺼짐→적은순→많은순→꺼짐 순으로 도는 3단 토글.
+function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], date = todayISO() }) {
   const { state, dispatch } = useStore();
+  const vv = useVisualViewport();
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("전체");
   const [newCat, setNewCat] = useState("채소");
   const [selected, setSelected] = useState([]);
-  const [sortMode, setSortMode] = useState("stockDesc");
+  const [sortSel, setSortSel] = useState({ fav: false, excludeUsedToday: false, pairing: false, stock: null, cat: true });
   const [linkBase, setLinkBase] = useState(true); // 변형 재료 자동 연결 여부 (기본 켬)
   const names = Object.keys(state.ingredients);
   // 새 재료 입력 시: 영양 DB에 있으면 카테고리 자동 선택, 변형 재료로 보이면 기본 재료의 카테고리를 미리 선택
@@ -1047,29 +1119,38 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
   const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
   const isFavorite = (n) => !!(state.ingredients[n] && state.ingredients[n].favorite);
-  const usageOf = (n) => (state.ingredientUsage && state.ingredientUsage[n]) || 0;
-  const base = names.filter((n) => (cat === "전체" || catOf(state, n) === cat) && n.includes(q));
-  const filtered = sortMode === "cat"
-    ? sortByCategory(state, base, (n) => n)
-    : sortMode === "recent"
-    ? [...base].sort((a, b) => {
-        const ua = usageOf(a), ub = usageOf(b);
-        if (ua === 0 && ub === 0) return stockAmt(b) - stockAmt(a); // 사용 이력 없으면 재고 많은순 보조 정렬
-        if (ua === 0 || ub === 0) return ub - ua; // 사용 이력 있는 쪽이 항상 먼저
-        return ub - ua;
-      })
-    : sortMode === "favorite"
-    ? [...base].sort((a, b) => {
-        const fa = isFavorite(a), fb = isFavorite(b);
-        if (fa !== fb) return fa ? -1 : 1; // 즐겨찾기가 항상 먼저
-        return stockAmt(b) - stockAmt(a); // 보조 정렬: 재고 많은순
-      })
-    : [...base].sort((a, b) => {
-        const sa = stockAmt(a), sb = stockAmt(b);
-        const aHas = sa > 0, bHas = sb > 0;
-        if (aHas !== bHas) return aHas ? -1 : 1; // 재고 있는 재료가 항상 먼저
-        return sortMode === "stockAsc" ? sa - sb : sb - sa;
-      });
+  const usedTodayG = usedTodayMap(state, date);
+  const toggleSortFav = () => setSortSel((s) => ({ ...s, fav: !s.fav }));
+  const toggleExcludeUsedToday = () => setSortSel((s) => ({ ...s, excludeUsedToday: !s.excludeUsedToday }));
+  const toggleSortPairing = () => setSortSel((s) => ({ ...s, pairing: !s.pairing }));
+  const toggleSortStock = () => setSortSel((s) => ({ ...s, stock: s.stock === null ? "asc" : s.stock === "asc" ? "desc" : null }));
+  const toggleSortCat = () => setSortSel((s) => ({ ...s, cat: !s.cat }));
+  // "오늘 사용 재료 제외"는 정렬이 아니라 목록 자체에서 걸러내는 필터
+  const base = names.filter((n) => (cat === "전체" || catOf(state, n) === cat) && n.includes(q) && (!sortSel.excludeUsedToday || !usedTodayG.has(n)));
+  const sortChain = [];
+  if (sortSel.fav) sortChain.push((a, b) => { const fa = isFavorite(a), fb = isFavorite(b); return fa !== fb ? (fa ? -1 : 1) : 0; });
+  if (sortSel.pairing) sortChain.push((a, b) => {
+    const ra = pairingRankFor(state, alreadyAdded, a), rb = pairingRankFor(state, alreadyAdded, b);
+    if (ra === rb) return 0;
+    if (ra === null) return 1;
+    if (rb === null) return -1;
+    return ra - rb; // 궁합 근거 A(0) > B(1)
+  });
+  if (sortSel.stock) sortChain.push((a, b) => {
+    const sa = stockAmt(a), sb = stockAmt(b);
+    const aHas = sa > 0, bHas = sb > 0;
+    if (aHas !== bHas) return aHas ? -1 : 1; // 재고 있는 재료가 항상 먼저
+    return sortSel.stock === "asc" ? sa - sb : sb - sa;
+  });
+  if (sortSel.cat) sortChain.push((a, b) => CATEGORIES.indexOf(catOf(state, a)) - CATEGORIES.indexOf(catOf(state, b)));
+  sortChain.push((a, b) => a.localeCompare(b, "ko")); // 최종 안정 정렬(동률 시 이름순)
+  const filtered = [...base].sort((a, b) => {
+    for (const cmp of sortChain) {
+      const r = cmp(a, b);
+      if (r !== 0) return r;
+    }
+    return 0;
+  });
   const isNew = q && !names.includes(q);
   const addedSet = new Set(alreadyAdded);
 
@@ -1091,7 +1172,7 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
   const confirmSelection = () => { dispatch({ type: "INGREDIENT_TOUCH", names: selected }); onPick(selected); onClose(); };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+    <div style={{ position: "fixed", top: vv.offsetTop, left: 0, right: 0, height: vv.height, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
         <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{multi ? `재료 선택${selected.length ? ` (${selected.length})` : ""}` : "재료 선택"}</span>
@@ -1110,10 +1191,16 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
             ))}
           </div>
           <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬</span>
-            {SORT_OPTIONS.map((o) => (
-              <button key={o.key} onClick={() => setSortMode(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
-                border: `1px solid ${sortMode === o.key ? C.sage : C.border}`, background: sortMode === o.key ? C.sageLight : "transparent", color: sortMode === o.key ? C.sageDeep : C.muted }}>{o.label}</button>
+            <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬(중복 선택 가능)</span>
+            {[
+              { on: sortSel.fav, onClick: toggleSortFav, label: "즐겨찾기" },
+              { on: sortSel.excludeUsedToday, onClick: toggleExcludeUsedToday, label: "오늘 사용 재료 제외" },
+              { on: sortSel.pairing, onClick: toggleSortPairing, label: "궁합 좋은 재료" },
+              { on: sortSel.stock !== null, onClick: toggleSortStock, label: sortSel.stock === "desc" ? "재고 많은순" : sortSel.stock === "asc" ? "재고 적은순" : "재고순" },
+              { on: sortSel.cat, onClick: toggleSortCat, label: "카테고리순" },
+            ].map((o, i) => (
+              <button key={i} onClick={o.onClick} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                border: `1px solid ${o.on ? C.sage : C.border}`, background: o.on ? C.sageLight : "transparent", color: o.on ? C.sageDeep : C.muted }}>{o.label}</button>
             ))}
           </div>
         </div>
@@ -1151,12 +1238,13 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
             const already = multi && addedSet.has(n);
             const checked = selected.includes(n);
             const fav = isFavorite(n);
+            const pairInfo = sortSel.pairing ? pairingInfoFor(state, alreadyAdded, n) : null;
             return (
               <button key={n} onClick={() => (multi ? (already ? null : toggle(n)) : pickOne(n))} disabled={already}
                 className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
                 borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid",
                 cursor: already ? "default" : "pointer", opacity: already ? 0.45 : 1 }}>
-                <div className="flex items-center" style={{ gap: multi ? 9 : 6 }}>
+                <div className="flex items-center" style={{ gap: multi ? 9 : 6, minWidth: 0 }}>
                   {multi && (
                     <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${checked ? C.sage : C.border}`,
                       background: checked ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -1167,8 +1255,17 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [] })
                     <Star size={13} color={fav ? C.apricot : C.border} fill={fav ? C.apricot : "none"} />
                   </span>
                   <CatDot name={n} size={8} /><span style={{ fontSize: 13, color: C.ink }}>{n}</span>
+                  {usedTodayG.has(n) && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>오늘 {Math.round(usedTodayG.get(n))}g</span>
+                  )}
+                  {pairInfo && pairInfo.goodWith.length > 0 && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>{pairInfo.goodWith.join("·")}와 궁합</span>
+                  )}
+                  {pairInfo && pairInfo.avoidWith.length > 0 && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: "#9A4A1E", background: C.apricotLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>{pairInfo.avoidWith.join("·")}와 비추천</span>
+                  )}
                 </div>
-                <span style={{ fontSize: 11, color: cubes || fg ? C.muted : C.apricot }}>
+                <span style={{ fontSize: 11, color: cubes || fg ? C.muted : C.apricot, flexShrink: 0 }}>
                   {already ? "이미 담김" : cubes || fg ? `냉동 ${cubes}${fg ? ` · 냉장 ${fg}g` : ""}` : "재고없음"}
                 </span>
               </button>
@@ -1350,22 +1447,16 @@ function UrgentStockHint({ currentNames, onAdd }) {
 }
 
 // 오늘 이미 급여 기록에 사용된 재료 힌트 - 끼니를 짤 때 오늘 벌써 준 재료를 참고해서 겹치지 않게 구성할 수 있도록 안내
-function TodayUsedHint({ currentNames }) {
+function TodayUsedHint({ currentNames, date = todayISO() }) {
   const { state } = useStore();
   const currentSet = new Set(currentNames);
-  const todayLogs = state.logs[todayISO()] || [];
-  const usedG = new Map(); // name -> 오늘 제공된 총 g
-  todayLogs.forEach((log) => {
-    log.items.forEach((it) => {
-      const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
-      usedG.set(it.name, (usedG.get(it.name) || 0) + g);
-    });
-  });
+  const usedG = usedTodayMap(state, date); // name -> 해당 날짜에 제공된 총 g
   const usedNames = sortByCategory(state, Array.from(usedG.keys()), (n) => n).filter((n) => !currentSet.has(n));
   if (usedNames.length === 0) return null;
+  const label = date === todayISO() ? "오늘 이미 준 재료" : `${date.slice(5)}에 이미 준 재료`;
   return (
     <div style={{ background: C.sageLight, borderRadius: 12, padding: 12 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>오늘 이미 준 재료</div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>{label}</div>
       <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
         {usedNames.map((n) => (
           <span key={n} className="flex items-center" style={{ gap: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 999, padding: "4px 9px" }}>
@@ -1388,20 +1479,47 @@ const MEAL_TIP_OPTIONS = [
 function mealTipsOf(state) {
   return state.settings.mealTips || { stock: true, pairing: true, usedToday: true };
 }
-function MealTipsToggle() {
+// 재고/궁합/오늘 사용 재료 힌트를 하나로 묶어 기본은 접어두고, 필요할 때만 펼쳐보는 패널.
+// 세 카드를 항상 펼쳐두면 화면을 너무 많이 차지한다는 피드백을 받아 접이식으로 변경함(2026-07-04).
+function MealTipsPanel({ currentNames, onAdd, date = todayISO() }) {
   const { state, dispatch } = useStore();
   const tips = mealTipsOf(state);
+  const [expanded, setExpanded] = useState(false);
+  const currentSet = new Set(currentNames);
+
+  const urgentCount = tips.stock !== false ? urgentStockNames(state).filter((u) => !currentSet.has(u.name)).length : 0;
+  const { good, avoid } = tips.pairing !== false ? pairingSuggestions(state, currentNames) : { good: [], avoid: [] };
+  const usedTodayCount = tips.usedToday !== false ? Array.from(usedTodayMap(state, date).keys()).filter((n) => !currentSet.has(n)).length : 0;
+  const totalCount = urgentCount + good.length + avoid.length + usedTodayCount;
+
   const toggle = (key) => dispatch({ type: "SET_SETTING", key: "mealTips", value: { ...tips, [key]: tips[key] === false } });
+
   return (
-    <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>도움말 표시</span>
-      {MEAL_TIP_OPTIONS.map((o) => {
-        const on = tips[o.key] !== false;
-        return (
-          <button key={o.key} onClick={() => toggle(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
-            border: `1px solid ${on ? C.sage : C.border}`, background: on ? C.sageLight : "transparent", color: on ? C.sageDeep : C.muted }}>{o.label}</button>
-        );
-      })}
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+      <button onClick={() => setExpanded((v) => !v)} className="flex items-center justify-between" style={{ width: "100%", background: "none", border: "none", padding: "10px 12px", cursor: "pointer" }}>
+        <span className="flex items-center" style={{ gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>도움말</span>
+          {totalCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{totalCount}</span>}
+        </span>
+        <ChevronRight size={14} color={C.muted} style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
+      </button>
+      {expanded && (
+        <div style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>표시</span>
+            {MEAL_TIP_OPTIONS.map((o) => {
+              const on = tips[o.key] !== false;
+              return (
+                <button key={o.key} onClick={() => toggle(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                  border: `1px solid ${on ? C.sage : C.border}`, background: on ? C.sageLight : "transparent", color: on ? C.sageDeep : C.muted }}>{o.label}</button>
+              );
+            })}
+          </div>
+          {tips.stock !== false && <UrgentStockHint currentNames={currentNames} onAdd={onAdd} />}
+          {tips.pairing !== false && <PairingHint currentNames={currentNames} onAdd={onAdd} />}
+          {tips.usedToday !== false && <TodayUsedHint currentNames={currentNames} date={date} />}
+        </div>
+      )}
     </div>
   );
 }
@@ -1449,7 +1567,6 @@ function MealEditScreen({ date, meal, onBack }) {
     })));
   };
   const total = totalG(state, items);
-  const mealTips = mealTipsOf(state);
 
   const pickSlot = (slotLabel, slotTime) => {
     setLabel(slotLabel);
@@ -1493,10 +1610,7 @@ function MealEditScreen({ date, meal, onBack }) {
         <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer" }}>
           다른 날짜 식단 복사해오기
         </button>
-        <MealTipsToggle />
-        {mealTips.stock !== false && <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />}
-        {mealTips.pairing !== false && <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />}
-        {mealTips.usedToday !== false && <TodayUsedHint currentNames={items.map((it) => it.name)} />}
+        <MealTipsPanel currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} date={date} />
 
         <div>
           <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
@@ -1548,7 +1662,7 @@ function MealEditScreen({ date, meal, onBack }) {
           {label ? "저장" : "끼니 종류를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} date={date} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>
@@ -1563,7 +1677,6 @@ function MealEditScreen({ date, meal, onBack }) {
 function BulkSaveScreen({ initialCursor, onBack }) {
   const { state, dispatch } = useStore();
   const timeFmt = state.settings.timeFmt;
-  const mealTips = mealTipsOf(state);
   const [label, setLabel] = useState("");
   const [time, setTime] = useState("07:00");
   const [items, setItems] = useState([]);
@@ -1576,6 +1689,8 @@ function BulkSaveScreen({ initialCursor, onBack }) {
   const [intervalStart, setIntervalStart] = useState(todayISO());
   const [intervalDays, setIntervalDays] = useState(1);
   const [intervalCount, setIntervalCount] = useState(4);
+  // "오늘 사용 재료" 기준 날짜: 아직 선택한 날짜가 없으면 실제 오늘, 있으면 그중 가장 이른 날짜를 기준으로 함
+  const tipsDate = selectedDates.length > 0 ? [...selectedDates].sort()[0] : todayISO();
 
   const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: it.qty + d } : it).filter((it) => it.qty > 0));
   const upUnit = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, unitG: v } : it));
@@ -1679,23 +1794,8 @@ function BulkSaveScreen({ initialCursor, onBack }) {
             다른 날짜 식단 복사해오기
           </button>
           <div style={{ marginTop: 8 }}>
-            <MealTipsToggle />
+            <MealTipsPanel currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} date={tipsDate} />
           </div>
-          {mealTips.stock !== false && (
-            <div style={{ marginTop: 8 }}>
-              <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
-            </div>
-          )}
-          {mealTips.pairing !== false && (
-            <div style={{ marginTop: 8 }}>
-              <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
-            </div>
-          )}
-          {mealTips.usedToday !== false && (
-            <div style={{ marginTop: 8 }}>
-              <TodayUsedHint currentNames={items.map((it) => it.name)} />
-            </div>
-          )}
         </div>
 
         <div>
@@ -1807,7 +1907,7 @@ function BulkSaveScreen({ initialCursor, onBack }) {
           {selectedDates.length > 0 ? `${selectedDates.length}개 날짜에 저장` : "날짜를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} date={tipsDate} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>
@@ -2009,7 +2109,7 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
 
         <button onClick={() => setConfirmingSave(true)} style={primaryBtn}>기록 저장</button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} date={date} />}
       {confirmingSave && (
         <ConfirmModal
           title={`${label} 급여 기록을 저장할까요?`}
