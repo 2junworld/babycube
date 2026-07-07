@@ -135,7 +135,7 @@ function seedState() {
     shopping: [
       { id: uid(), name: "새송이버섯", reason: "식단표 추가 (재고없음)", done: false },
     ],
-    settings: { timeFmt: "24h", frozenAlertDays: 3, fridgeAlertDays: 1, fridgeKeepDays: 2, fontScale: 1 },
+    settings: { timeFmt: "24h", frozenAlertDays: 3, fridgeAlertDays: 1, fridgeKeepDays: 2, fontScale: 1, mealTips: { stock: true, pairing: true, usedToday: true } },
     travel: { active: false, start: "", end: "", mealsPerDay: 2, checklist: [] },
     members: ["이준세", "배우자"],
     baby: { name: "", sex: "남아", birth: "2025-10-08" },
@@ -197,6 +197,10 @@ function migrateState(s) {
   if (!out.ingredientUsage) out.ingredientUsage = {};
   // 재료별 사용자 지정 영양 태그 (궁합 추천용, 기본 DB에 없는 재료 대응)
   if (!out.ingredientTags) out.ingredientTags = {};
+  // 끼니 편집 화면 도움말(재고/궁합/오늘 사용 재료) 표시 여부 - 기존 사용자는 기본 전부 켜짐으로 시작
+  if (out.settings && !out.settings.mealTips) {
+    out.settings = { ...out.settings, mealTips: { stock: true, pairing: true, usedToday: true } };
+  }
   return out;
 }
 
@@ -1345,6 +1349,63 @@ function UrgentStockHint({ currentNames, onAdd }) {
   );
 }
 
+// 오늘 이미 급여 기록에 사용된 재료 힌트 - 끼니를 짤 때 오늘 벌써 준 재료를 참고해서 겹치지 않게 구성할 수 있도록 안내
+function TodayUsedHint({ currentNames }) {
+  const { state } = useStore();
+  const currentSet = new Set(currentNames);
+  const todayLogs = state.logs[todayISO()] || [];
+  const usedG = new Map(); // name -> 오늘 제공된 총 g
+  todayLogs.forEach((log) => {
+    log.items.forEach((it) => {
+      const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
+      usedG.set(it.name, (usedG.get(it.name) || 0) + g);
+    });
+  });
+  const usedNames = sortByCategory(state, Array.from(usedG.keys()), (n) => n).filter((n) => !currentSet.has(n));
+  if (usedNames.length === 0) return null;
+  return (
+    <div style={{ background: C.sageLight, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>오늘 이미 준 재료</div>
+      <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+        {usedNames.map((n) => (
+          <span key={n} className="flex items-center" style={{ gap: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 999, padding: "4px 9px" }}>
+            <CatDot name={n} size={6} />
+            <span style={{ fontSize: 11, color: C.ink, fontWeight: 600 }}>{n}</span>
+            <span style={{ fontSize: 9.5, color: C.muted }}>{Math.round(usedG.get(n))}g</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 끼니 편집 화면에 뜨는 도움말(재고/궁합/오늘 사용 재료) 표시 여부 선택 칩
+const MEAL_TIP_OPTIONS = [
+  { key: "stock", label: "재고" },
+  { key: "pairing", label: "궁합" },
+  { key: "usedToday", label: "오늘 사용 재료" },
+];
+function mealTipsOf(state) {
+  return state.settings.mealTips || { stock: true, pairing: true, usedToday: true };
+}
+function MealTipsToggle() {
+  const { state, dispatch } = useStore();
+  const tips = mealTipsOf(state);
+  const toggle = (key) => dispatch({ type: "SET_SETTING", key: "mealTips", value: { ...tips, [key]: tips[key] === false } });
+  return (
+    <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>도움말 표시</span>
+      {MEAL_TIP_OPTIONS.map((o) => {
+        const on = tips[o.key] !== false;
+        return (
+          <button key={o.key} onClick={() => toggle(o.key)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+            border: `1px solid ${on ? C.sage : C.border}`, background: on ? C.sageLight : "transparent", color: on ? C.sageDeep : C.muted }}>{o.label}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* =====================================================================
    끼니 편집 화면 (식단 계획용)
    ===================================================================== */
@@ -1388,6 +1449,7 @@ function MealEditScreen({ date, meal, onBack }) {
     })));
   };
   const total = totalG(state, items);
+  const mealTips = mealTipsOf(state);
 
   const pickSlot = (slotLabel, slotTime) => {
     setLabel(slotLabel);
@@ -1396,7 +1458,7 @@ function MealEditScreen({ date, meal, onBack }) {
   };
 
   const save = () => {
-    if (!label) return;
+    if (!label) return; // 끼니 종류 미선택 - 아래 저장 버튼이 비활성화·안내 문구로 바뀌므로 여기까지 오지 않음
     dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: meal.id || uid(), label, time, items: items.map(({ name, qty, unitG, gramsOverride }) => ({ name, qty, unitG, gramsOverride: gramsOverride != null ? gramsOverride : null })) } });
     onBack();
   };
@@ -1431,8 +1493,10 @@ function MealEditScreen({ date, meal, onBack }) {
         <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer" }}>
           다른 날짜 식단 복사해오기
         </button>
-        <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
-        <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
+        <MealTipsToggle />
+        {mealTips.stock !== false && <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />}
+        {mealTips.pairing !== false && <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />}
+        {mealTips.usedToday !== false && <TodayUsedHint currentNames={items.map((it) => it.name)} />}
 
         <div>
           <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
@@ -1480,7 +1544,9 @@ function MealEditScreen({ date, meal, onBack }) {
           <Plus size={14} /> 재료 추가
         </button>
 
-        <button onClick={save} style={primaryBtn}>저장</button>
+        <button onClick={save} disabled={!label} style={{ ...primaryBtn, background: label ? C.sage : C.sageLight, color: label ? "#fff" : C.muted, cursor: label ? "pointer" : "default" }}>
+          {label ? "저장" : "끼니 종류를 선택하세요"}
+        </button>
       </div>
       {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
@@ -1497,6 +1563,7 @@ function MealEditScreen({ date, meal, onBack }) {
 function BulkSaveScreen({ initialCursor, onBack }) {
   const { state, dispatch } = useStore();
   const timeFmt = state.settings.timeFmt;
+  const mealTips = mealTipsOf(state);
   const [label, setLabel] = useState("");
   const [time, setTime] = useState("07:00");
   const [items, setItems] = useState([]);
@@ -1612,11 +1679,23 @@ function BulkSaveScreen({ initialCursor, onBack }) {
             다른 날짜 식단 복사해오기
           </button>
           <div style={{ marginTop: 8 }}>
-            <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
+            <MealTipsToggle />
           </div>
-          <div style={{ marginTop: 8 }}>
-            <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
-          </div>
+          {mealTips.stock !== false && (
+            <div style={{ marginTop: 8 }}>
+              <UrgentStockHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
+            </div>
+          )}
+          {mealTips.pairing !== false && (
+            <div style={{ marginTop: 8 }}>
+              <PairingHint currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} />
+            </div>
+          )}
+          {mealTips.usedToday !== false && (
+            <div style={{ marginTop: 8 }}>
+              <TodayUsedHint currentNames={items.map((it) => it.name)} />
+            </div>
+          )}
         </div>
 
         <div>
@@ -1783,8 +1862,14 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
       // 식단표 항목(아직 급여기록으로 저장된 적 없음, source 필드 없음)
       const hasGramsOverride = it.gramsOverride != null;
       const totalGForItem = hasGramsOverride ? it.gramsOverride : (it.qty || 1) * effectiveUnitG;
+      // 기본 출처 선택: 냉동 재고가 조금이라도 있으면 냉동을 기본으로 한다.
+      // (버그 수정) 예전엔 "냉장 보관분이 조금이라도 있으면 무조건 냉장"으로 기본값을 잡아서,
+      // 실제로는 냉동 큐브로 준 재료인데 남아있던 소량의 냉장 보관분(g)만 차감되고 냉동 재고는
+      // 전혀 줄지 않는 문제가 있었음(deductFridge가 부족분을 그냥 버리고 조용히 끝남).
+      // 냉동 재고가 아예 없고 냉장 재고만 있을 때만 냉장을 기본값으로 함.
+      const hasFrozen = stockTotalCubes(state, it.name) > 0;
       const hasFridge = stockFridgeG(state, it.name) > 0;
-      const source = hasGramsOverride ? "fridge" : (hasFridge && it.name !== "죽" ? "fridge" : "frozen");
+      const source = hasGramsOverride ? "fridge" : (!hasFrozen && hasFridge && it.name !== "죽" ? "fridge" : "frozen");
       return {
         name: it.name,
         source,
