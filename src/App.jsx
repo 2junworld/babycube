@@ -4748,10 +4748,58 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+/* ----------------------------- 데모 모드 (스크린샷용, 임시) ----------------------------- */
+// URL에 ?demo 를 붙이면 로그인 없이 데모 데이터로 앱을 보여줌. Firebase에 아무것도 저장하지 않음.
+function demoState() {
+  const s = seedState();
+  const t = todayISO();
+  const mk = (label, time, items, intakeG) => ({ id: uid(), label, time, items, intakeG, planSnapshot: null });
+  const fz = (name, qty, unitG = 15) => ({ name, source: "frozen", qty, unitG, deduct: true });
+  const menus = [
+    [fz("죽", 4, 20), fz("소고기", 1), fz("브로콜리", 1)],
+    [fz("죽", 4, 20), fz("닭고기", 1), fz("애호박", 1)],
+    [fz("죽", 4, 20), fz("소고기", 1), fz("단호박", 1)],
+    [fz("죽", 4, 20), fz("대구살", 1), fz("당근", 1)],
+    [fz("죽", 4, 20), fz("닭고기", 1), fz("청경채", 1)],
+    [fz("죽", 4, 20), fz("소고기", 1), fz("시금치", 1)],
+  ];
+  const totalG = (items) => items.reduce((s2, it) => s2 + it.qty * it.unitG, 0);
+  const logs = {};
+  for (let d = 13; d >= 1; d--) {
+    const iso = addDaysISO(t, -d);
+    const ratios = [[0.95, 1], [0.8, 0.9], [1, 0.75]];
+    logs[iso] = [
+      mk("아침", "07:00", menus[d % menus.length], Math.round(totalG(menus[d % menus.length]) * ratios[0][d % 2])),
+      mk("점심", "12:00", menus[(d + 2) % menus.length], Math.round(totalG(menus[(d + 2) % menus.length]) * ratios[1][d % 2])),
+      mk("저녁", "18:00", menus[(d + 4) % menus.length], Math.round(totalG(menus[(d + 4) % menus.length]) * ratios[2][d % 2])),
+    ];
+  }
+  logs[t] = [mk("아침", "07:00", [fz("죽", 4, 20), fz("소고기", 1), fz("브로콜리", 1), fz("애호박", 1)], 118)];
+  return { ...s, logs, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: "2025-10-08" } };
+}
+
+function DemoProvider() {
+  const [state, dispatch] = useReducer(reducer, undefined, () => demoState());
+  const notify = () => {};
+  const cloud = {
+    familyId: "demo",
+    user: { uid: "demo", displayName: "데모", email: "demo@babycube.app" },
+    meta: { members: ["demo"], memberInfo: { demo: { name: "데모" } }, ownerUid: "demo" },
+    leaveFamily: () => {},
+    logout: () => {},
+  };
+  return (
+    <Store.Provider value={{ state, dispatch, cloud, notify }}>
+      <Shell />
+    </Store.Provider>
+  );
+}
+
 export default function App() {
+  const isDemo = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("demo");
   return (
     <ErrorBoundary>
-      <AuthGate />
+      {isDemo ? <DemoProvider /> : <AuthGate />}
     </ErrorBoundary>
   );
 }
