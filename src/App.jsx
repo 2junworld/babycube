@@ -958,7 +958,7 @@ function IngredientTable({ items, total }) {
         {sorted.map((it, i) => (
           <div key={it.name} className="flex items-center justify-between" style={{ padding: "7px 9px", borderTop: i === 0 ? "none" : `1px solid ${C.border}` }}>
             <div className="flex items-center"><CatDot name={it.name} /><span style={{ fontSize: 12, color: C.inkSoft }}>{it.name}</span></div>
-            <span style={{ fontSize: 12, color: C.muted }}>{it.gramsOverride != null ? `${gOf(state, it)}g` : `${gOf(state, it)}g (${it.qty}큐브)`}</span>
+            <span style={{ fontSize: 12, color: C.muted }}>{it.gramsOverride != null || it.source === "fridge" ? `${gOf(state, it)}g` : `${gOf(state, it)}g (${it.qty}큐브)`}</span>
           </div>
         ))}
       </div>
@@ -1942,7 +1942,7 @@ function StockChangeHint({ item, checked, onToggle }) {
    급여 기록 화면 (실제 먹인 끼니 → 재고 차감 + 섭취율)
    ===================================================================== */
 function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const base = existingLog || planMeal;
   const [time] = useState(base.time || "12:00");
   const [label] = useState(base.label || "끼니");
@@ -2020,6 +2020,12 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
               gramsOverride: gramsOverride != null ? gramsOverride : null })) }
         : null);
     dispatch({ type: "LOG_SAVE", date, log: { id: existingLog ? existingLog.id : uid(), label, time, items: logItems, intakeG: intake == null ? totalProvide : intake, planSnapshot } });
+    // 저장 직후 "재고가 실제로 차감되었는지"를 눈으로 확인할 수 있게 차감 내역을 토스트로 안내
+    const deducted = logItems.filter((it) => it.deduct !== false);
+    const summary = deducted
+      .map((it) => (it.source === "fridge" ? `${it.name} ${it.qty}g` : `${it.name} ${it.qty}큐브`))
+      .join(", ");
+    notify(deducted.length > 0 ? `기록 저장 · 재고 차감: ${summary}` : "기록 저장됨 (재고 차감 없음)");
     onBack();
   };
   const intakeVal = intake == null ? totalProvide : intake;
@@ -2266,6 +2272,9 @@ function TodayTab({ go }) {
           const total = totalG(state, m.items);
           const intake = m.log ? m.log.intakeG : null;
           const provided = m.log ? logProvideG(m.log) : total;
+          // 기록 완료된 끼니는 계획이 아니라 "실제로 급여한 재료"를 보여줌
+          // (기록 화면에서 재료를 추가/삭제했으면 계획과 달라질 수 있음)
+          const shownItems = m.log ? m.log.items : m.items;
           return (
             <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14 }}>
               <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
@@ -2275,8 +2284,8 @@ function TodayTab({ go }) {
                 </div>
                 <StatusBadge status={m.status} />
               </div>
-              {detail ? <div style={{ marginBottom: 9 }}><IngredientTable items={m.items} /></div> : <div style={{ marginBottom: 9 }}><MealItemList items={m.items} fontSize={12} wrap /></div>}
-              <CategoryBar items={m.items} />
+              {detail ? <div style={{ marginBottom: 9 }}><IngredientTable items={shownItems} /></div> : <div style={{ marginBottom: 9 }}><MealItemList items={shownItems} fontSize={12} wrap /></div>}
+              <CategoryBar items={shownItems} />
               <div className="flex items-center justify-between" style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.border}` }}>
                 {m.status === "완료" ? (
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>
@@ -4670,8 +4679,10 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
         <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
           <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
             <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 600 }}>{toast.message}</span>
-            <button onClick={() => { if (toast.onUndo) toast.onUndo(state); setToast(null); }}
-              style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
+            {toast.onUndo && (
+              <button onClick={() => { toast.onUndo(state); setToast(null); }}
+                style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
+            )}
           </div>
         </div>
       )}
@@ -4748,10 +4759,75 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+/* ----------------------------- 데모 모드 (스크린샷용, 임시) ----------------------------- */
+// URL에 ?demo 를 붙이면 로그인 없이 데모 데이터로 앱을 보여줌. Firebase에 아무것도 저장하지 않음.
+function demoState() {
+  const s = seedState();
+  const t = todayISO();
+  const mk = (label, time, items, intakeG) => ({ id: uid(), label, time, items, intakeG, planSnapshot: null });
+  const fz = (name, qty, unitG = 15) => ({ name, source: "frozen", qty, unitG, deduct: true });
+  const menus = [
+    [fz("죽", 4, 20), fz("소고기", 1), fz("브로콜리", 1)],
+    [fz("죽", 4, 20), fz("닭고기", 1), fz("애호박", 1)],
+    [fz("죽", 4, 20), fz("소고기", 1), fz("단호박", 1)],
+    [fz("죽", 4, 20), fz("대구살", 1), fz("당근", 1)],
+    [fz("죽", 4, 20), fz("닭고기", 1), fz("청경채", 1)],
+    [fz("죽", 4, 20), fz("소고기", 1), fz("시금치", 1)],
+  ];
+  const totalG = (items) => items.reduce((s2, it) => s2 + it.qty * it.unitG, 0);
+  const logs = {};
+  for (let d = 13; d >= 1; d--) {
+    const iso = addDaysISO(t, -d);
+    const ratios = [[0.95, 1], [0.8, 0.9], [1, 0.75]];
+    logs[iso] = [
+      mk("아침", "07:00", menus[d % menus.length], Math.round(totalG(menus[d % menus.length]) * ratios[0][d % 2])),
+      mk("점심", "12:00", menus[(d + 2) % menus.length], Math.round(totalG(menus[(d + 2) % menus.length]) * ratios[1][d % 2])),
+      mk("저녁", "18:00", menus[(d + 4) % menus.length], Math.round(totalG(menus[(d + 4) % menus.length]) * ratios[2][d % 2])),
+    ];
+  }
+  logs[t] = [mk("아침", "07:00", [fz("죽", 4, 20), fz("소고기", 1), fz("브로콜리", 1), fz("애호박", 1)], 118)];
+  return { ...s, logs, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: "2025-10-08" } };
+}
+
+function DemoProvider() {
+  const [state, dispatch] = useReducer(reducer, undefined, () => demoState());
+  // 실제 앱과 동일하게 토스트 알림 표시 (데모에서도 저장/삭제 피드백 확인 가능)
+  const [toast, setToast] = useState(null);
+  const notify = (message, onUndo, duration = 5000) => {
+    const id = uid();
+    setToast({ id, message, onUndo });
+    setTimeout(() => setToast((tv) => (tv && tv.id === id ? null : tv)), duration);
+  };
+  const cloud = {
+    familyId: "demo",
+    user: { uid: "demo", displayName: "데모", email: "demo@babycube.app" },
+    meta: { members: ["demo"], memberInfo: { demo: { name: "데모" } }, ownerUid: "demo" },
+    leaveFamily: () => {},
+    logout: () => {},
+  };
+  return (
+    <Store.Provider value={{ state, dispatch, cloud, notify }}>
+      <Shell />
+      {toast && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
+          <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
+            <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 600 }}>{toast.message}</span>
+            {toast.onUndo && (
+              <button onClick={() => { toast.onUndo(state); setToast(null); }}
+                style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
+            )}
+          </div>
+        </div>
+      )}
+    </Store.Provider>
+  );
+}
+
 export default function App() {
+  const isDemo = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("demo");
   return (
     <ErrorBoundary>
-      <AuthGate />
+      {isDemo ? <DemoProvider /> : <AuthGate />}
     </ErrorBoundary>
   );
 }
