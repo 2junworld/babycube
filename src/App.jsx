@@ -1966,8 +1966,11 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   // 실제 급여 시간: 계획 시간과 별개로 수정 가능 (계획은 그대로 두고 기록에만 반영됨)
   const [time, setTime] = useState(base.time || "12:00");
   const [label, setLabel] = useState(base.label || "끼니");
-  // 바로 기록을 식단표에도 남길지 여부 (식단표에 '바로기록' 표시가 붙음)
+  // 기록 내용을 식단표에도 반영할지 여부 - 같은 이름의 끼니가 식단표에 있으면
+  // 그 끼니를 기록 내용으로 업데이트(동기화)하고, 없으면 새로 추가. 모두 '바로기록' 표시가 붙음
   const [addToPlan, setAddToPlan] = useState(false);
+  // 현재 선택된 끼니 이름에 해당하는 오늘 식단표 끼니 (동기화 대상)
+  const targetPlanMeal = (planMeal && planMeal.id) ? planMeal : (state.plans[date] || []).find((m) => m.label === label);
   // 제공 항목: 출처(냉동/냉장) + 수량. 식단표에서 "그램으로 입력"(gramsOverride)한 재료는
   // 실제 중량을 그대로 이어받도록 냉장(계량) 방식으로 옮겨온다 (기본 15g으로 뭉개지는 문제 방지)
   const [items, setItems] = useState(
@@ -2042,13 +2045,18 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
               gramsOverride: gramsOverride != null ? gramsOverride : null })) }
         : null);
     dispatch({ type: "LOG_SAVE", date, log: { id: existingLog ? existingLog.id : uid(), label, time, items: logItems, intakeG: intake == null ? totalProvide : intake, planSnapshot } });
-    // 바로 기록을 식단표에도 반영 (fromRecord 표시로 계획해서 만든 끼니와 구분)
-    // 같은 이름의 끼니가 이미 식단표에 있으면 중복 생성하지 않음 (체크박스도 그 경우 숨겨짐)
-    if (adhoc && addToPlan && !(state.plans[date] || []).some((m) => m.label === label)) {
+    // 기록 내용을 식단표에 반영: 같은 이름의 끼니가 있으면 그 끼니의 재료를 기록 내용으로
+    // 교체(계획 시간은 유지)하고, 없으면 새 끼니로 추가. 모두 fromRecord(바로기록) 표시가 붙음.
+    // 급여표의 '계획 대비 비교'는 저장 시점 스냅샷(planSnapshot) 기준이라 원래 계획과의 비교는 유지됨
+    if (addToPlan) {
       const planItems = items.map((it) => it.source === "fridge"
         ? { name: it.name, qty: 1, unitG: it.unitG, gramsOverride: it.fridgeG }
         : { name: it.name, qty: it.qty, unitG: it.unitG, gramsOverride: null });
-      dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: uid(), label, time, items: planItems, fromRecord: true } });
+      const target = (planMeal && planMeal.id) ? planMeal : (state.plans[date] || []).find((m) => m.label === label);
+      const meal = target
+        ? { id: target.id, label: target.label, time: target.time, items: planItems, fromRecord: true }
+        : { id: uid(), label, time, items: planItems, fromRecord: true };
+      dispatch({ type: "PLAN_SAVE_MEAL", date, meal });
     }
     // 저장 직후 "재고가 실제로 차감되었는지"를 눈으로 확인할 수 있게 차감 내역을 토스트로 안내
     const deducted = logItems.filter((it) => it.deduct !== false);
@@ -2166,15 +2174,17 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
           )}
         </div>
 
-        {adhoc && !(state.plans[date] || []).some((m) => m.label === label) && (
-          <label className="flex items-center" style={{ gap: 9, padding: "2px 4px", cursor: "pointer" }}>
-            <input type="checkbox" checked={addToPlan} onChange={(e) => setAddToPlan(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.sage, flexShrink: 0 }} />
-            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600, lineHeight: 1.5 }}>
-              이 기록을 식단표에도 추가<br />
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}>식단표에 '바로기록' 표시가 붙어 계획한 끼니와 구분돼요</span>
+        <label className="flex items-center" style={{ gap: 9, padding: "2px 4px", cursor: "pointer" }}>
+          <input type="checkbox" checked={addToPlan} onChange={(e) => setAddToPlan(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.sage, flexShrink: 0 }} />
+          <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600, lineHeight: 1.5 }}>
+            {targetPlanMeal ? "이 기록대로 식단표 끼니 업데이트" : "이 기록을 식단표에도 추가"}<br />
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}>
+              {targetPlanMeal
+                ? `식단표 '${targetPlanMeal.label}' 끼니의 재료가 이 기록 내용으로 바뀌어요 (계획 시간은 유지)`
+                : "식단표에 '바로기록' 표시가 붙어 계획한 끼니와 구분돼요"}
             </span>
-          </label>
-        )}
+          </span>
+        </label>
         <button onClick={() => items.length > 0 && setConfirmingSave(true)} disabled={items.length === 0}
           style={{ ...primaryBtn, opacity: items.length === 0 ? 0.5 : 1, cursor: items.length === 0 ? "default" : "pointer" }}>
           {items.length === 0 ? "재료를 추가해 주세요" : "기록 저장"}
