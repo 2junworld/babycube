@@ -982,6 +982,15 @@ function StatusBadge({ status }) {
   return <span style={{ fontSize: 10.5, fontWeight: 700, background: s.bg, color: s.fg, padding: "3px 8px", borderRadius: 999 }}>{s.label}</span>;
 }
 
+// 식단표 끼니 중 "바로 기록"에서 만들어진 것 구분 표시 (계획해서 세운 끼니와 분류)
+function FromRecordBadge({ small = false }) {
+  return (
+    <span style={{ fontSize: small ? 9 : 10, fontWeight: 800, background: C.butterLight, color: "#9A7416", padding: small ? "1px 6px" : "2px 8px", borderRadius: 999, whiteSpace: "nowrap", flexShrink: 0 }}>
+      바로기록
+    </span>
+  );
+}
+
 function ScreenHeader({ title, right }) {
   return (
     <div className="flex items-center justify-between" style={{ padding: "14px 18px 10px" }}>
@@ -1576,7 +1585,8 @@ function MealEditScreen({ date, meal, onBack }) {
 
   const save = () => {
     if (!label) return; // 끼니 종류 미선택 - 아래 저장 버튼이 비활성화·안내 문구로 바뀌므로 여기까지 오지 않음
-    dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: meal.id || uid(), label, time, items: items.map(({ name, qty, unitG, gramsOverride }) => ({ name, qty, unitG, gramsOverride: gramsOverride != null ? gramsOverride : null })) } });
+    // fromRecord: 바로기록으로 생긴 끼니를 편집해도 '바로기록' 구분 표시는 유지
+    dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: meal.id || uid(), label, time, items: items.map(({ name, qty, unitG, gramsOverride }) => ({ name, qty, unitG, gramsOverride: gramsOverride != null ? gramsOverride : null })), ...(meal.fromRecord ? { fromRecord: true } : {}) } });
     onBack();
   };
 
@@ -1943,10 +1953,21 @@ function StockChangeHint({ item, checked, onToggle }) {
    ===================================================================== */
 function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   const { state, dispatch, notify } = useStore();
-  const base = existingLog || planMeal;
+  // 바로 기록 모드: 계획 없이 진입 - 현재 시각 + 지금 시간대에 가장 가까운 끼니 이름으로 시작
+  const adhoc = !existingLog && !planMeal;
+  const [adhocBase] = useState(() => {
+    const n = new Date();
+    const nowHM = `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`;
+    const toMin = (hm) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
+    const nearest = [...state.mealSlots].sort((a, b) => Math.abs(toMin(a.time) - toMin(nowHM)) - Math.abs(toMin(b.time) - toMin(nowHM)))[0];
+    return { label: nearest ? nearest.label : "끼니", time: nowHM, items: [] };
+  });
+  const base = existingLog || planMeal || adhocBase;
   // 실제 급여 시간: 계획 시간과 별개로 수정 가능 (계획은 그대로 두고 기록에만 반영됨)
   const [time, setTime] = useState(base.time || "12:00");
-  const [label] = useState(base.label || "끼니");
+  const [label, setLabel] = useState(base.label || "끼니");
+  // 바로 기록을 식단표에도 남길지 여부 (식단표에 '바로기록' 표시가 붙음)
+  const [addToPlan, setAddToPlan] = useState(false);
   // 제공 항목: 출처(냉동/냉장) + 수량. 식단표에서 "그램으로 입력"(gramsOverride)한 재료는
   // 실제 중량을 그대로 이어받도록 냉장(계량) 방식으로 옮겨온다 (기본 15g으로 뭉개지는 문제 방지)
   const [items, setItems] = useState(
@@ -2021,6 +2042,14 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
               gramsOverride: gramsOverride != null ? gramsOverride : null })) }
         : null);
     dispatch({ type: "LOG_SAVE", date, log: { id: existingLog ? existingLog.id : uid(), label, time, items: logItems, intakeG: intake == null ? totalProvide : intake, planSnapshot } });
+    // 바로 기록을 식단표에도 반영 (fromRecord 표시로 계획해서 만든 끼니와 구분)
+    // 같은 이름의 끼니가 이미 식단표에 있으면 중복 생성하지 않음 (체크박스도 그 경우 숨겨짐)
+    if (adhoc && addToPlan && !(state.plans[date] || []).some((m) => m.label === label)) {
+      const planItems = items.map((it) => it.source === "fridge"
+        ? { name: it.name, qty: 1, unitG: it.unitG, gramsOverride: it.fridgeG }
+        : { name: it.name, qty: it.qty, unitG: it.unitG, gramsOverride: null });
+      dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: uid(), label, time, items: planItems, fromRecord: true } });
+    }
     // 저장 직후 "재고가 실제로 차감되었는지"를 눈으로 확인할 수 있게 차감 내역을 토스트로 안내
     const deducted = logItems.filter((it) => it.deduct !== false);
     const summary = deducted
@@ -2036,6 +2065,20 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title={`${label} 급여 기록`} onBack={onBack} />
       <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+        {adhoc && (
+          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>끼니</span>
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {state.mealSlots.map((s) => {
+                const active = label === s.label;
+                return (
+                  <button key={s.id} onClick={() => setLabel(s.label)} style={{ fontSize: 11.5, fontWeight: 700, padding: "6px 11px", borderRadius: 999, cursor: "pointer",
+                    border: "none", background: active ? C.sage : C.sageLight, color: active ? "#fff" : C.sageDeep }}>{s.label}</button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>급여 시간</span>
           <div className="flex items-center" style={{ gap: 8 }}>
@@ -2123,7 +2166,19 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
           )}
         </div>
 
-        <button onClick={() => setConfirmingSave(true)} style={primaryBtn}>기록 저장</button>
+        {adhoc && !(state.plans[date] || []).some((m) => m.label === label) && (
+          <label className="flex items-center" style={{ gap: 9, padding: "2px 4px", cursor: "pointer" }}>
+            <input type="checkbox" checked={addToPlan} onChange={(e) => setAddToPlan(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.sage, flexShrink: 0 }} />
+            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600, lineHeight: 1.5 }}>
+              이 기록을 식단표에도 추가<br />
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}>식단표에 '바로기록' 표시가 붙어 계획한 끼니와 구분돼요</span>
+            </span>
+          </label>
+        )}
+        <button onClick={() => items.length > 0 && setConfirmingSave(true)} disabled={items.length === 0}
+          style={{ ...primaryBtn, opacity: items.length === 0 ? 0.5 : 1, cursor: items.length === 0 ? "default" : "pointer" }}>
+          {items.length === 0 ? "재료를 추가해 주세요" : "기록 저장"}
+        </button>
       </div>
       {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} date={date} />}
       {confirmingSave && (
@@ -2242,6 +2297,13 @@ function TodayTab({ go }) {
     else if (m.time < nowHM) status = "대기";
     return { ...m, log, status };
   });
+  // 계획과 매칭되지 않은 기록(바로 기록 등)도 완료 카드로 함께 표시
+  const matchedLogIds = new Set(meals.filter((m) => m.log).map((m) => m.log.id));
+  const extraCards = logs
+    .filter((l) => !matchedLogIds.has(l.id))
+    .map((l) => ({ id: l.id, label: l.label, time: l.time, items: l.items, log: l, status: "완료", adhocOnly: true }));
+  const cards = [...meals, ...extraCards].sort((a, b) =>
+    (a.log ? a.log.time : a.time).localeCompare(b.log ? b.log.time : b.time));
 
   return (
     <div style={{ paddingBottom: 90 }}>
@@ -2266,19 +2328,19 @@ function TodayTab({ go }) {
       )}
 
       <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-        {meals.length > 0 && (
+        {cards.length > 0 && (
           <div className="flex items-center justify-end">
             <button onClick={() => setDetail((v) => !v)} style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "5px 10px", cursor: "pointer" }}>
               {detail ? "디테일뷰" : "심플뷰"}
             </button>
           </div>
         )}
-        {meals.length === 0 && (
+        {cards.length === 0 && (
           <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>
-            오늘 계획된 끼니가 없습니다.<br />식단표 탭에서 추가해 보세요.
+            오늘 계획된 끼니가 없습니다.<br />식단표 탭에서 계획하거나, 아래 '바로 기록'으로 먹인 끼니를 기록해 보세요.
           </div>
         )}
-        {meals.map((m) => {
+        {cards.map((m) => {
           const total = totalG(state, m.items);
           const intake = m.log ? m.log.intakeG : null;
           const provided = m.log ? logProvideG(m.log) : total;
@@ -2305,7 +2367,7 @@ function TodayTab({ go }) {
                 ) : (
                   <span style={{ fontSize: 12.5, color: C.muted }}>총 제공 예정 {total}g</span>
                 )}
-                <button onClick={() => go("feed", { date: t, planMeal: m, existingLog: m.log })}
+                <button onClick={() => go("feed", { date: t, planMeal: m.adhocOnly ? null : m, existingLog: m.log })}
                   style={{ fontSize: 12, fontWeight: 700, color: m.status === "완료" ? C.muted : C.sageDeep, background: m.status === "완료" ? "transparent" : C.sageLight, border: "none", borderRadius: 999, padding: "5px 12px", cursor: "pointer" }}>
                   {m.status === "완료" ? "수정" : "기록하기"}
                 </button>
@@ -2313,6 +2375,10 @@ function TodayTab({ go }) {
             </div>
           );
         })}
+        <button onClick={() => go("feed", { date: t })} className="flex items-center justify-center"
+          style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 14, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+          <Plus size={14} /> 바로 기록 — 계획 없이 먹인 끼니
+        </button>
       </div>
 
       {fAlerts.length > 0 && (
@@ -2393,15 +2459,17 @@ function WeekTable({ startISO, onPickDay }) {
           const meals = state.plans[iso] || [];
           const dow = new Date(iso + "T00:00:00").getDay();
           const isToday = iso === t;
-          const find = (lab) => (meals.find((m) => m.label === lab) || {}).items;
+          const find = (lab) => meals.find((m) => m.label === lab) || {};
           return (
             <button key={iso} onClick={() => onPickDay(iso)} style={{ display: "grid", gridTemplateColumns: cols, padding: "13px 6px", width: "100%", textAlign: "left",
               borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: isToday ? C.sageLight : C.surface, border: "none", cursor: "pointer" }}>
               <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}><div style={{ fontSize: 13, fontWeight: 800, color: isToday ? C.sageDeep : C.ink }}>{WD[dow]}</div><div style={{ fontSize: 10.5, color: C.muted }}>{iso.slice(5)}</div></div>
               {labels.map((lab) => {
-                const its = find(lab);
+                const meal = find(lab);
+                const its = meal.items;
                 return (
                   <div key={lab} style={{ padding: "0 4px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 3 }}>
+                    {meal.fromRecord && <FromRecordBadge small />}
                     <MealItemList items={its} fontSize={11.5} />
                     {its && its.length > 0 && <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginTop: 2 }}>{totalG(state, its)}g</div>}
                   </div>
@@ -2460,7 +2528,10 @@ function MonthView({ monthDate, selected, setSelected }) {
             {selMeals.map((m) => (
               <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px" }}>
                 <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink }}>{m.label}</span>
+                  <div className="flex items-center" style={{ gap: 6 }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink }}>{m.label}</span>
+                    {m.fromRecord && <FromRecordBadge small />}
+                  </div>
                   <span style={{ fontSize: 10.5, color: C.muted }}>{totalG(state, m.items)}g</span>
                 </div>
                 <MealItemList items={m.items} fontSize={11} wrap />
@@ -2542,6 +2613,7 @@ function MealPlanTab() {
                     <div className="flex items-center" style={{ gap: 8 }}>
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{m.label}</span>
                       <span style={{ fontSize: 12, color: C.muted }}>{fmtTime(m.time, timeFmt)}</span>
+                      {m.fromRecord && <FromRecordBadge />}
                     </div>
                     <div className="flex items-center" style={{ gap: 12 }}>
                       <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{mT}g</span>
