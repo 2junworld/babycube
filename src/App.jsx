@@ -317,16 +317,20 @@ function reducer(state, action) {
         const oldGloballyOff = oldLog.stockAffected === false; // 구버전(전체 On/Off) 기록과의 호환
         oldLog.items.forEach((it) => {
           if (oldGloballyOff || it.deduct === false) return;
-          if (it.source === "fridge") restoreFridge(stock, it.name, it.qty);
-          else restoreFrozen(stock, it.name, it.qty);
+          // 실제 차감됐던 양(deductedQty)만 복원 - 재고 부족으로 일부만 차감된 기록을
+          // 수정할 때 기록 수량 전체가 복원되어 재고가 부풀던 문제 방지 (구버전 기록은 qty로 폴백)
+          const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+          if (it.source === "fridge") restoreFridge(stock, it.name, amt);
+          else restoreFrozen(stock, it.name, amt);
         });
       }
       log.items.forEach((it) => {
-        if (it.deduct === false) return;
+        if (it.deduct === false) { it.deductedQty = 0; return; }
+        // 실제 차감된 양을 기록에 남김 (재고 부족 시 요청량보다 적을 수 있음 - 이후 수정 시 정확한 복원용)
         if (it.source === "fridge") {
-          deductFridge(stock, it.name, it.qty); // qty=g
+          it.deductedQty = deductFridge(stock, it.name, it.qty); // qty=g
         } else {
-          deductFrozen(stock, it.name, it.qty); // qty=큐브
+          it.deductedQty = deductFrozen(stock, it.name, it.qty); // qty=큐브
         }
       });
       if (idx >= 0) dayLogs[idx] = log;
@@ -469,6 +473,8 @@ function stockTotalFrozenG(state, name) {
 function stockFridgeG(state, name) {
   return stockBatches(state, name).reduce((s, b) => s + Math.max(0, b.fridgeG || 0), 0);
 }
+// 재고가 부족하면 있는 만큼만 차감하고, "실제로 차감된 양"을 반환함
+// (호출 쪽에서 요청량과 비교해 재고 부족 안내·정확한 복원에 사용)
 function deductFrozen(stock, name, cubes) {
   const batches = (stock[name] || { batches: [] }).batches;
   let remaining = cubes;
@@ -479,6 +485,7 @@ function deductFrozen(stock, name, cubes) {
     b.frozen -= take;
     remaining -= take;
   }
+  return cubes - remaining;
 }
 function deductFridge(stock, name, grams) {
   const batches = (stock[name] || { batches: [] }).batches;
@@ -490,6 +497,7 @@ function deductFridge(stock, name, grams) {
     b.fridgeG = (b.fridgeG || 0) - take;
     remaining -= take;
   }
+  return grams - remaining;
 }
 // 급여 기록 수정 시 기존에 차감했던 만큼 되돌리기 위한 복원 헬퍼 (가장 최근 배치에 복원)
 function restoreFrozen(stock, name, cubes) {
@@ -2058,12 +2066,31 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
         : { id: uid(), label, time, items: planItems, fromRecord: true };
       dispatch({ type: "PLAN_SAVE_MEAL", date, meal });
     }
-    // 저장 직후 "재고가 실제로 차감되었는지"를 눈으로 확인할 수 있게 차감 내역을 토스트로 안내
-    const deducted = logItems.filter((it) => it.deduct !== false);
-    const summary = deducted
-      .map((it) => (it.source === "fridge" ? `${it.name} ${it.qty}g` : `${it.name} ${it.qty}큐브`))
-      .join(", ");
-    notify(deducted.length > 0 ? `기록 저장 · 재고 차감: ${summary}` : "기록 저장됨 (재고 차감 없음)");
+    // 저장 직후 "재고가 실제로 얼마나 차감되었는지"를 토스트로 안내.
+    // 재고보다 많이 기록하면 있는 만큼만 차감되므로, 요청량이 아니라 실제 차감량 기준으로
+    // 계산해야 함 (LOG_SAVE와 동일한 로직을 복제 재고에 시뮬레이션해서 미리 구함)
+    const stockSim = JSON.parse(JSON.stringify(state.stock));
+    if (existingLog && existingLog.stockAffected !== false) {
+      existingLog.items.forEach((it) => {
+        if (it.deduct === false) return;
+        const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+        if (it.source === "fridge") restoreFridge(stockSim, it.name, amt);
+        else restoreFrozen(stockSim, it.name, amt);
+      });
+    }
+    const dedInfo = logItems
+      .filter((it) => it.deduct !== false)
+      .map((it) => ({
+        name: it.name,
+        unit: it.source === "fridge" ? "g" : "큐브",
+        requested: it.qty,
+        actual: it.source === "fridge" ? deductFridge(stockSim, it.name, it.qty) : deductFrozen(stockSim, it.name, it.qty),
+      }));
+    const parts = dedInfo.filter((d) => d.actual > 0).map((d) => `${d.name} ${d.actual}${d.unit}`);
+    const shortNames = dedInfo.filter((d) => d.actual < d.requested).map((d) => d.name);
+    let msg = parts.length > 0 ? `기록 저장 · 재고 차감: ${parts.join(", ")}` : "기록 저장됨 (재고 차감 없음)";
+    if (shortNames.length > 0) msg += ` · 재고 부족(기록만 저장): ${shortNames.join(", ")}`;
+    notify(msg);
     onBack();
   };
   const intakeVal = intake == null ? totalProvide : intake;
