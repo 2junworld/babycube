@@ -201,6 +201,64 @@ function migrateState(s) {
   if (out.settings && !out.settings.mealTips) {
     out.settings = { ...out.settings, mealTips: { stock: true, pairing: true, usedToday: true } };
   }
+
+  /* ---- 데이터 위생 치유 (멱등 - 매 로드마다 실행해도 안전) ---- */
+  // 음수 배치 정규화(과거 입력 오류) + 빈 재고 키 제거 + 재료명 공백 키 병합
+  if (out.stock) {
+    const stock = {};
+    Object.entries(out.stock).forEach(([rawName, v]) => {
+      const name = (rawName || "").trim();
+      if (!name) return;
+      const batches = (v && v.batches ? v.batches : []).map((b) => ({
+        ...b, frozen: Math.max(0, b.frozen || 0), fridgeG: Math.max(0, b.fridgeG || 0),
+      }));
+      if (batches.length === 0) return;
+      stock[name] = stock[name] ? { batches: [...stock[name].batches, ...batches] } : { ...v, batches };
+    });
+    out.stock = stock;
+  }
+  // ingredients·ingredientTags·ingredientUsage 키 공백 정리 (동명 존재 시 기존 항목 우선)
+  ["ingredients", "ingredientTags", "ingredientUsage"].forEach((k) => {
+    if (!out[k]) return;
+    const m = {};
+    Object.entries(out[k]).forEach(([rawName, v]) => {
+      const name = (rawName || "").trim();
+      if (name && m[name] == null) m[name] = v;
+    });
+    out[k] = m;
+  });
+  // intros 이름 공백 정리 + 동명 중복 제거 (첫 항목 유지)
+  if (out.intros) {
+    const seen = new Set();
+    out.intros = out.intros.reduce((acc, it) => {
+      const name = (it.name || "").trim();
+      if (!name || seen.has(name)) return acc;
+      seen.add(name);
+      acc.push(name === it.name ? it : { ...it, name });
+      return acc;
+    }, []);
+  }
+  // shopping 이름 공백 정리
+  if (out.shopping) {
+    out.shopping = out.shopping
+      .filter((s) => (s.name || "").trim())
+      .map((s) => (s.name !== s.name.trim() ? { ...s, name: s.name.trim() } : s));
+  }
+  // plans/logs: 항목 재료명 공백 정리 + 빈 날짜 키 제거
+  ["plans", "logs"].forEach((k) => {
+    if (!out[k]) return;
+    const m = {};
+    Object.entries(out[k]).forEach(([date, arr]) => {
+      if (!arr || arr.length === 0) return;
+      m[date] = arr.map((entry) => ({
+        ...entry,
+        items: (entry.items || []).map((it) =>
+          it.name && it.name !== it.name.trim() ? { ...it, name: it.name.trim() } : it),
+      }));
+    });
+    out[k] = m;
+  });
+
   return out;
 }
 
@@ -222,15 +280,20 @@ function reducer(state, action) {
       dayMeals.sort((a, b) => a.time.localeCompare(b.time));
       return { ...state, plans: { ...state.plans, [date]: dayMeals } };
     }
+    // 기록 삭제 실행취소: 기록을 되살리면서, 삭제 때 복원했던 재고를 다시 차감 (대칭 유지)
     case "RESTORE_LOG_ENTRY": {
       const { date, log } = action;
       const dayLogs = state.logs[date] ? [...state.logs[date], log] : [log];
       dayLogs.sort((a, b) => a.time.localeCompare(b.time));
-      return { ...state, logs: { ...state.logs, [date]: dayLogs } };
+      const stock = JSON.parse(JSON.stringify(state.stock));
+      redeductLogDeductions(stock, log);
+      return { ...state, stock, logs: { ...state.logs, [date]: dayLogs } };
     }
     case "RESTORE_LOG_DAY": {
       const { date, logs } = action;
-      return { ...state, logs: { ...state.logs, [date]: logs } };
+      const stock = JSON.parse(JSON.stringify(state.stock));
+      (logs || []).forEach((l) => redeductLogDeductions(stock, l));
+      return { ...state, stock, logs: { ...state.logs, [date]: logs } };
     }
     case "RESTORE_INTRO": {
       const { intro } = action;
@@ -265,12 +328,17 @@ function reducer(state, action) {
     case "PLAN_DELETE_MEAL": {
       const { date, mealId } = action;
       const dayMeals = (state.plans[date] || []).filter((m) => m.id !== mealId);
-      return { ...state, plans: { ...state.plans, [date]: dayMeals } };
+      const plans = { ...state.plans };
+      // 끼니가 모두 삭제된 날짜는 빈 배열 대신 키 자체를 제거 (Firestore 문서 비대화 방지)
+      if (dayMeals.length > 0) plans[date] = dayMeals; else delete plans[date];
+      return { ...state, plans };
     }
 
     /* ---- 제조 기록 (재고 입고) ---- */
     case "STOCK_ADD_BATCH": {
-      const { name, batch } = action;
+      const { batch } = action;
+      const name = normalizeIngredientName(action.name);
+      if (!name) return state;
       const cur = state.stock[name] || { batches: [] };
       // 재료 마스터에 없으면 추가
       const ingredients = state.ingredients[name]
@@ -301,7 +369,10 @@ function reducer(state, action) {
       const cur = state.stock[name];
       if (!cur) return state;
       const batches = cur.batches.filter((b) => b.id !== batchId);
-      return { ...state, stock: { ...state.stock, [name]: { batches } } };
+      const stock = { ...state.stock };
+      // 배치가 모두 삭제된 재료는 빈 껍데기 대신 키 제거 (재료 마스터 ingredients는 그대로 유지)
+      if (batches.length > 0) stock[name] = { batches }; else delete stock[name];
+      return { ...state, stock };
     }
 
     /* ---- 급여 기록 (재고 차감 + 섭취율) ---- */
@@ -324,33 +395,45 @@ function reducer(state, action) {
           else restoreFrozen(stock, it.name, amt);
         });
       }
-      log.items.forEach((it) => {
-        if (it.deduct === false) { it.deductedQty = 0; return; }
-        // 실제 차감된 양을 기록에 남김 (재고 부족 시 요청량보다 적을 수 있음 - 이후 수정 시 정확한 복원용)
-        if (it.source === "fridge") {
-          it.deductedQty = deductFridge(stock, it.name, it.qty); // qty=g
-        } else {
-          it.deductedQty = deductFrozen(stock, it.name, it.qty); // qty=큐브
-        }
-      });
-      if (idx >= 0) dayLogs[idx] = log;
-      else dayLogs.push(log);
+      // 실제 차감된 양(deductedQty)을 기록에 남김 (재고 부족 시 요청량보다 적을 수 있음 - 이후 수정·삭제 시 정확한 복원용).
+      // action의 log 객체를 직접 변형하지 않고 새 객체로 만들어 저장 (리듀서 순수성 유지)
+      const savedLog = {
+        ...log,
+        items: log.items.map((it) => {
+          if (it.deduct === false) return { ...it, deductedQty: 0 };
+          const actual = it.source === "fridge"
+            ? deductFridge(stock, it.name, it.qty) // qty=g
+            : deductFrozen(stock, it.name, it.qty); // qty=큐브
+          return { ...it, deductedQty: actual };
+        }),
+      };
+      if (idx >= 0) dayLogs[idx] = savedLog;
+      else dayLogs.push(savedLog);
       dayLogs.sort((a, b) => a.time.localeCompare(b.time));
       return { ...state, stock, logs: { ...state.logs, [date]: dayLogs } };
     }
-    // 잘못 기록된 급여 기록 정리용 (재고는 자동 복원되지 않음)
+    // 급여 기록 삭제: 그 기록이 차감했던 재고(deductedQty)를 함께 복원
     case "LOG_DELETE_ENTRY": {
       const { date, logId } = action;
+      const target = (state.logs[date] || []).find((l) => l.id === logId);
       const remaining = (state.logs[date] || []).filter((l) => l.id !== logId);
       const logs = { ...state.logs };
       if (remaining.length > 0) logs[date] = remaining; else delete logs[date];
-      return { ...state, logs };
+      let stock = state.stock;
+      if (target) {
+        stock = JSON.parse(JSON.stringify(state.stock));
+        restoreLogDeductions(stock, target);
+      }
+      return { ...state, stock, logs };
     }
     case "LOG_DELETE_DAY": {
       const { date } = action;
+      const dayLogs = state.logs[date] || [];
       const logs = { ...state.logs };
       delete logs[date];
-      return { ...state, logs };
+      const stock = JSON.parse(JSON.stringify(state.stock));
+      dayLogs.forEach((l) => restoreLogDeductions(stock, l));
+      return { ...state, stock, logs };
     }
 
     /* ---- 장보기 목록 ---- */
@@ -359,14 +442,19 @@ function reducer(state, action) {
         ...state,
         shopping: state.shopping.map((s) => (s.id === action.id ? { ...s, done: !s.done } : s)),
       };
-    case "SHOP_ADD":
-      return { ...state, shopping: [...state.shopping, { id: uid(), name: action.name, reason: "직접 추가", done: false }] };
+    case "SHOP_ADD": {
+      const name = normalizeIngredientName(action.name);
+      if (!name) return state;
+      return { ...state, shopping: [...state.shopping, { id: uid(), name, reason: "직접 추가", done: false }] };
+    }
     case "SHOP_CLEAR_DONE":
       return { ...state, shopping: state.shopping.filter((s) => !s.done) };
 
     /* ---- 재료 도입 / 먹어본 재료 (추가·수정·삭제 통합) ---- */
     case "INTRO_UPSERT": {
-      const { intro } = action;
+      const normName = normalizeIngredientName(action.intro.name);
+      if (!normName) return state;
+      const intro = { ...action.intro, name: normName };
       const idx = state.intros.findIndex((it) => it.id === intro.id);
       let intros;
       if (idx >= 0) { intros = [...state.intros]; intros[idx] = { ...intros[idx], ...intro }; }
@@ -382,7 +470,8 @@ function reducer(state, action) {
     /* ---- 재료 마스터에 카테고리 지정하여 등록 (신규 재료 추가시) ----
        카테고리를 명시하지 않으면 영양 DB의 카테고리를 우선 사용, baseOf가 오면 변형 재료로 연결 */
     case "INGREDIENT_ENSURE": {
-      const { name, cat, baseOf } = action;
+      const { cat, baseOf } = action;
+      const name = normalizeIngredientName(action.name);
       if (!name || state.ingredients[name]) return state;
       const entry = { cat: cat || DB_CATEGORY[name] || "채소", unitG: 15, favorite: false };
       if (baseOf && baseOf !== name) entry.baseOf = baseOf;
@@ -481,8 +570,9 @@ function deductFrozen(stock, name, cubes) {
   const sorted = [...batches].sort((a, b) => a.date.localeCompare(b.date));
   for (const b of sorted) {
     if (remaining <= 0) break;
-    const take = Math.min(b.frozen, remaining);
-    b.frozen -= take;
+    // 음수 배치(과거 입력 오류 데이터)가 있어도 차감량·잔량이 오염되지 않게 0으로 클램프
+    const take = Math.min(Math.max(0, b.frozen || 0), remaining);
+    b.frozen = (b.frozen || 0) - take;
     remaining -= take;
   }
   return cubes - remaining;
@@ -493,7 +583,7 @@ function deductFridge(stock, name, grams) {
   const sorted = [...batches].sort((a, b) => (a.fridgeExp || "9").localeCompare(b.fridgeExp || "9"));
   for (const b of sorted) {
     if (remaining <= 0) break;
-    const take = Math.min(b.fridgeG || 0, remaining);
+    const take = Math.min(Math.max(0, b.fridgeG || 0), remaining);
     b.fridgeG = (b.fridgeG || 0) - take;
     remaining -= take;
   }
@@ -511,6 +601,49 @@ function restoreFridge(stock, name, grams) {
   if (!cur || !cur.batches || cur.batches.length === 0 || !grams) return;
   const target = [...cur.batches].sort((a, b) => (b.fridgeExp || "0").localeCompare(a.fridgeExp || "0"))[0];
   target.fridgeG = (target.fridgeG || 0) + grams;
+}
+
+// 급여 기록 한 건이 재고에 반영했던 차감분을 복원 (기록 삭제 시 사용)
+// deductedQty(실제 차감량)가 있으면 그만큼만, 없는 구버전 기록은 qty로 폴백
+function restoreLogDeductions(stock, log) {
+  if (log.stockAffected === false) return;
+  (log.items || []).forEach((it) => {
+    if (it.deduct === false) return;
+    const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+    if (it.source === "fridge") restoreFridge(stock, it.name, amt);
+    else restoreFrozen(stock, it.name, amt);
+  });
+}
+// 삭제 실행취소 시 복원했던 차감분을 다시 차감 (삭제 ↔ 실행취소 대칭 유지)
+function redeductLogDeductions(stock, log) {
+  if (log.stockAffected === false) return;
+  (log.items || []).forEach((it) => {
+    if (it.deduct === false) return;
+    const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+    if (it.source === "fridge") deductFridge(stock, it.name, amt);
+    else deductFrozen(stock, it.name, amt);
+  });
+}
+
+// 재료명 정규화: 앞뒤 공백 제거. 빈 문자열이면 null 반환 (등록 거부용)
+// "소고기 "처럼 보이지 않는 중복 재료가 생겨 재고·기록·통계가 분리 집계되는 문제 방지
+function normalizeIngredientName(name) {
+  const n = (name || "").trim();
+  return n.length > 0 ? n : null;
+}
+
+// 기록 삭제 시 재고 복원이 불가능한 재료 이름 목록 (배치가 하나도 없으면 복원할 곳이 없음)
+function unrestorableStockNames(state, logsArr) {
+  const names = new Set();
+  logsArr.forEach((log) => {
+    if (log.stockAffected === false) return;
+    (log.items || []).forEach((it) => {
+      if (it.deduct === false) return;
+      const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+      if (amt > 0 && stockBatches(state, it.name).length === 0) names.add(it.name);
+    });
+  });
+  return [...names];
 }
 
 /* ----------------------------- 공통 계산 헬퍼 ----------------------------- */
@@ -1168,18 +1301,21 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], d
     }
     return 0;
   });
-  const isNew = q && !names.includes(q);
+  const isNew = (q || "").trim() && !names.includes((q || "").trim());
   const addedSet = new Set(alreadyAdded);
 
   const confirmNew = () => {
+    // 이후 식단·기록에 들어가는 이름과 재료 마스터 키가 일치하도록 등록 전에 정규화(공백 제거)
+    const name = normalizeIngredientName(q);
+    if (!name) return;
     // 변형 재료 연결이 켜져 있으면 baseOf까지 함께 등록 → 영양 태그·궁합 특성이 즉시 따라옴
-    dispatch({ type: "INGREDIENT_ENSURE", name: q, cat: newCat, baseOf: linkBase && newSuggestion ? newSuggestion : undefined });
-    dispatch({ type: "INGREDIENT_TOUCH", name: q });
+    dispatch({ type: "INGREDIENT_ENSURE", name, cat: newCat, baseOf: linkBase && newSuggestion ? newSuggestion : undefined });
+    dispatch({ type: "INGREDIENT_TOUCH", name });
     if (multi) {
-      setSelected((p) => p.includes(q) ? p : [...p, q]);
+      setSelected((p) => p.includes(name) ? p : [...p, name]);
       setQ("");
     } else {
-      onPick(q, newCat);
+      onPick(name, newCat);
     }
   };
 
@@ -3667,12 +3803,14 @@ function RecordHistoryScreen({ onBack }) {
         <ConfirmModal
           title={`${delDay} 기록을 전체 삭제할까요?`}
           message="이 날짜의 급여 기록이 모두 삭제됩니다."
-          warning="삭제해도 이미 차감된 재고 수량은 자동으로 복원되지 않습니다."
+          warning="이 기록들이 차감했던 재고는 자동으로 복원됩니다."
           onConfirm={() => {
             const logsBackup = state.logs[delDay] || [];
+            const miss = unrestorableStockNames(state, logsBackup);
             dispatch({ type: "LOG_DELETE_DAY", date: delDay });
             setDelDay(null);
-            notify(`${delDay} 기록을 삭제했습니다`, () => dispatch({ type: "RESTORE_LOG_DAY", date: delDay, logs: logsBackup }));
+            notify(`${delDay} 기록을 삭제하고 재고를 복원했습니다${miss.length > 0 ? ` (배치가 없어 복원 못함: ${miss.join(", ")})` : ""}`,
+              () => dispatch({ type: "RESTORE_LOG_DAY", date: delDay, logs: logsBackup }));
           }}
           onCancel={() => setDelDay(null)}
         />
@@ -3680,12 +3818,14 @@ function RecordHistoryScreen({ onBack }) {
       {delEntry && (
         <ConfirmModal
           title={`'${delEntry.label}' 기록을 삭제할까요?`}
-          warning="삭제해도 이미 차감된 재고 수량은 자동으로 복원되지 않습니다."
+          warning="이 기록이 차감했던 재고는 자동으로 복원됩니다."
           onConfirm={() => {
             const log = (state.logs[delEntry.date] || []).find((l) => l.id === delEntry.logId);
+            const miss = log ? unrestorableStockNames(state, [log]) : [];
             dispatch({ type: "LOG_DELETE_ENTRY", date: delEntry.date, logId: delEntry.logId });
             setDelEntry(null);
-            if (log) notify(`'${delEntry.label}' 기록을 삭제했습니다`, () => dispatch({ type: "RESTORE_LOG_ENTRY", date: delEntry.date, log }));
+            if (log) notify(`'${delEntry.label}' 기록을 삭제하고 재고를 복원했습니다${miss.length > 0 ? ` (배치가 없어 복원 못함: ${miss.join(", ")})` : ""}`,
+              () => dispatch({ type: "RESTORE_LOG_ENTRY", date: delEntry.date, log }));
           }}
           onCancel={() => setDelEntry(null)}
         />
