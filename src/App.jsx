@@ -1944,7 +1944,8 @@ function StockChangeHint({ item, checked, onToggle }) {
 function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   const { state, dispatch, notify } = useStore();
   const base = existingLog || planMeal;
-  const [time] = useState(base.time || "12:00");
+  // 실제 급여 시간: 계획 시간과 별개로 수정 가능 (계획은 그대로 두고 기록에만 반영됨)
+  const [time, setTime] = useState(base.time || "12:00");
   const [label] = useState(base.label || "끼니");
   // 제공 항목: 출처(냉동/냉장) + 수량. 식단표에서 "그램으로 입력"(gramsOverride)한 재료는
   // 실제 중량을 그대로 이어받도록 냉장(계량) 방식으로 옮겨온다 (기본 15g으로 뭉개지는 문제 방지)
@@ -2035,8 +2036,17 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title={`${label} 급여 기록`} onBack={onBack} />
       <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>급여 시간</span>
+          <div className="flex items-center" style={{ gap: 8 }}>
+            <input type="time" value={time} onChange={(e) => e.target.value && setTime(e.target.value)}
+              style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 8px", fontSize: 13, color: C.ink, background: "transparent", outline: "none", fontFamily: "inherit" }} />
+            <button onClick={() => { const n = new Date(); setTime(`${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`); }}
+              style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "6px 12px", cursor: "pointer" }}>지금</button>
+          </div>
+        </div>
         <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 600, padding: "0 2px" }}>
-          {fmtTime(time, state.settings.timeFmt)} · 재료별로 재고 반영 여부를 선택할 수 있어요
+          재료별로 재고 반영 여부를 선택할 수 있어요
         </div>
 
         <div>
@@ -2280,7 +2290,8 @@ function TodayTab({ go }) {
               <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
                 <div className="flex items-center" style={{ gap: 8 }}>
                   <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{m.label}</span>
-                  <span style={{ fontSize: 12, color: C.muted }}>{fmtTime(m.time, timeFmt)}</span>
+                  {/* 완료된 끼니는 계획 시간이 아니라 실제 급여 시간을 표시 */}
+                  <span style={{ fontSize: 12, color: C.muted }}>{fmtTime(m.log ? m.log.time : m.time, timeFmt)}</span>
                 </div>
                 <StatusBadge status={m.status} />
               </div>
