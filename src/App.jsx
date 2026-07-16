@@ -2447,17 +2447,20 @@ function TodayTab({ go }) {
   const rAlertsAll = fridgeAlerts(state);
   const bannerHidden = state.ui.fridgeBannerHiddenDate === t;
 
+  // 계획 ↔ 기록 매칭: 같은 이름 끼니가 하루에 2개여도 이미 매칭된 기록은 제외하고
+  // 순차적으로 1:1 매칭 (계획·기록 모두 시간순 정렬이므로 시간순 짝이 됨)
+  const usedLogIds = new Set();
   const meals = plan.map((m) => {
-    const log = logs.find((l) => l.label === m.label);
+    const log = logs.find((l) => l.label === m.label && !usedLogIds.has(l.id));
+    if (log) usedLogIds.add(log.id);
     let status = "예정";
     if (log) status = "완료";
     else if (m.time < nowHM) status = "대기";
     return { ...m, log, status };
   });
   // 계획과 매칭되지 않은 기록(바로 기록 등)도 완료 카드로 함께 표시
-  const matchedLogIds = new Set(meals.filter((m) => m.log).map((m) => m.log.id));
   const extraCards = logs
-    .filter((l) => !matchedLogIds.has(l.id))
+    .filter((l) => !usedLogIds.has(l.id))
     .map((l) => ({ id: l.id, label: l.label, time: l.time, items: l.items, log: l, status: "완료", adhocOnly: true }));
   const cards = [...meals, ...extraCards].sort((a, b) =>
     (a.log ? a.log.time : a.time).localeCompare(b.log ? b.log.time : b.time));
@@ -3316,6 +3319,8 @@ function monthProducedG(state, year, month) {
 function FeedingWeekPanel({ go }) {
   const { state } = useStore();
   const [cursor, setCursor] = useState(todayISO());
+  // 같은 이름 기록이 하루 2건 이상인 셀을 탭했을 때 어느 기록을 볼지 고르는 시트
+  const [multiPick, setMultiPick] = useState(null); // { date, label, logs }
   const weekStart = addDaysISO(cursor, -new Date(cursor + "T00:00:00").getDay());
   const days = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i));
   const labels = weekLogLabels(state, days);
@@ -3343,7 +3348,8 @@ function FeedingWeekPanel({ go }) {
             const dow = new Date(iso + "T00:00:00").getDay();
             const isToday = iso === t;
             const dayLogs = state.logs[iso] || [];
-            const findLog = (lab) => dayLogs.find((l) => l.label === lab);
+            // 같은 이름 기록이 여러 건이면 전부 모아 합산 표시 (logId 기준으로 상세 진입)
+            const findLogs = (lab) => dayLogs.filter((l) => l.label === lab);
             const dayIntakeG = dayLogs.reduce((s, l) => s + (l.intakeG || 0), 0);
             return (
               <div key={iso} style={{ display: "grid", gridTemplateColumns: cols, padding: "13px 6px",
@@ -3353,18 +3359,25 @@ function FeedingWeekPanel({ go }) {
                   <div style={{ fontSize: 10.5, color: C.muted }}>{iso.slice(5)}</div>
                 </div>
                 {labels.map((lab) => {
-                  const log = findLog(lab);
+                  const cellLogs = findLogs(lab);
                   // 기록이 없는 칸: 계획만 있음/계획도 없음/미래 날짜 모두 구분 없이 빈 칸으로 표시
-                  if (!log) return <div key={lab} />;
-                  const prov = logProvideG(log);
-                  const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
-                  // 중량(섭취 g)을 크게 강조, 섭취율은 보조 표기
+                  if (cellLogs.length === 0) return <div key={lab} />;
+                  const prov = cellLogs.reduce((s, l) => s + logProvideG(l), 0);
+                  const intake = cellLogs.reduce((s, l) => s + (l.intakeG || 0), 0);
+                  const pct = prov ? Math.round((intake / prov) * 100) : 0;
+                  // 중량(섭취 g)을 크게 강조, 섭취율은 보조 표기. 2건 이상이면 배지 표시 후 탭 시 선택
                   return (
-                    <button key={lab} onClick={() => go("feedCompare", { date: iso, label: lab })}
+                    <button key={lab}
+                      onClick={() => cellLogs.length === 1
+                        ? go("feedCompare", { date: iso, logId: cellLogs[0].id })
+                        : setMultiPick({ date: iso, label: lab, logs: cellLogs })}
                       style={{ padding: "0 4px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 2,
                         background: "none", border: "none", cursor: "pointer" }}>
-                      <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{log.intakeG}g</span>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{intake}g</span>
                       <span style={{ fontSize: 9.5, fontWeight: 700, color: pct >= 85 ? C.sageDeep : C.apricot }}>{pct}%</span>
+                      {cellLogs.length > 1 && (
+                        <span style={{ fontSize: 8.5, fontWeight: 800, background: C.butterLight, color: "#9A7416", padding: "1px 5px", borderRadius: 999 }}>{cellLogs.length}건</span>
+                      )}
                     </button>
                   );
                 })}
@@ -3377,6 +3390,23 @@ function FeedingWeekPanel({ go }) {
         </div>
       </div>
       {wide && <div style={{ fontSize: 9.5, color: C.muted, textAlign: "center" }}>← 옆으로 밀어서 더 보기 →</div>}
+      {multiPick && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={() => setMultiPick(null)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px calc(20px + env(safe-area-inset-bottom))" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, marginBottom: 12 }}>{multiPick.date.slice(5)} · '{multiPick.label}' 기록 {multiPick.logs.length}건 — 볼 기록을 선택하세요</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {multiPick.logs.map((l) => (
+                <button key={l.id} onClick={() => { setMultiPick(null); go("feedCompare", { date: multiPick.date, logId: l.id }); }}
+                  className="flex items-center justify-between"
+                  style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{fmtTime(l.time, state.settings.timeFmt)}</span>
+                  <span style={{ fontSize: 12.5, color: C.muted }}>{logProvideG(l)}g 중 {l.intakeG}g</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3441,7 +3471,7 @@ function FeedingMonthPanel({ go }) {
               const prov = logProvideG(log);
               const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
               return (
-                <button key={log.id} onClick={() => go("feedCompare", { date: selected, label: log.label })}
+                <button key={log.id} onClick={() => go("feedCompare", { date: selected, logId: log.id })}
                   className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 13px", cursor: "pointer" }}>
                   <div className="flex items-center" style={{ gap: 8 }}>
                     <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{log.label}</span>
@@ -3821,9 +3851,13 @@ function RecordHistoryScreen({ onBack }) {
 /* =====================================================================
    급여표 셀 상세 - 계획(식단표) vs 실제(급여기록) 비교
    ===================================================================== */
-function FeedingCompareScreen({ date, label, onBack }) {
+function FeedingCompareScreen({ date, logId, label: labelProp, onBack }) {
   const { state } = useStore();
-  const log = (state.logs[date] || []).find((l) => l.label === label);
+  const dayLogs = state.logs[date] || [];
+  // logId 우선 매칭 (같은 이름 기록이 2건 이상이어도 정확한 기록을 표시), 구 라우팅은 label 폴백
+  const log = (logId ? dayLogs.find((l) => l.id === logId) : null)
+    || (labelProp ? dayLogs.find((l) => l.label === labelProp) : null);
+  const label = log ? log.label : labelProp;
   const planLive = (state.plans[date] || []).find((m) => m.label === label);
   // 기록 저장 당시의 식단표 스냅샷을 우선 사용 (이후 식단표가 바뀌어도 저장 당시 기준으로 비교).
   // 스냅샷이 없는 옛 기록은 현재 식단표로 대체
@@ -4657,7 +4691,7 @@ function Shell() {
   else if (route === "mealSlots") content = <MealSlotsScreen onBack={back} />;
   else if (route === "stockDetail") content = <StockDetailScreen name={params.name} onBack={back} />;
   else if (route === "recordHistory") content = <RecordHistoryScreen onBack={back} />;
-  else if (route === "feedCompare") content = <FeedingCompareScreen date={params.date} label={params.label} onBack={back} />;
+  else if (route === "feedCompare") content = <FeedingCompareScreen date={params.date} logId={params.logId} label={params.label} onBack={back} />;
   else if (route === "ingredientInfo") content = <IngredientInfoScreen name={params.name} onBack={back} />;
   else if (route === "manufactureHistory") content = <ManufactureHistoryScreen onBack={back} />;
   else if (tab === "today") content = <TodayTab go={go} />;
