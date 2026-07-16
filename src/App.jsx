@@ -41,7 +41,7 @@ const CATEGORIES = ["탄수화물", "단백질", "채소", "과일"];
 /* ----------------------------- 초기 시드 데이터 ----------------------------- */
 // 재료 마스터: 카테고리 + 기본 1큐브 g
 const SEED_INGREDIENTS = {
-  죽: { cat: "탄수화물", unitG: 20 },
+  죽: { cat: "탄수화물", unitG: 20, staple: true },
   소고기: { cat: "단백질", unitG: 15 }, 닭고기: { cat: "단백질", unitG: 15 },
   대구살: { cat: "단백질", unitG: 15 }, 두부: { cat: "단백질", unitG: 15 },
   브로콜리: { cat: "채소", unitG: 15 }, 애호박: { cat: "채소", unitG: 15 },
@@ -162,6 +162,10 @@ function migrateState(s) {
       { id: uid(), label: "점심", time: "12:00" },
       { id: uid(), label: "저녁", time: "18:00" },
     ];
+  }
+  // 주식 속성 도입: 기존 데이터의 "죽"에 staple 부여 (UX-5, 1회성)
+  if (out.ingredients && out.ingredients["죽"] && out.ingredients["죽"].staple == null) {
+    out.ingredients = { ...out.ingredients, 죽: { ...out.ingredients["죽"], staple: true } };
   }
   // 재료 검색 - 최근 사용순 정렬용 사용 이력 (없으면 빈 객체로 시작)
   if (!out.ingredientUsage) out.ingredientUsage = {};
@@ -289,7 +293,7 @@ function reducer(state, action) {
       meal.items.forEach((it) => {
         const inStock = stockTotalCubes(state, it.name) > 0 || stockFridgeG(state, it.name) > 0;
         const already = shopping.some((s) => s.name === it.name && !s.done);
-        if (!inStock && !already && it.name !== "죽") {
+        if (!inStock && !already && !isStaple(state, it.name)) {
           shopping = [...shopping, { id: uid(), name: it.name, reason: "식단표 추가 (재고없음)", done: false }];
         }
       });
@@ -310,15 +314,13 @@ function reducer(state, action) {
       const name = normalizeIngredientName(action.name);
       if (!name) return state;
       const cur = state.stock[name] || { batches: [] };
-      // 재료 마스터에 없으면 추가
-      const ingredients = state.ingredients[name]
-        ? state.ingredients
-        : { ...state.ingredients, [name]: { cat: action.cat || DB_CATEGORY[name] || "채소", unitG: batch.unitG } };
+      // 재료 마스터에 없으면 공통 규칙으로 추가 (UX-4)
+      const ingredients = ensureIngredientEntry(state.ingredients, name, action.cat, { unitG: batch.unitG });
       const cat = (ingredients[name] || {}).cat || action.cat || "채소";
-      // 먹어본 재료 목록에도 반영 (없으면 새로 추가)
+      // 먹어본 재료 목록에도 반영 - 제조만 하고 아직 먹이지 않은 상태이므로 "관찰중"으로 등록 (UX-4 확정)
       let intros = state.intros;
       if (!intros.some((it) => it.name === name)) {
-        intros = [{ id: uid(), name, cat, status: "이상없음", memo: "", date: batch.date || todayISO() }, ...intros];
+        intros = [{ id: uid(), name, cat, status: "관찰중", memo: "", date: batch.date || todayISO() }, ...intros];
       }
       // 장보기 목록에서 완료 처리
       const shopping = state.shopping.map((s) => (s.name === name && !s.done ? { ...s, done: true } : s));
@@ -380,7 +382,17 @@ function reducer(state, action) {
       if (idx >= 0) dayLogs[idx] = savedLog;
       else dayLogs.push(savedLog);
       dayLogs.sort((a, b) => a.time.localeCompare(b.time));
-      return { ...state, stock, logs: { ...state.logs, [date]: dayLogs } };
+      // 급여한 재료가 재료 마스터·먹어본 재료에 없으면 자동 등록 (UX-4 확정: "관찰중" 상태)
+      // - 실제로 먹였으므로 반응을 관찰하는 상태가 정확한 표현. 이상 없으면 사용자가 직접 변경
+      let ingredients = state.ingredients;
+      let intros = state.intros;
+      savedLog.items.forEach((it) => {
+        ingredients = ensureIngredientEntry(ingredients, it.name);
+        if (!intros.some((x) => x.name === it.name)) {
+          intros = [{ id: uid(), name: it.name, cat: (ingredients[it.name] || {}).cat || "채소", status: "관찰중", memo: "", date }, ...intros];
+        }
+      });
+      return { ...state, stock, ingredients, intros, logs: { ...state.logs, [date]: dayLogs } };
     }
     // 급여 기록 삭제: 그 기록이 차감했던 재고(deductedQty)를 함께 복원
     case "LOG_DELETE_ENTRY": {
@@ -429,9 +441,7 @@ function reducer(state, action) {
       let intros;
       if (idx >= 0) { intros = [...state.intros]; intros[idx] = { ...intros[idx], ...intro }; }
       else intros = [{ ...intro, id: intro.id || uid() }, ...state.intros];
-      const ingredients = state.ingredients[intro.name]
-        ? state.ingredients
-        : { ...state.ingredients, [intro.name]: { cat: intro.cat || "채소", unitG: 15 } };
+      const ingredients = ensureIngredientEntry(state.ingredients, intro.name, intro.cat);
       return { ...state, intros, ingredients };
     }
     case "INTRO_DELETE":
@@ -443,9 +453,8 @@ function reducer(state, action) {
       const { cat, baseOf } = action;
       const name = normalizeIngredientName(action.name);
       if (!name || state.ingredients[name]) return state;
-      const entry = { cat: cat || DB_CATEGORY[name] || "채소", unitG: 15, favorite: false };
-      if (baseOf && baseOf !== name) entry.baseOf = baseOf;
-      return { ...state, ingredients: { ...state.ingredients, [name]: entry } };
+      const extra = baseOf && baseOf !== name ? { baseOf } : {};
+      return { ...state, ingredients: ensureIngredientEntry(state.ingredients, name, cat, extra) };
     }
 
     /* ---- 재료 즐겨찾기 토글 ---- */
@@ -593,6 +602,32 @@ function redeductLogDeductions(stock, log) {
     if (it.source === "fridge") deductFridge(stock, it.name, amt);
     else deductFrozen(stock, it.name, amt);
   });
+}
+
+// 주식(밥·죽) 재료 여부 - 장보기 자동 등록·여행 필요량·기본 출처 판정에서 제외/특별 취급 (UX-5)
+// 기존 "죽" 하드코딩을 재료 속성으로 승격: 재료 정보 화면에서 토글 가능
+function isStaple(state, name) {
+  const reg = (state.ingredients && state.ingredients[name]) || SEED_INGREDIENTS[name];
+  return !!(reg && reg.staple);
+}
+
+// 최근 7일 식단표 기준 하루 평균 끼니 수 - 계획이 없으면 끼니 설정 개수로 폴백 (P2-3)
+function avgPlannedMealsPerDay(state) {
+  const t = todayISO();
+  let total = 0, daysWithPlan = 0;
+  for (let i = 1; i <= 7; i++) {
+    const n = (state.plans[addDaysISO(t, -i)] || []).length;
+    if (n > 0) { total += n; daysWithPlan += 1; }
+  }
+  if (daysWithPlan > 0) return total / daysWithPlan;
+  return (state.mealSlots && state.mealSlots.length) || 3;
+}
+
+// 재료 마스터(ingredients) 등록 공통 헬퍼 - 어떤 경로(식단·제조·먹어본 재료·급여 기록)로
+// 재료가 추가되든 동일한 규칙으로 등록되어 재료 정보(위키)에 즉시 노출됨 (UX-4)
+function ensureIngredientEntry(ingredients, name, cat, extra = {}) {
+  if (!name || ingredients[name]) return ingredients;
+  return { ...ingredients, [name]: { cat: cat || DB_CATEGORY[name] || "채소", unitG: 15, favorite: false, ...extra } };
 }
 
 // 재료명 정규화: 앞뒤 공백 제거. 빈 문자열이면 null 반환 (등록 거부용)
@@ -1111,7 +1146,7 @@ function StatusBadge({ status }) {
 function FromRecordBadge({ small = false }) {
   return (
     <span style={{ fontSize: small ? 9 : 10, fontWeight: 800, background: C.butterLight, color: "#9A7416", padding: small ? "1px 6px" : "2px 8px", borderRadius: 999, whiteSpace: "nowrap", flexShrink: 0 }}>
-      바로기록
+      바로 기록
     </span>
   );
 }
@@ -2099,7 +2134,7 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
       // 냉동 재고가 아예 없고 냉장 재고만 있을 때만 냉장을 기본값으로 함.
       const hasFrozen = stockTotalCubes(state, it.name) > 0;
       const hasFridge = stockFridgeG(state, it.name) > 0;
-      const source = hasGramsOverride ? "fridge" : (!hasFrozen && hasFridge && it.name !== "죽" ? "fridge" : "frozen");
+      const source = hasGramsOverride ? "fridge" : (!hasFrozen && hasFridge && !isStaple(state, it.name) ? "fridge" : "frozen");
       return {
         name: it.name,
         source,
@@ -2305,7 +2340,7 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}>
               {targetPlanMeal
                 ? `식단표 '${targetPlanMeal.label}' 끼니의 재료가 이 기록 내용으로 바뀌어요 (계획 시간은 유지)`
-                : "식단표에 '바로기록' 표시가 붙어 계획한 끼니와 구분돼요"}
+                : "식단표에 '바로 기록' 표시가 붙어 계획한 끼니와 구분돼요"}
             </span>
           </span>
         </label>
@@ -3111,7 +3146,7 @@ function StockDetailScreen({ name, onBack }) {
         ))}
 
         <button onClick={() => setAddOpen(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 14, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-          <Plus size={14} /> 제조 배치 추가
+          <Plus size={14} /> 제조 기록 추가
         </button>
       </div>
       {addOpen && <BatchModal presetName={name} onClose={() => setAddOpen(false)} />}
@@ -4035,6 +4070,13 @@ function IngredientInfoScreen({ name, onBack }) {
             <span style={{ fontSize: 12, color: C.inkSoft }}>혼합 큐브 구성 <span style={{ fontSize: 9.5, color: C.muted }}>(여러 재료 섞인 큐브용)</span></span>
             <button onClick={() => setCompPicker(true)} style={{ background: C.sageLight, border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>{components.length > 0 ? "추가" : "선택"}</button>
           </div>
+          <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
+            <span style={{ fontSize: 12, color: C.inkSoft }}>주식(밥·죽) 재료 <span style={{ fontSize: 9.5, color: C.muted }}>(장보기 자동 등록·여행 계산 제외)</span></span>
+            <button onClick={() => setMeta({ staple: !meta.staple })}
+              style={{ background: meta.staple ? C.sage : C.sageLight, border: "none", borderRadius: 999, padding: "4px 12px", fontSize: 11, fontWeight: 700, color: meta.staple ? "#fff" : C.sageDeep, cursor: "pointer" }}>
+              {meta.staple ? "켜짐" : "꺼짐"}
+            </button>
+          </div>
           {components.length > 0 && (
             <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap", marginTop: 8 }}>
               {components.map((c) => (
@@ -4487,11 +4529,13 @@ function TravelScreen({ onBack }) {
     for (let i = 1; i <= 7; i++) {
       const meals = state.plans[addDaysISO(t, -i)] || [];
       if (meals.length) counted++;
-      meals.forEach((m) => m.items.forEach((it) => { if (it.name !== "죽") usage[it.name] = (usage[it.name] || 0) + it.qty; }));
+      meals.forEach((m) => m.items.forEach((it) => { if (!isStaple(state, it.name)) usage[it.name] = (usage[it.name] || 0) + it.qty; }));
     }
     const perDay = counted || 1;
-    return Object.entries(usage).map(([name, q]) => ({ name, cubes: Math.ceil((q / perDay) * days * (tv.mealsPerDay / 3)) })).sort((a, b) => b.cubes - a.cubes);
-  }, [tv.start, tv.end, tv.mealsPerDay, state.plans]);
+    // 분모: 하루 3끼 고정 대신 최근 7일 계획의 하루 평균 끼니 수 (계획 없으면 끼니 설정 개수) - P2-3
+    const avgMeals = avgPlannedMealsPerDay(state);
+    return Object.entries(usage).map(([name, q]) => ({ name, cubes: Math.ceil((q / perDay) * days * (tv.mealsPerDay / avgMeals)) })).sort((a, b) => b.cubes - a.cubes);
+  }, [tv.start, tv.end, tv.mealsPerDay, state.plans, state.mealSlots]);
 
   const defChecklist = ["냉동 큐브 챙기기 (드라이아이스)", "카페리 탑승용 1끼 캐리어 별도 포장", "숙소 냉동고·전자레인지 확인", "상비용 시판 이유식"];
   const checklist = tv.checklist.length ? tv.checklist : defChecklist.map((t) => ({ text: t, done: false }));
@@ -4506,12 +4550,13 @@ function TravelScreen({ onBack }) {
           <div className="flex items-center justify-between"><span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>출발</span><input type="date" value={tv.start} onChange={(e) => set({ start: e.target.value })} style={{ border: "none", background: "transparent", fontSize: 12.5, fontWeight: 700, color: C.ink, outline: "none" }} /></div>
           <div className="flex items-center justify-between"><span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>도착</span><input type="date" value={tv.end} onChange={(e) => set({ end: e.target.value })} style={{ border: "none", background: "transparent", fontSize: 12.5, fontWeight: 700, color: C.ink, outline: "none" }} /></div>
           <div className="flex items-center justify-between"><span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>하루 끼니 수</span>
-            <select value={tv.mealsPerDay} onChange={(e) => set({ mealsPerDay: Number(e.target.value) })} style={selectStyle}>{[1, 2, 3].map((n) => <option key={n} value={n}>{n}끼</option>)}</select>
+            <select value={tv.mealsPerDay} onChange={(e) => set({ mealsPerDay: Number(e.target.value) })} style={selectStyle}>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}끼</option>)}</select>
           </div>
         </div>
         {cubeNeed.length > 0 && (
           <div>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>필요 큐브 (예상)</div>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 7, padding: "0 2px" }}>최근 7일 계획 기준 하루 평균 {Math.round(avgPlannedMealsPerDay(state) * 10) / 10}끼 대비 여행 중 {tv.mealsPerDay}끼로 환산한 값이에요.</div>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 7 }}>
               {cubeNeed.map((c) => (
                 <div key={c.name} className="flex items-center justify-between"><div className="flex items-center"><CatDot name={c.name} size={7} /><span style={{ fontSize: 12.5, color: C.ink }}>{c.name}</span></div><span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{c.cubes}큐브</span></div>
@@ -4641,7 +4686,7 @@ function MoreTab({ go }) {
         ))}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
-        베이비큐브 · v1.3
+        베이비큐브 · v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?"} — 업데이트 후 앱을 완전히 종료했다 열면 적용돼요
       </div>
     </div>
   );

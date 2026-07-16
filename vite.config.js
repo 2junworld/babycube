@@ -1,9 +1,12 @@
 import { defineConfig } from 'vite'
+import pkg from './package.json'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // 앱 버전 단일 소스: package.json version → 더보기 화면 표기에 사용
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   plugins: [
     react(),
     tailwindcss(),
