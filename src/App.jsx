@@ -1429,13 +1429,17 @@ function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], d
    끼니 시간 선택기
    ===================================================================== */
 // bare=true면 카드(테두리) 없이 행만 렌더링 - 다른 카드 안에 합쳐 넣을 때 사용
-function TimePicker({ time, setTime, timeFmt, bare = false, labelColor }) {
+function TimePicker({ time, setTime, timeFmt, bare = false, labelColor, label = "끼니 시간" }) {
   const [h0, m0] = time.split(":").map(Number);
   const setH = (h24) => setTime(`${String(h24).padStart(2, "0")}:${String(m0).padStart(2, "0")}`);
   const setM = (mm) => setTime(`${String(h0).padStart(2, "0")}:${String(mm).padStart(2, "0")}`);
+  // 기본은 10분 단위, 현재 값이 목록에 없으면(예: '지금' 버튼으로 입력된 08:16) 그 값도 포함해 표시
+  const minuteOptions = [0, 10, 20, 30, 40, 50].includes(m0)
+    ? [0, 10, 20, 30, 40, 50]
+    : [0, 10, 20, 30, 40, 50, m0].sort((a, b) => a - b);
   const row = (
       <div className="flex items-center justify-between">
-        <span style={{ fontSize: 12.5, color: labelColor || C.inkSoft, fontWeight: 600 }}>끼니 시간</span>
+        <span style={{ fontSize: 12.5, color: labelColor || C.inkSoft, fontWeight: 600 }}>{label}</span>
         <div className="flex items-center" style={{ gap: 6 }}>
           {timeFmt === "ampm" && (
             <select value={h0 < 12 ? "오전" : "오후"} onChange={(e) => {
@@ -1452,7 +1456,7 @@ function TimePicker({ time, setTime, timeFmt, bare = false, labelColor }) {
             ))}
           </select>
           <select value={m0} onChange={(e) => setM(Number(e.target.value))} style={selectStyle}>
-            {[0, 10, 20, 30, 40, 50].map((mm) => <option key={mm} value={mm}>{String(mm).padStart(2, "0")}분</option>)}
+            {minuteOptions.map((mm) => <option key={mm} value={mm}>{String(mm).padStart(2, "0")}분</option>)}
           </select>
         </div>
       </div>
@@ -1467,18 +1471,31 @@ function TimePicker({ time, setTime, timeFmt, bare = false, labelColor }) {
 }
 
 /* =====================================================================
+   하단 시트 공용 골격 (UX-7) - 오버레이 + 시트 + 제목/닫기 버튼.
+   각 모달은 내용만 children으로 전달 (시각 변화 없는 구조 정리)
+   ===================================================================== */
+function BottomSheet({ title, onClose, maxHeight = "78%", children }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight, borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
+        <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{title}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
    끼니 종류 선택 모달 (더보기 → 끼니 설정에서 미리 정의한 목록 중 선택)
    ===================================================================== */
 function MealSlotPicker({ slots, timeFmt, onPick, onClose }) {
   const [custom, setCustom] = useState("");
   const sorted = [...slots].sort((a, b) => a.time.localeCompare(b.time));
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
-        <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
-          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>끼니 종류 선택</span>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
-        </div>
+    <BottomSheet title="끼니 종류 선택" onClose={onClose}>
         <div style={{ overflowY: "auto", padding: "0 18px 10px" }}>
           {sorted.map((s) => (
             <button key={s.id} onClick={() => onPick(s.label, s.time)} className="flex items-center justify-between" style={{ width: "100%", padding: "12px 12px",
@@ -1502,8 +1519,7 @@ function MealSlotPicker({ slots, timeFmt, onPick, onClose }) {
               style={{ background: custom ? C.sage : C.sageLight, border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, color: custom ? "#fff" : C.muted, cursor: custom ? "pointer" : "default" }}>선택</button>
           </div>
         </div>
-      </div>
-    </div>
+    </BottomSheet>
   );
 }
 
@@ -1522,12 +1538,7 @@ function MealCopyPicker({ onPick, onClose }) {
     !q || meal.label.includes(q) || date.includes(q) || meal.items.some((it) => it.name.includes(q))
   );
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
-        <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
-          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>식단 복사</span>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
-        </div>
+    <BottomSheet title="식단 복사" onClose={onClose}>
         <div style={{ padding: "0 18px 10px" }}>
           <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
             <Search size={15} color={C.muted} />
@@ -1551,8 +1562,7 @@ function MealCopyPicker({ onPick, onClose }) {
             <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>복사할 수 있는 끼니 기록이 없습니다</div>
           )}
         </div>
-      </div>
-    </div>
+    </BottomSheet>
   );
 }
 
@@ -1662,23 +1672,14 @@ function MealTipsPanel({ currentNames, onAdd, date = todayISO() }) {
 }
 
 /* =====================================================================
-   끼니 편집 화면 (식단 계획용)
+   계획(식단표) 끼니 재료 편집 - MealEditScreen과 BulkSaveScreen이 공유하는 공용 로직/UI (UX-1)
+   동작 규칙 통일: 수량 스텝퍼는 최소 1 유지, 재료 제거는 휴지통 버튼으로만
    ===================================================================== */
-function MealEditScreen({ date, meal, onBack }) {
-  const { state, dispatch } = useStore();
-  const timeFmt = state.settings.timeFmt;
-  const [label, setLabel] = useState(meal.label || "");
-  const [time, setTime] = useState(meal.time || "12:00");
-  const [items, setItems] = useState(meal.items.map((it) => ({
-    ...it,
-    unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
-    gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
-  })));
-  const [picker, setPicker] = useState(false);
-  const [slotPicker, setSlotPicker] = useState(false);
-  const [copyPicker, setCopyPicker] = useState(false);
-
-  const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: it.qty + d } : it).filter((it) => it.qty > 0));
+function usePlanItemsEditor(initialItems) {
+  const { state } = useStore();
+  const [items, setItems] = useState(initialItems);
+  // 수량 최소 1 클램프 - 스텝퍼 연타로 재료가 사라지는 실수 방지 (삭제는 휴지통으로)
+  const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: Math.max(1, it.qty + d) } : it));
   const upUnit = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, unitG: v } : it));
   const upGrams = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, gramsOverride: v } : it));
   const setMode = (name, mode) => setItems((p) => p.map((it) => {
@@ -1688,21 +1689,92 @@ function MealEditScreen({ date, meal, onBack }) {
     return { ...it, gramsOverride: null, qty: Math.max(1, Math.round(curG / (it.unitG || 15))) };
   }));
   const rm = (name) => setItems((p) => p.filter((it) => it.name !== name));
-  const addItems = (names) => {
-    setPicker(false);
+  const addNames = (names) => {
     setItems((p) => {
       const existing = new Set(p.map((it) => it.name));
       const toAdd = names.filter((n) => !existing.has(n)).map((name) => ({ name, qty: 1, unitG: unitGOf(state, name), gramsOverride: null }));
       return [...p, ...toAdd];
     });
   };
-  const copyMeal = (srcMeal) => {
-    setItems(srcMeal.items.map((it) => ({
+  // 다른 끼니에서 통째로 복사해올 때 사용 (unitG·gramsOverride 기본값 정규화 포함)
+  const replaceFrom = (srcItems) => {
+    setItems(srcItems.map((it) => ({
       ...it,
       unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
       gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
     })));
   };
+  return { items, setItems, upQty, upUnit, upGrams, setMode, rm, addNames, replaceFrom };
+}
+
+function PlanItemsEditor({ editor }) {
+  const { state } = useStore();
+  const { items, upQty, upUnit, upGrams, setMode, rm } = editor;
+  return (
+    <div>
+      <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+        {sortByCategory(state, items).map((it, i) => {
+          const isGram = it.gramsOverride != null;
+          return (
+            <div key={it.name} style={{ padding: "11px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: C.surface }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <div className="flex items-center"><CatDot name={it.name} size={8} /><span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{it.name}</span></div>
+                <button onClick={() => rm(it.name)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <Segmented value={isGram ? "gram" : "cube"} onChange={(v) => setMode(it.name, v)} options={[{ value: "cube", label: "큐브로 입력" }, { value: "gram", label: "그램으로 입력" }]} />
+              </div>
+              {isGram ? (
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 10.5, color: C.muted }}>총 중량</span>
+                  <NumInput value={it.gramsOverride} onChange={(v) => upGrams(it.name, v)} width={56} suffix="g" />
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center" style={{ gap: 6 }}>
+                    <span style={{ fontSize: 10.5, color: C.muted }}>큐브당</span>
+                    <NumInput value={it.unitG} onChange={(v) => upUnit(it.name, v)} width={38} suffix="g" />
+                  </div>
+                  <div className="flex items-center" style={{ gap: 8 }}>
+                    <button onClick={() => upQty(it.name, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}큐브</span>
+                    <button onClick={() => upQty(it.name, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
+                  </div>
+                </div>
+              )}
+              <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 5 }}>
+                = {gOf(state, it)}g{isGram && it.unitG ? ` (약 ${Math.round((it.gramsOverride / it.unitG) * 10) / 10}큐브 상당)` : ""}
+              </div>
+            </div>
+          );
+        })}
+        {items.length === 0 && <div style={{ padding: 18, textAlign: "center", fontSize: 12, color: C.muted }}>추가된 재료가 없습니다</div>}
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   끼니 편집 화면 (식단 계획용)
+   ===================================================================== */
+function MealEditScreen({ date, meal, onBack }) {
+  const { state, dispatch } = useStore();
+  const timeFmt = state.settings.timeFmt;
+  const [label, setLabel] = useState(meal.label || "");
+  const [time, setTime] = useState(meal.time || "12:00");
+  const editor = usePlanItemsEditor(meal.items.map((it) => ({
+    ...it,
+    unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
+    gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
+  })));
+  const { items } = editor;
+  const [picker, setPicker] = useState(false);
+  const [slotPicker, setSlotPicker] = useState(false);
+  const [copyPicker, setCopyPicker] = useState(false);
+
+  const addItems = (names) => { setPicker(false); editor.addNames(names); };
+  const copyMeal = (srcMeal) => editor.replaceFrom(srcMeal.items);
   const total = totalG(state, items);
 
   const pickSlot = (slotLabel, slotTime) => {
@@ -1750,47 +1822,7 @@ function MealEditScreen({ date, meal, onBack }) {
         </button>
         <MealTipsPanel currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} date={date} />
 
-        <div>
-          <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-            {sortByCategory(state, items).map((it, i) => {
-              const isGram = it.gramsOverride != null;
-              return (
-                <div key={it.name} style={{ padding: "11px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: C.surface }}>
-                  <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-                    <div className="flex items-center"><CatDot name={it.name} size={8} /><span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{it.name}</span></div>
-                    <button onClick={() => rm(it.name)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
-                  </div>
-                  <div style={{ marginBottom: 8 }}>
-                    <Segmented value={isGram ? "gram" : "cube"} onChange={(v) => setMode(it.name, v)} options={[{ value: "cube", label: "큐브로 입력" }, { value: "gram", label: "그램으로 입력" }]} />
-                  </div>
-                  {isGram ? (
-                    <div className="flex items-center justify-between">
-                      <span style={{ fontSize: 10.5, color: C.muted }}>총 중량</span>
-                      <NumInput value={it.gramsOverride} onChange={(v) => upGrams(it.name, v)} width={56} suffix="g" />
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center" style={{ gap: 6 }}>
-                        <span style={{ fontSize: 10.5, color: C.muted }}>큐브당</span>
-                        <NumInput value={it.unitG} onChange={(v) => upUnit(it.name, v)} width={38} suffix="g" />
-                      </div>
-                      <div className="flex items-center" style={{ gap: 8 }}>
-                        <button onClick={() => upQty(it.name, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}큐브</span>
-                        <button onClick={() => upQty(it.name, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 5 }}>
-                    = {gOf(state, it)}g{isGram && it.unitG ? ` (약 ${Math.round((it.gramsOverride / it.unitG) * 10) / 10}큐브 상당)` : ""}
-                  </div>
-                </div>
-              );
-            })}
-            {items.length === 0 && <div style={{ padding: 18, textAlign: "center", fontSize: 12, color: C.muted }}>추가된 재료가 없습니다</div>}
-          </div>
-        </div>
+        <PlanItemsEditor editor={editor} />
 
         <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
           <Plus size={14} /> 재료 추가
@@ -1817,7 +1849,8 @@ function BulkSaveScreen({ initialCursor, onBack }) {
   const timeFmt = state.settings.timeFmt;
   const [label, setLabel] = useState("");
   const [time, setTime] = useState("07:00");
-  const [items, setItems] = useState([]);
+  const editor = usePlanItemsEditor([]);
+  const { items } = editor;
   const [picker, setPicker] = useState(false);
   const [slotPicker, setSlotPicker] = useState(false);
   const [copyPicker, setCopyPicker] = useState(false);
@@ -1830,30 +1863,9 @@ function BulkSaveScreen({ initialCursor, onBack }) {
   // "오늘 사용 재료" 기준 날짜: 아직 선택한 날짜가 없으면 실제 오늘, 있으면 그중 가장 이른 날짜를 기준으로 함
   const tipsDate = selectedDates.length > 0 ? [...selectedDates].sort()[0] : todayISO();
 
-  const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: it.qty + d } : it).filter((it) => it.qty > 0));
-  const upUnit = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, unitG: v } : it));
-  const upGrams = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, gramsOverride: v } : it));
-  const setMode = (name, mode) => setItems((p) => p.map((it) => {
-    if (it.name !== name) return it;
-    const curG = it.gramsOverride != null ? it.gramsOverride : it.qty * (it.unitG || 15);
-    if (mode === "gram") return { ...it, gramsOverride: curG };
-    return { ...it, gramsOverride: null, qty: Math.max(1, Math.round(curG / (it.unitG || 15))) };
-  }));
-  const rm = (name) => setItems((p) => p.filter((it) => it.name !== name));
-  const addItems = (names) => {
-    setPicker(false);
-    setItems((p) => {
-      const existing = new Set(p.map((it) => it.name));
-      const toAdd = names.filter((n) => !existing.has(n)).map((name) => ({ name, qty: 1, unitG: unitGOf(state, name), gramsOverride: null }));
-      return [...p, ...toAdd];
-    });
-  };
+  const addItems = (names) => { setPicker(false); editor.addNames(names); };
   const copyMeal = (srcMeal) => {
-    setItems(srcMeal.items.map((it) => ({
-      ...it,
-      unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
-      gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
-    })));
+    editor.replaceFrom(srcMeal.items);
     if (!label) setLabel(srcMeal.label);
   };
 
@@ -1937,42 +1949,7 @@ function BulkSaveScreen({ initialCursor, onBack }) {
         </div>
 
         <div>
-          <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>재료 ({items.length})</div>
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-            {sortByCategory(state, items).map((it, i) => {
-              const isGram = it.gramsOverride != null;
-              return (
-                <div key={it.name} style={{ padding: "11px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: C.surface }}>
-                  <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-                    <div className="flex items-center"><CatDot name={it.name} size={8} /><span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{it.name}</span></div>
-                    <button onClick={() => rm(it.name)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
-                  </div>
-                  <div style={{ marginBottom: 8 }}>
-                    <Segmented value={isGram ? "gram" : "cube"} onChange={(v) => setMode(it.name, v)} options={[{ value: "cube", label: "큐브로 입력" }, { value: "gram", label: "그램으로 입력" }]} />
-                  </div>
-                  {isGram ? (
-                    <div className="flex items-center justify-between">
-                      <span style={{ fontSize: 10.5, color: C.muted }}>총 중량</span>
-                      <NumInput value={it.gramsOverride} onChange={(v) => upGrams(it.name, v)} width={56} suffix="g" />
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center" style={{ gap: 6 }}>
-                        <span style={{ fontSize: 10.5, color: C.muted }}>큐브당</span>
-                        <NumInput value={it.unitG} onChange={(v) => upUnit(it.name, v)} width={38} suffix="g" />
-                      </div>
-                      <div className="flex items-center" style={{ gap: 8 }}>
-                        <button onClick={() => upQty(it.name, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}큐브</span>
-                        <button onClick={() => upQty(it.name, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {items.length === 0 && <div style={{ padding: 18, textAlign: "center", fontSize: 12, color: C.muted }}>추가된 재료가 없습니다</div>}
-          </div>
+          <PlanItemsEditor editor={editor} />
           <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer", marginTop: 8, width: "100%" }}>
             <Plus size={14} /> 재료 추가
           </button>
@@ -2234,11 +2211,11 @@ function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
             </div>
           </div>
         )}
-        <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>급여 시간</span>
-          <div className="flex items-center" style={{ gap: 8 }}>
-            <input type="time" value={time} onChange={(e) => e.target.value && setTime(e.target.value)}
-              style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 8px", fontSize: 13, color: C.ink, background: "transparent", outline: "none", fontFamily: "inherit" }} />
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 14px" }}>
+          {/* 앱 공통 TimePicker로 통일 (식단 편집·끼니 설정과 동일 UI, 오전/오후 설정 반영) */}
+          <TimePicker bare label="급여 시간" time={time} setTime={setTime} timeFmt={state.settings.timeFmt} />
+          <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
+            <span style={{ fontSize: 10.5, color: C.muted }}>{fmtTime(time, state.settings.timeFmt)}</span>
             <button onClick={() => { const n = new Date(); setTime(`${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`); }}
               style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "6px 12px", cursor: "pointer" }}>지금</button>
           </div>
@@ -2441,7 +2418,7 @@ function TodayTab({ go }) {
   const logs = state.logs[t] || [];
   const now = new Date();
   const nowHM = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  const [detail, setDetail] = useState(false);
+  const [detail, setDetail] = useDetailView("bc_today_view");
 
   const fAlerts = frozenAlerts(state);
   const rAlertsAll = fridgeAlerts(state);
@@ -2491,7 +2468,7 @@ function TodayTab({ go }) {
         {cards.length > 0 && (
           <div className="flex items-center justify-end">
             <button onClick={() => setDetail((v) => !v)} style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "5px 10px", cursor: "pointer" }}>
-              {detail ? "디테일뷰" : "심플뷰"}
+              {detail ? "심플뷰로 보기" : "디테일뷰로 보기"}
             </button>
           </div>
         )}
@@ -2708,7 +2685,7 @@ function MealPlanTab() {
   const { state, dispatch, notify } = useStore();
   const timeFmt = state.settings.timeFmt;
   const [range, setRange] = useState("day");
-  const [detail, setDetail] = useState(true);
+  const [detail, setDetail] = useDetailView("bc_plan_view");
   const [cursor, setCursor] = useState(todayISO());
   const [editing, setEditing] = useState(null);
   const [monthSel, setMonthSel] = useState(todayISO());
@@ -2750,7 +2727,7 @@ function MealPlanTab() {
           </div>
           {range === "day" && (
             <button onClick={() => setDetail((v) => !v)} style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "5px 10px", cursor: "pointer" }}>
-              {detail ? "디테일뷰" : "심플뷰"}
+              {detail ? "심플뷰로 보기" : "디테일뷰로 보기"}
             </button>
           )}
         </div>
@@ -2967,6 +2944,17 @@ function readStockPref(key, fallback, validKeys) {
 }
 function writeStockPref(key, value) {
   try { localStorage.setItem(key, value); } catch { /* 저장 불가 환경이면 무시 */ }
+}
+
+// 심플뷰/디테일뷰 토글 상태 - 기본 심플, 선택값은 기기에 저장되어 유지 (UX-2)
+function useDetailView(storageKey) {
+  const [detail, setDetailRaw] = useState(() => readStockPref(storageKey, "simple", ["simple", "detail"]) === "detail");
+  const setDetail = (updater) => setDetailRaw((v) => {
+    const nv = typeof updater === "function" ? updater(v) : updater;
+    writeStockPref(storageKey, nv ? "detail" : "simple");
+    return nv;
+  });
+  return [detail, setDetail];
 }
 
 function StockTab({ go }) {
@@ -3391,21 +3379,19 @@ function FeedingWeekPanel({ go }) {
       </div>
       {wide && <div style={{ fontSize: 9.5, color: C.muted, textAlign: "center" }}>← 옆으로 밀어서 더 보기 →</div>}
       {multiPick && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={() => setMultiPick(null)}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px calc(20px + env(safe-area-inset-bottom))" }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, marginBottom: 12 }}>{multiPick.date.slice(5)} · '{multiPick.label}' 기록 {multiPick.logs.length}건 — 볼 기록을 선택하세요</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {multiPick.logs.map((l) => (
-                <button key={l.id} onClick={() => { setMultiPick(null); go("feedCompare", { date: multiPick.date, logId: l.id }); }}
-                  className="flex items-center justify-between"
-                  style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer" }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{fmtTime(l.time, state.settings.timeFmt)}</span>
-                  <span style={{ fontSize: 12.5, color: C.muted }}>{logProvideG(l)}g 중 {l.intakeG}g</span>
-                </button>
-              ))}
-            </div>
+        <BottomSheet title={`${multiPick.date.slice(5)} · '${multiPick.label}' 기록 ${multiPick.logs.length}건`} onClose={() => setMultiPick(null)}>
+          <div style={{ padding: "0 18px calc(20px + env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 11.5, color: C.muted }}>볼 기록을 선택하세요</div>
+            {multiPick.logs.map((l) => (
+              <button key={l.id} onClick={() => { setMultiPick(null); go("feedCompare", { date: multiPick.date, logId: l.id }); }}
+                className="flex items-center justify-between"
+                style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{fmtTime(l.time, state.settings.timeFmt)}</span>
+                <span style={{ fontSize: 12.5, color: C.muted }}>{logProvideG(l)}g 중 {l.intakeG}g</span>
+              </button>
+            ))}
           </div>
-        </div>
+        </BottomSheet>
       )}
     </div>
   );
@@ -4865,6 +4851,32 @@ function FamilySetupScreen({ user, onDone, onLogout }) {
   );
 }
 
+/* ----------------------------- 토스트 알림 공용 (UX-7) ----------------------------- */
+// FamilyStoreProvider와 DemoProvider가 동일한 토스트 동작·모양을 공유
+function useToast() {
+  const [toast, setToast] = useState(null); // { id, message, onUndo }
+  const notify = (message, onUndo, duration = 5000) => {
+    const id = uid();
+    setToast({ id, message, onUndo });
+    setTimeout(() => setToast((tv) => (tv && tv.id === id ? null : tv)), duration);
+  };
+  return { toast, setToast, notify };
+}
+function ToastView({ toast, setToast, state }) {
+  if (!toast) return null;
+  return (
+    <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
+      <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
+        <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 600 }}>{toast.message}</span>
+        {toast.onUndo && (
+          <button onClick={() => { toast.onUndo(state); setToast(null); }}
+            style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Firestore 문서 한도(1MiB)와 경고 임계치 - state가 이 한도를 넘으면 저장 자체가 실패하므로 미리 경고
 const DOC_SIZE_LIMIT_BYTES = 1048576;
 const DOC_SIZE_WARN_BYTES = 700 * 1024;
@@ -4994,14 +5006,7 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
     window.location.reload();
   };
 
-  const [toast, setToast] = useState(null); // { id, message, onUndo }
-  const notify = (message, onUndo, duration = 5000) => {
-    const id = uid();
-    setToast({ id, message, onUndo });
-    setTimeout(() => {
-      setToast((t) => (t && t.id === id ? null : t));
-    }, duration);
-  };
+  const { toast, setToast, notify } = useToast();
 
   if (!ready) return <CenterMessage text="데이터를 불러오는 중..." />;
 
@@ -5020,17 +5025,7 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
           데이터 사용량이 저장 한도의 {Math.round((docBytes / DOC_SIZE_LIMIT_BYTES) * 100)}%에 도달했어요. 오래된 기록 정리를 권장합니다.
         </div>
       )}
-      {toast && (
-        <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
-          <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
-            <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 600 }}>{toast.message}</span>
-            {toast.onUndo && (
-              <button onClick={() => { toast.onUndo(state); setToast(null); }}
-                style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
-            )}
-          </div>
-        </div>
-      )}
+      <ToastView toast={toast} setToast={setToast} state={state} />
     </Store.Provider>
   );
 }
@@ -5175,13 +5170,8 @@ function demoState() {
 
 function DemoProvider() {
   const [state, dispatch] = useReducer(reducer, undefined, () => demoState());
-  // 실제 앱과 동일하게 토스트 알림 표시 (데모에서도 저장/삭제 피드백 확인 가능)
-  const [toast, setToast] = useState(null);
-  const notify = (message, onUndo, duration = 5000) => {
-    const id = uid();
-    setToast({ id, message, onUndo });
-    setTimeout(() => setToast((tv) => (tv && tv.id === id ? null : tv)), duration);
-  };
+  // 실제 앱과 동일한 공용 토스트 (데모에서도 저장/삭제 피드백 확인 가능)
+  const { toast, setToast, notify } = useToast();
   const cloud = {
     familyId: "demo",
     user: { uid: "demo", displayName: "데모", email: "demo@babycube.app" },
@@ -5192,17 +5182,7 @@ function DemoProvider() {
   return (
     <Store.Provider value={{ state, dispatch, cloud, notify }}>
       <Shell />
-      {toast && (
-        <div style={{ position: "fixed", left: 0, right: 0, bottom: 90, display: "flex", justifyContent: "center", zIndex: 50, padding: "0 18px", pointerEvents: "none" }}>
-          <div className="flex items-center justify-between" style={{ gap: 14, maxWidth: 480, width: "100%", background: C.charcoal, borderRadius: 12, padding: "12px 14px", boxShadow: "0 6px 20px rgba(0,0,0,0.25)", pointerEvents: "auto" }}>
-            <span style={{ fontSize: 12.5, color: "#fff", fontWeight: 600 }}>{toast.message}</span>
-            {toast.onUndo && (
-              <button onClick={() => { toast.onUndo(state); setToast(null); }}
-                style={{ background: "none", border: "none", color: C.butter, fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>실행취소</button>
-            )}
-          </div>
-        </div>
-      )}
+      <ToastView toast={toast} setToast={setToast} state={state} />
     </Store.Provider>
   );
 }
