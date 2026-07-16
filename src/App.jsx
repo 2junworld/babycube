@@ -74,71 +74,41 @@ const UI_STATE = { recordView: "table", recordTableRange: "week", stockSubTab: "
 
 function seedState() {
   const t = todayISO();
-  // 재고: 재료별 냉동 배치 + 냉장 보관
+  // 새 가족의 시작 데이터: 앱 구조를 이해할 수 있는 "중립적인 대표 예시" 소량만 담는다.
+  // (개인 정보 없음 - 자세한 예시가 필요한 화면 데모는 ?demo 모드의 demoState 참고)
   const stock = {
     죽: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 20, frozen: 8, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
-    소고기: { batches: [{ id: uid(), date: addDaysISO(t, -3), unitG: 15, frozen: 2, fridgeG: 40, frozenExp: addDaysISO(t, 11), fridgeExp: addDaysISO(t, 1) }] },
-    브로콜리: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 4, fridgeG: 20, frozenExp: addDaysISO(t, 12), fridgeExp: addDaysISO(t, 1) }] },
-    애호박: { batches: [{ id: uid(), date: addDaysISO(t, -1), unitG: 15, frozen: 9, fridgeG: 0, frozenExp: addDaysISO(t, 13), fridgeExp: null }] },
-    단호박: { batches: [{ id: uid(), date: addDaysISO(t, -1), unitG: 15, frozen: 6, fridgeG: 0, frozenExp: addDaysISO(t, 13), fridgeExp: null }] },
-    닭고기: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 5, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
-    청경채: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 5, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
-    당근: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 7, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
+    소고기: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 4, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
+    브로콜리: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 4, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
   };
-  // 식단 계획: 날짜별 끼니
+  // 오늘 하루치 예시 식단 (재고에 있는 재료로만 구성)
   const plans = {
     [t]: [
-      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "브로콜리", qty: 1 }, { name: "애호박", qty: 1 }] },
-      { id: uid(), label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "단호박", qty: 1 }] },
-      { id: uid(), label: "저녁", time: "18:00", items: [{ name: "죽", qty: 4 }, { name: "닭고기", qty: 1 }, { name: "청경채", qty: 1 }] },
-    ],
-    [addDaysISO(t, 1)]: [
-      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "두부", qty: 1 }, { name: "시금치", qty: 1 }] },
-      { id: uid(), label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "무", qty: 1 }] },
-    ],
-    [addDaysISO(t, -1)]: [
-      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "시금치", qty: 1 }] },
-      { id: uid(), label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "대구살", qty: 1 }, { name: "당근", qty: 1 }] },
-      { id: uid(), label: "저녁", time: "18:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "양배추", qty: 1 }] },
+      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "브로콜리", qty: 1 }] },
     ],
   };
-  // 급여 기록: 날짜별 (제공 재료 + 끼니 섭취량) — 초기 상태는 빈 값으로 시작
   const logs = {};
-  // 먹어본 / 도입 재료 (단일 소스: 이름·카테고리·반응상태·메모)
-  const eatenSeed = {
-    채소: ["토마토", "양배추", "브로콜리", "애호박", "단호박", "고구마", "감자", "시금치", "청경채", "무", "양파", "당근", "가지", "배추"],
-    단백질: ["닭고기", "대구살", "소고기", "두부", "달걀노른자"],
-    과일: ["사과", "바나나", "배"],
-    탄수화물: ["쌀", "잡곡(귀리)"],
-  };
-  const intros = [];
-  Object.entries(eatenSeed).forEach(([cat, names]) =>
-    names.forEach((name) => intros.push({ id: uid(), name, cat, status: "이상없음", memo: "", date: addDaysISO(t, -20) }))
-  );
-  // 개별 도입/주의 기록 덮어쓰기
-  const overrides = [
-    { name: "파프리카", cat: "채소", status: "이상없음", memo: "전자레인지로 껍질 제거 후 다짐", date: addDaysISO(t, -5) },
-    { name: "새송이버섯", cat: "채소", status: "관찰중", memo: "곱게 갈아서 제공", date: addDaysISO(t, -2) },
-    { name: "달걀흰자", cat: "단백질", status: "중단", memo: "지연성 구토로 중단", date: addDaysISO(t, -30) },
+  // 먹어본 재료 예시 (대표 몇 개만 - 사용자가 직접 채워가는 목록)
+  const introSeed = [
+    { name: "쌀", cat: "탄수화물" },
+    { name: "소고기", cat: "단백질" },
+    { name: "브로콜리", cat: "채소" },
+    { name: "애호박", cat: "채소" },
+    { name: "단호박", cat: "채소" },
+    { name: "사과", cat: "과일" },
   ];
-  overrides.forEach((o) => {
-    const i = intros.findIndex((x) => x.name === o.name);
-    if (i >= 0) intros[i] = { ...intros[i], ...o };
-    else intros.unshift({ id: uid(), ...o });
-  });
+  const intros = introSeed.map((x) => ({ id: uid(), ...x, status: "이상없음", memo: "", date: addDaysISO(t, -7) }));
 
   return {
     ingredients: { ...SEED_INGREDIENTS },
     ingredientUsage: {},
     ingredientTags: {},
     stock, plans, logs, intros,
-    shopping: [
-      { id: uid(), name: "새송이버섯", reason: "식단표 추가 (재고없음)", done: false },
-    ],
+    shopping: [],
     settings: { timeFmt: "24h", frozenAlertDays: 3, fridgeAlertDays: 1, fridgeKeepDays: 2, fontScale: 1, mealTips: { stock: true, pairing: true, usedToday: true } },
     travel: { active: false, start: "", end: "", mealsPerDay: 2, checklist: [] },
-    members: ["이준세", "배우자"],
-    baby: { name: "", sex: "남아", birth: "2025-10-08" },
+    members: ["엄마", "아빠"],
+    baby: { name: "", sex: "남아", birth: "" }, // 생년월일 미설정 - 설정 화면에서 입력 안내
     ui: { fridgeBannerHiddenDate: null },
     mealSlots: [
       { id: uid(), label: "아침", time: "07:00" },
@@ -173,7 +143,7 @@ function migrateState(s) {
   }
   if (!out.intros) out.intros = [];
   out.intros = out.intros.map((it) => ({ cat: "채소", memo: "", ...it }));
-  if (!out.baby) out.baby = { name: "", sex: "남아", birth: "2025-10-08" };
+  if (!out.baby) out.baby = { name: "", sex: "남아", birth: "" }; // 생년월일 미설정 상태로 시작
   if (!out.ui) out.ui = { fridgeBannerHiddenDate: null };
   // 카테고리 이름 변경: 죽 → 탄수화물 (기존 저장 데이터 호환)
   if (out.ingredients) {
@@ -693,15 +663,19 @@ function fmtTime(hhmm, mode) {
   }
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+// 생년월일이 설정되지 않았으면 null 반환 - 표시하는 쪽에서 "미설정" 안내로 처리
 function ageMonths(birthISO) {
-  const birth = new Date((birthISO || "2025-10-08") + "T00:00:00");
+  if (!birthISO) return null;
+  const birth = new Date(birthISO + "T00:00:00");
+  if (isNaN(birth.getTime())) return null;
   const now = new Date();
   let months = (now.getFullYear() - birth.getFullYear()) * 12 + (now.getMonth() - birth.getMonth());
   if (now.getDate() < birth.getDate()) months -= 1;
   return Math.max(0, months);
 }
 function ageText(birthISO) {
-  return `생후 ${ageMonths(birthISO)}개월`;
+  const m = ageMonths(birthISO);
+  return m == null ? "생년월일 미설정" : `생후 ${m}개월`;
 }
 
 /* ----------------------------- 이유식 성장 단계 참고 정보 (일반적인 참고용, 자동 적용 안 함) ----------------------------- */
@@ -719,6 +693,16 @@ function growthStageOf(months) {
 // 식단 편집 화면 등에서 보여줄 "참고용" 성장 단계 안내 카드 - 값을 자동으로 적용하지 않고 정보만 표시함
 function GrowthStageHint({ birth }) {
   const months = ageMonths(birth);
+  // 생년월일 미설정: 단계를 추정할 수 없으므로 설정 안내만 표시
+  if (months == null) {
+    return (
+      <div style={{ background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "10px 12px" }}>
+        <div style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.6 }}>
+          더보기 &gt; 설정에서 아기 생년월일을 입력하면 개월수에 맞는 이유식 단계 참고 정보를 보여드려요.
+        </div>
+      </div>
+    );
+  }
   const g = growthStageOf(months);
   return (
     <div style={{ background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "10px 12px" }}>
@@ -5113,7 +5097,46 @@ function demoState() {
     ];
   }
   logs[t] = [mk("아침", "07:00", [fz("죽", 4, 20), fz("소고기", 1), fz("브로콜리", 1), fz("애호박", 1)], 118)];
-  return { ...s, logs, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: "2025-10-08" } };
+  // 데모 전용 풍부한 재고·식단·먹어본 재료 (seedState는 중립 예시만 담으므로 여기서 채움)
+  const stock = {
+    죽: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 20, frozen: 8, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
+    소고기: { batches: [{ id: uid(), date: addDaysISO(t, -3), unitG: 15, frozen: 2, fridgeG: 40, frozenExp: addDaysISO(t, 11), fridgeExp: addDaysISO(t, 1) }] },
+    브로콜리: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 4, fridgeG: 20, frozenExp: addDaysISO(t, 12), fridgeExp: addDaysISO(t, 1) }] },
+    애호박: { batches: [{ id: uid(), date: addDaysISO(t, -1), unitG: 15, frozen: 9, fridgeG: 0, frozenExp: addDaysISO(t, 13), fridgeExp: null }] },
+    단호박: { batches: [{ id: uid(), date: addDaysISO(t, -1), unitG: 15, frozen: 6, fridgeG: 0, frozenExp: addDaysISO(t, 13), fridgeExp: null }] },
+    닭고기: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 5, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
+    청경채: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 5, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
+    당근: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 7, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
+  };
+  const plans = {
+    [t]: [
+      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "브로콜리", qty: 1 }, { name: "애호박", qty: 1 }] },
+      { id: uid(), label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "단호박", qty: 1 }] },
+      { id: uid(), label: "저녁", time: "18:00", items: [{ name: "죽", qty: 4 }, { name: "닭고기", qty: 1 }, { name: "청경채", qty: 1 }] },
+    ],
+    [addDaysISO(t, 1)]: [
+      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "두부", qty: 1 }, { name: "시금치", qty: 1 }] },
+      { id: uid(), label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "무", qty: 1 }] },
+    ],
+    [addDaysISO(t, -1)]: [
+      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "시금치", qty: 1 }] },
+      { id: uid(), label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "대구살", qty: 1 }, { name: "당근", qty: 1 }] },
+      { id: uid(), label: "저녁", time: "18:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "양배추", qty: 1 }] },
+    ],
+  };
+  const eatenSeed = {
+    채소: ["토마토", "양배추", "브로콜리", "애호박", "단호박", "고구마", "감자", "시금치", "청경채", "무", "양파", "당근", "가지", "배추"],
+    단백질: ["닭고기", "대구살", "소고기", "두부", "달걀노른자"],
+    과일: ["사과", "바나나", "배"],
+    탄수화물: ["쌀", "잡곡(귀리)"],
+  };
+  const intros = [];
+  Object.entries(eatenSeed).forEach(([cat, names]) =>
+    names.forEach((name) => intros.push({ id: uid(), name, cat, status: "이상없음", memo: "", date: addDaysISO(t, -20) }))
+  );
+  intros.unshift({ id: uid(), name: "새송이버섯", cat: "채소", status: "관찰중", memo: "곱게 갈아서 제공", date: addDaysISO(t, -2) });
+  // 가상의 생일 (~생후 9개월) - 실제 개인 정보 아님
+  return { ...s, stock, plans, logs, intros, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: addDaysISO(t, -280) } };
 }
 
 function DemoProvider() {
