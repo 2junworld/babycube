@@ -4349,6 +4349,28 @@ function SettingsScreen({ onBack }) {
         <div>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>데이터</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(() => {
+              // 클라우드 문서 사용량 - Firestore 문서 한도(1MiB) 대비 현재 크기
+              const bytes = JSON.stringify(state).length;
+              const pct = Math.round((bytes / DOC_SIZE_LIMIT_BYTES) * 100);
+              const warn = bytes > DOC_SIZE_WARN_BYTES;
+              return (
+                <div style={{ background: C.surface, border: `1px solid ${warn ? C.apricot : C.border}`, borderRadius: 12, padding: "12px 14px" }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>저장 공간 사용량</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: warn ? C.apricot : C.sageDeep }}>{Math.round(bytes / 1024)}KB / 1MB ({pct}%)</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, background: C.border, overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: warn ? C.apricot : C.sage }} />
+                  </div>
+                  {warn && (
+                    <div style={{ fontSize: 11, color: C.apricot, fontWeight: 600, marginTop: 7 }}>
+                      한도에 가까워지고 있어요. 오래된 급여 기록·식단을 정리하면 공간이 줄어듭니다.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <button onClick={() => downloadFile(`babycube-backup-${todayISO()}.json`, JSON.stringify(state, null, 2), "application/json")}
               style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
               전체 데이터 내보내기 (JSON 백업)
@@ -4825,6 +4847,23 @@ function FamilySetupScreen({ user, onDone, onLogout }) {
   );
 }
 
+// Firestore 문서 한도(1MiB)와 경고 임계치 - state가 이 한도를 넘으면 저장 자체가 실패하므로 미리 경고
+const DOC_SIZE_LIMIT_BYTES = 1048576;
+const DOC_SIZE_WARN_BYTES = 700 * 1024;
+
+// 원격 스냅샷(remote) 위에, 마지막 동기화 기준점(base) 이후 바뀐 로컬 최상위 키를 덮어 병합.
+// 아직 서버에 보내지 못한 내 변경이 배우자 기기의 스냅샷에 덮여 사라지는 것을 방지 (P0-1)
+function mergeRemoteWithLocalChanges(remote, local, base) {
+  if (!local || !base) return remote;
+  const changed = Object.keys(local).filter(
+    (k) => JSON.stringify(local[k]) !== JSON.stringify(base[k])
+  );
+  if (changed.length === 0) return remote;
+  const merged = { ...remote };
+  changed.forEach((k) => { merged[k] = local[k]; });
+  return merged;
+}
+
 function FamilyStoreProvider({ familyId, user, onLogout }) {
   const [state, dispatch] = useReducer(reducer, undefined, () => seedState());
   const [ready, setReady] = useState(false);
@@ -4841,6 +4880,10 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
   const pendingRef = useRef(null);
   // queuedRef: 진행 중인 요청이 끝난 뒤, 그 사이 바뀐 최신 state로 한 번 더 동기화가 필요한지
   const queuedRef = useRef(false);
+  // readyRef: 최초 원격 수신 전(로컬이 아직 seed일 때)에는 스냅샷 병합을 하지 않기 위한 플래그
+  const readyRef = useRef(false);
+  // 문서 용량 모니터링: Firestore 문서 한도(1MiB) 대비 현재 state 크기 (bytes)
+  const [docBytes, setDocBytes] = useState(0);
 
   useEffect(() => {
     const famRef = doc(db, "families", familyId);
@@ -4848,10 +4891,24 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
       if (!snap.exists()) return;
       const data = snap.data();
       const migrated = migrateState(data.state);
+      // (레이스 방지) 아직 서버로 보내지 못한 로컬 변경(저장 진행 중에 추가로 바뀐 키)이 있으면,
+      // 스냅샷으로 통째로 덮어쓰지 않고 원격 state 위에 로컬 변경 키를 덮어 병합한다.
+      // 예: 내 급여기록 저장이 진행 중일 때 식단을 수정했는데 그 사이 배우자의 스냅샷이
+      // 도착하면, 기존에는 식단 수정이 흔적 없이 사라졌다 (최상위 키 단위 병합 - 부분
+      // 업데이트 전략과 동일한 granularity)
+      const next = mergeRemoteWithLocalChanges(
+        migrated,
+        readyRef.current ? stateRef.current : null,
+        lastSyncedRef.current
+      );
+      // lastSyncedRef는 원격 원본 기준으로 둔다 - 병합해서 남긴 로컬 변경 키가
+      // 다음 syncToCloud에서 diff로 잡혀 자동으로 재전송됨
       lastSyncedRef.current = migrated;
-      dispatch({ type: "HYDRATE", state: migrated });
+      dispatch({ type: "HYDRATE", state: next });
       setMeta({ members: data.members || [], memberInfo: data.memberInfo || {}, ownerUid: data.ownerUid });
+      setDocBytes(JSON.stringify(migrated).length);
       setReady(true);
+      readyRef.current = true;
     });
     return unsub;
   }, [familyId]);
@@ -4873,6 +4930,8 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
       (k) => JSON.stringify(current[k]) !== JSON.stringify(prevSynced ? prevSynced[k] : undefined)
     );
     if (changedKeys.length === 0) return;
+    // 문서 용량 추적 (Firestore 문서 한도 1MiB 대비 경고용)
+    setDocBytes(JSON.stringify(current).length);
     const updates = {};
     changedKeys.forEach((k) => { updates[`state.${k}`] = current[k]; });
     lastSyncedRef.current = current;
@@ -4882,7 +4941,8 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
         console.error("Firestore 저장 실패:", err);
         // 저장이 실패하면 다음 변경 시 재시도될 수 있도록 되돌려 둠 (조용히 유실되는 것 방지)
         lastSyncedRef.current = prevSynced;
-        setSyncError(true);
+        // 실패 원인 구분: 문서 크기 초과(invalid-argument)는 네트워크 문제와 다른 안내 필요
+        setSyncError(err && err.code === "invalid-argument" ? "size" : "network");
       })
       .finally(() => {
         pendingRef.current = null;
@@ -4932,7 +4992,14 @@ function FamilyStoreProvider({ familyId, user, onLogout }) {
       <Shell />
       {syncError && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 70, background: C.apricot, color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
-          저장에 실패했어요. 인터넷 연결을 확인해 주세요. 연결되면 자동으로 다시 저장을 시도합니다.
+          {syncError === "size"
+            ? "저장 용량이 한도를 초과해 저장에 실패했어요. 더보기 > 설정에서 데이터 사용량을 확인해 주세요."
+            : "저장에 실패했어요. 인터넷 연결을 확인해 주세요. 연결되면 자동으로 다시 저장을 시도합니다."}
+        </div>
+      )}
+      {!syncError && docBytes > DOC_SIZE_WARN_BYTES && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 69, background: C.butterLight, color: "#9A7416", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
+          데이터 사용량이 저장 한도의 {Math.round((docBytes / DOC_SIZE_LIMIT_BYTES) * 100)}%에 도달했어요. 오래된 기록 정리를 권장합니다.
         </div>
       )}
       {toast && (
