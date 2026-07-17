@@ -9,7 +9,7 @@ import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip,
 } from "recharts";
 import { db, auth, googleProvider } from "./firebase";
-import { doc, setDoc, getDoc, updateDoc, onSnapshot } from "firebase/firestore";
+import { doc, setDoc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
 import { C, FONT_IMPORT, CATEGORY, CATEGORIES, selectStyle, stepBtn, primaryBtn } from "./theme";
 import { pad2, todayISO, addDaysISO, uid, fmtTime, ageMonths, ageText } from "./lib/dates";
@@ -3480,6 +3480,13 @@ function MembersScreen({ onBack }) {
   const { cloud } = useStore();
   const [copied, setCopied] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  // (C-1) 구버전 가족 호환: 초대 코드 매핑 문서(invites/{code})가 없으면
+  // 멤버가 이 화면을 열 때 만들어 둠 - 강화된 규칙에서도 기존 코드로 합류 가능해짐
+  const inviteFamilyId = cloud && cloud.user && cloud.user.uid !== "demo" ? cloud.familyId : null;
+  useEffect(() => {
+    if (!inviteFamilyId) return;
+    setDoc(doc(db, "invites", inviteFamilyId), { familyId: inviteFamilyId }, { merge: true }).catch(() => {});
+  }, [inviteFamilyId]);
   if (!cloud) return null;
   const { familyId, user, meta, leaveFamily, logout } = cloud;
   const memberList = (meta.members || []).map((uid) => ({ uid, ...(meta.memberInfo?.[uid] || {}) }));
@@ -3818,7 +3825,50 @@ function LoginScreen({ onLogin, busy, error }) {
   );
 }
 
-function FamilySetupScreen({ user, onDone, onLogout }) {
+/* (C-1) 가족 생성·합류 백엔드 로직 - 강화된 보안 규칙(멤버만 가족 문서 읽기) 대응
+   - 생성: 가족 문서 + invites/{코드} 매핑 문서를 함께 만듦
+   - 합류: invites/{코드}로 familyId를 알아낸 뒤, 가족 문서를 읽지 않고
+     arrayUnion으로 본인만 추가 (비멤버는 가족 문서 읽기 권한이 없어도 동작)
+   데모 미리보기(?demo=family)에서는 이 객체 대신 목(mock) api가 주입됨 */
+const familyApi = {
+  async createFamily(user) {
+    let fid = genInviteCode();
+    // 코드 중복 확인: 신 규칙에서는 invites 조회, 실패(구 규칙에서는 invites 접근 불가)해도 진행
+    for (let i = 0; i < 5; i++) {
+      let exists = false;
+      try { exists = (await getDoc(doc(db, "invites", fid))).exists(); } catch { /* 구 규칙: 확인 생략 */ }
+      if (!exists) break;
+      fid = genInviteCode();
+    }
+    await setDoc(doc(db, "families", fid), {
+      ownerUid: user.uid,
+      members: [user.uid],
+      memberInfo: { [user.uid]: { name: user.displayName || "", email: user.email || "" } },
+      createdAt: Date.now(),
+      state: seedState(),
+    });
+    // 초대 코드 매핑 문서 발급 - 구 규칙에서는 거부되지만 코드=familyId 폴백이 있어 무해 (best-effort)
+    try { await setDoc(doc(db, "invites", fid), { familyId: fid, createdAt: Date.now(), createdBy: user.uid }); } catch { /* 규칙 배포 전 호환 */ }
+    await setDoc(doc(db, "users", user.uid), { familyId: fid }, { merge: true });
+    return fid;
+  },
+  async joinByCode(user, code) {
+    // 초대 코드 매핑 문서로 familyId 조회. 매핑이 없거나(구버전 가족) 읽을 수 없으면(규칙 배포 전) 코드=familyId 폴백
+    let familyId = code;
+    try {
+      const inv = await getDoc(doc(db, "invites", code));
+      if (inv.exists()) familyId = inv.data().familyId;
+    } catch { /* 구 규칙: invites 접근 불가 - 폴백 사용 */ }
+    await updateDoc(doc(db, "families", familyId), {
+      members: arrayUnion(user.uid),
+      [`memberInfo.${user.uid}`]: { name: user.displayName || "", email: user.email || "" },
+    });
+    await setDoc(doc(db, "users", user.uid), { familyId }, { merge: true });
+    return familyId;
+  },
+};
+
+function FamilySetupScreen({ user, onDone, onLogout, api = familyApi }) {
   const [mode, setMode] = useState(null); // null | 'create' | 'join'
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3827,21 +3877,8 @@ function FamilySetupScreen({ user, onDone, onLogout }) {
   const create = async () => {
     setBusy(true); setErr("");
     try {
-      let fid = genInviteCode();
-      for (let i = 0; i < 5; i++) {
-        const exists = (await getDoc(doc(db, "families", fid))).exists();
-        if (!exists) break;
-        fid = genInviteCode();
-      }
-      await setDoc(doc(db, "families", fid), {
-        ownerUid: user.uid,
-        members: [user.uid],
-        memberInfo: { [user.uid]: { name: user.displayName || "", email: user.email || "" } },
-        createdAt: Date.now(),
-        state: seedState(),
-      });
-      await setDoc(doc(db, "users", user.uid), { familyId: fid }, { merge: true });
-      onDone(fid);
+      const fid = await api.createFamily(user);
+      onDone(fid, "create");
     } catch (e) {
       setErr("가족 생성에 실패했습니다. 다시 시도해 주세요.");
     } finally {
@@ -3854,17 +3891,8 @@ function FamilySetupScreen({ user, onDone, onLogout }) {
     if (fid.length < 4) { setErr("초대 코드를 확인해 주세요."); return; }
     setBusy(true); setErr("");
     try {
-      const ref = doc(db, "families", fid);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { setErr("해당 코드의 가족을 찾을 수 없습니다."); setBusy(false); return; }
-      const data = snap.data();
-      const members = (data.members || []).includes(user.uid) ? data.members : [...(data.members || []), user.uid];
-      await updateDoc(ref, {
-        members,
-        [`memberInfo.${user.uid}`]: { name: user.displayName || "", email: user.email || "" },
-      });
-      await setDoc(doc(db, "users", user.uid), { familyId: fid }, { merge: true });
-      onDone(fid);
+      const joined = await api.joinByCode(user, fid);
+      onDone(joined, "join");
     } catch (e) {
       setErr("합류에 실패했습니다. 코드를 다시 확인해 주세요.");
     } finally {
@@ -4246,11 +4274,73 @@ function DemoProvider() {
   );
 }
 
+/* (C-1 데모) 가족 생성·합류 흐름 미리보기 - ?demo=family
+   실제 Firebase를 전혀 사용하지 않고, 새 초대코드 문서 방식의 UI 흐름을 체험:
+   생성 → 초대 코드 확인 → (그 코드로) 합류 테스트 → 데모 앱 진입 */
+function DemoFamilyFlow() {
+  const [phase, setPhase] = useState("setup"); // setup | created | app
+  const [createdCode, setCreatedCode] = useState(null);
+  const invitesRef = useRef({}); // 데모용 인메모리 invites/{code} 컬렉션
+  const demoUser = { uid: "demo", displayName: "데모 사용자", email: "demo@babycube.app" };
+
+  const api = {
+    async createFamily() {
+      await new Promise((r) => setTimeout(r, 500));
+      const code = genInviteCode();
+      invitesRef.current[code] = code; // invites/{code} = { familyId } 생성에 해당
+      setCreatedCode(code);
+      return code;
+    },
+    async joinByCode(_user, code) {
+      await new Promise((r) => setTimeout(r, 500));
+      // invites/{code} 단건 조회에 해당 - 없는 코드는 실패 (가족 목록을 뒤질 수 없음)
+      if (!invitesRef.current[code]) throw new Error("invite-not-found");
+      return invitesRef.current[code];
+    },
+  };
+
+  if (phase === "app") return <DemoProvider />;
+  return (
+    <>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 80, background: C.butterLight, color: "#9A7416", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
+        데모 미리보기 — 실제 계정·데이터에 영향 없음 (새 초대코드 방식)
+      </div>
+      {phase === "created" ? (
+        <div style={{ minHeight: "100dvh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: C.bg, padding: 24, fontFamily: "'Noto Sans KR', sans-serif", gap: 18 }}>
+          <style>{FONT_IMPORT}</style>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: "'Gowun Dodum', sans-serif", fontSize: 20, color: C.ink, marginBottom: 6 }}>가족이 만들어졌어요</div>
+            <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.6 }}>아래 초대 코드가 invites 문서로 발급됐어요.<br />배우자는 이 코드만으로 합류할 수 있어요 (가족 데이터 열람 불가).</div>
+          </div>
+          <div style={{ background: C.sageLight, borderRadius: 14, padding: "16px 34px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: C.sageDeep, fontWeight: 700, marginBottom: 6 }}>초대 코드</div>
+            <div style={{ fontSize: 28, fontWeight: 900, letterSpacing: 4, color: C.sageDeep, fontFamily: "'Gowun Dodum', sans-serif" }}>{createdCode}</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", maxWidth: 320 }}>
+            <button onClick={() => setPhase("setup")} style={primaryBtn}>이 코드로 합류 흐름 테스트하기</button>
+            <button onClick={() => setPhase("app")} style={{ ...primaryBtn, background: C.sageLight, color: C.sageDeep }}>바로 앱으로 들어가기</button>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, textAlign: "center", lineHeight: 1.6, maxWidth: 300 }}>
+            팁: 합류 화면에서 위 코드가 아닌 아무 코드나 넣으면 "합류 실패"가 나와요 — 코드를 모르면 어떤 가족도 찾을 수 없다는 뜻이에요.
+          </div>
+        </div>
+      ) : (
+        <FamilySetupScreen
+          user={demoUser}
+          api={api}
+          onDone={(fid, action) => setPhase(action === "create" ? "created" : "app")}
+          onLogout={() => {}}
+        />
+      )}
+    </>
+  );
+}
+
 export default function App() {
-  const isDemo = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("demo");
+  const demoParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("demo") : null;
   return (
     <ErrorBoundary>
-      {isDemo ? <DemoProvider /> : <AuthGate />}
+      {demoParam === "family" ? <DemoFamilyFlow /> : demoParam != null ? <DemoProvider /> : <AuthGate />}
     </ErrorBoundary>
   );
 }

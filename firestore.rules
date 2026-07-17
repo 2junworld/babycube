@@ -3,10 +3,11 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // 가족(공유 그룹) 문서: families/{familyId}
-    // familyId 자체가 6자리 초대 코드입니다.
+    // C-1 강화: 읽기를 멤버로 제한. 초대 코드 조회는 invites/{code} 매핑 문서로 분리
     match /families/{familyId} {
-      // 로그인한 사용자는 초대 코드로 조회할 수 있어야 하므로 읽기는 로그인 여부만 확인
-      allow read: if request.auth != null;
+      // 읽기: 멤버만 (기존에는 로그인한 누구나 모든 가족 문서를 읽을 수 있었음)
+      allow read: if request.auth != null
+        && request.auth.uid in resource.data.members;
 
       // 생성: 본인 uid 1명만 members에 넣어서 새로 만드는 경우만 허용
       allow create: if request.auth != null
@@ -15,15 +16,31 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.members;
 
       // 수정: 이미 멤버인 사람의 데이터 수정 OR
-      //       초대 코드로 합류하며 본인 uid 1명만 추가되는 경우
+      //       초대 코드로 합류하며 "본인 1명만 추가 + members/memberInfo 외에는 건드리지 않는" 경우
       allow update: if request.auth != null
         && (
           request.auth.uid in resource.data.members
           || (
             request.auth.uid in request.resource.data.members
+            && request.resource.data.members.hasAll(resource.data.members)
             && request.resource.data.members.size() == resource.data.members.size() + 1
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberInfo'])
           )
         );
+
+      allow delete: if false;
+    }
+
+    // 초대 코드 → familyId 매핑: invites/{code}
+    // 코드를 아는 사람만 문서 단건 조회(get) 가능. 목록 조회(list)는 불가 - 코드 무차별 수집 방지
+    match /invites/{code} {
+      allow get: if request.auth != null;
+      allow list: if false;
+      // 생성·갱신: 그 가족의 멤버만 (자기 가족의 초대 코드만 발급 가능)
+      allow create, update: if request.auth != null
+        && request.resource.data.familyId is string
+        && request.auth.uid in get(/databases/$(database)/documents/families/$(request.resource.data.familyId)).data.members;
+      allow delete: if false;
     }
 
     // 사용자 → 가족 매핑: users/{uid}.familyId
