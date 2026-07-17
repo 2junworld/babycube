@@ -725,29 +725,57 @@ const GROWTH_STAGES = [
 function growthStageOf(months) {
   return GROWTH_STAGES.find((g) => months >= g.min && months <= g.max) || GROWTH_STAGES[GROWTH_STAGES.length - 1];
 }
-// 식단 편집 화면 등에서 보여줄 "참고용" 성장 단계 안내 카드 - 값을 자동으로 적용하지 않고 정보만 표시함
+// 식단 편집 화면 등에서 보여줄 "참고용" 성장 단계 안내 카드 - 값을 자동으로 적용하지 않고 정보만 표시함.
+// 카드를 탭하면 전체 시기의 팁이 리스트로 펼쳐짐 (현재 시기는 강조 표시)
 function GrowthStageHint({ birth }) {
   const months = ageMonths(birth);
-  // 생년월일 미설정: 단계를 추정할 수 없으므로 설정 안내만 표시
-  if (months == null) {
-    return (
-      <div style={{ background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "10px 12px" }}>
-        <div style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.6 }}>
-          더보기 &gt; 설정에서 아기 생년월일을 입력하면 개월수에 맞는 이유식 단계 참고 정보를 보여드려요.
-        </div>
-      </div>
-    );
-  }
-  const g = growthStageOf(months);
+  const [expanded, setExpanded] = useState(false);
+  const g = months == null ? null : growthStageOf(months);
+  const stageRange = (s) => (s.max >= 999 ? `${s.min}개월~` : `${s.min}~${s.max}개월`);
   return (
-    <div style={{ background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "10px 12px" }}>
-      <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-        <span style={{ fontSize: 11.5, fontWeight: 800, color: C.sageDeep }}>생후 {months}개월 · {g.stage} 참고 정보</span>
-      </div>
-      <div style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.6 }}>
-        일반적으로 하루 {g.mealsPerDay} · 1회 {g.perMealG} 정도가 참고돼요. {g.note}
-      </div>
-      <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>* 일반적인 참고 정보이며, 정확한 급여량·시기는 소아과 상담을 따라주세요.</div>
+    <div style={{ background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, overflow: "hidden" }}>
+      <button onClick={() => setExpanded((v) => !v)} className="flex items-center justify-between"
+        style={{ width: "100%", background: "none", border: "none", padding: "10px 12px", cursor: "pointer", textAlign: "left", gap: 8 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 800, color: C.sageDeep }}>
+          {g ? `생후 ${months}개월 · ${g.stage} 참고 정보` : "이유식 단계별 참고 정보"}
+        </span>
+        <ChevronRight size={14} color={C.sageDeep} style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
+      </button>
+      {!expanded && (
+        <div style={{ padding: "0 12px 10px" }}>
+          {g ? (
+            <div style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.6 }}>
+              일반적으로 하루 {g.mealsPerDay} · 1회 {g.perMealG} 정도가 참고돼요. {g.note}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.6 }}>
+              더보기 &gt; 설정에서 아기 생년월일을 입력하면 지금 개월수에 맞는 팁을 바로 보여드려요. 탭하면 전체 시기 팁을 볼 수 있어요.
+            </div>
+          )}
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>* 일반적인 참고 정보이며, 정확한 급여량·시기는 소아과 상담을 따라주세요. (탭하면 다른 시기 팁도 보여요)</div>
+        </div>
+      )}
+      {expanded && (
+        <div style={{ padding: "0 12px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {GROWTH_STAGES.map((s) => {
+            const current = g && s.stage === g.stage;
+            return (
+              <div key={s.stage} style={{ background: current ? C.surface : "transparent", border: current ? `1px solid ${C.sage}` : `1px solid transparent`, borderRadius: 10, padding: "8px 10px" }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 3, gap: 8 }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 800, color: C.sageDeep }}>
+                    {s.stage} <span style={{ fontWeight: 600, color: C.muted, fontSize: 10.5 }}>({stageRange(s)})</span>
+                  </span>
+                  {current && <span style={{ fontSize: 9.5, fontWeight: 800, background: C.sage, color: "#fff", padding: "2px 8px", borderRadius: 999, flexShrink: 0 }}>지금 시기</span>}
+                </div>
+                <div style={{ fontSize: 10.5, color: C.sageDeep, lineHeight: 1.55 }}>
+                  하루 {s.mealsPerDay} · 1회 {s.perMealG}. {s.note}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 10, color: C.muted }}>* 일반적인 참고 정보이며, 정확한 급여량·시기는 소아과 상담을 따라주세요.</div>
+        </div>
+      )}
     </div>
   );
 }
