@@ -288,27 +288,22 @@ export function reducer(state, action) {
       const dayLogs = state.logs[date] ? [...state.logs[date]] : [];
       const idx = dayLogs.findIndex((l) => l.id === log.id);
       if (idx >= 0) {
-        const oldLog = dayLogs[idx];
-        const oldGloballyOff = oldLog.stockAffected === false; // 구버전(전체 On/Off) 기록과의 호환
-        oldLog.items.forEach((it) => {
-          if (oldGloballyOff || it.deduct === false) return;
-          // 실제 차감됐던 양(deductedQty)만 복원 - 재고 부족으로 일부만 차감된 기록을
-          // 수정할 때 기록 수량 전체가 복원되어 재고가 부풀던 문제 방지 (구버전 기록은 qty로 폴백)
-          const amt = it.deductedQty != null ? it.deductedQty : it.qty;
-          if (it.source === "fridge") restoreFridge(stock, it.name, amt);
-          else restoreFrozen(stock, it.name, amt);
-        });
+        // 기존 기록의 차감분 복원 - deductedBatches(C-3)가 있으면 원 배치로 정확히,
+        // 없으면 deductedQty(→qty) 폴백. 재고 부풀림·배치 어긋남 방지
+        restoreLogDeductions(stock, dayLogs[idx]);
       }
-      // 실제 차감된 양(deductedQty)을 기록에 남김 (재고 부족 시 요청량보다 적을 수 있음 - 이후 수정·삭제 시 정확한 복원용).
+      // 실제 차감된 양(deductedQty)과 배치별 내역(deductedBatches)을 기록에 남김
+      // (재고 부족 시 요청량보다 적을 수 있음 - 이후 수정·삭제 시 원 배치로 정확히 복원).
       // action의 log 객체를 직접 변형하지 않고 새 객체로 만들어 저장 (리듀서 순수성 유지)
       const savedLog = {
         ...log,
         items: log.items.map((it) => {
-          if (it.deduct === false) return { ...it, deductedQty: 0 };
+          if (it.deduct === false) return { ...it, deductedQty: 0, deductedBatches: [] };
+          const trace = [];
           const actual = it.source === "fridge"
-            ? deductFridge(stock, it.name, it.qty) // qty=g
-            : deductFrozen(stock, it.name, it.qty); // qty=큐브
-          return { ...it, deductedQty: actual };
+            ? deductFridge(stock, it.name, it.qty, trace) // qty=g
+            : deductFrozen(stock, it.name, it.qty, trace); // qty=큐브
+          return { ...it, deductedQty: actual, deductedBatches: trace };
         }),
       };
       if (idx >= 0) dayLogs[idx] = savedLog;
@@ -479,7 +474,8 @@ export function stockFridgeG(state, name) {
 
 // 재고가 부족하면 있는 만큼만 차감하고, "실제로 차감된 양"을 반환함
 // (호출 쪽에서 요청량과 비교해 재고 부족 안내·정확한 복원에 사용)
-export function deductFrozen(stock, name, cubes) {
+// trace 배열을 넘기면 배치별 차감 내역 {batchId, qty}를 담아줌 (C-3: 원 배치 복원용)
+export function deductFrozen(stock, name, cubes, trace) {
   const batches = (stock[name] || { batches: [] }).batches;
   let remaining = cubes;
   const sorted = [...batches].sort((a, b) => a.date.localeCompare(b.date));
@@ -489,11 +485,12 @@ export function deductFrozen(stock, name, cubes) {
     const take = Math.min(Math.max(0, b.frozen || 0), remaining);
     b.frozen = (b.frozen || 0) - take;
     remaining -= take;
+    if (trace && take > 0) trace.push({ batchId: b.id, qty: take });
   }
   return cubes - remaining;
 }
 
-export function deductFridge(stock, name, grams) {
+export function deductFridge(stock, name, grams, trace) {
   const batches = (stock[name] || { batches: [] }).batches;
   let remaining = grams;
   const sorted = [...batches].sort((a, b) => (a.fridgeExp || "9").localeCompare(b.fridgeExp || "9"));
@@ -502,6 +499,7 @@ export function deductFridge(stock, name, grams) {
     const take = Math.min(Math.max(0, b.fridgeG || 0), remaining);
     b.fridgeG = (b.fridgeG || 0) - take;
     remaining -= take;
+    if (trace && take > 0) trace.push({ batchId: b.id, qty: take });
   }
   return grams - remaining;
 }
@@ -521,15 +519,65 @@ export function restoreFridge(stock, name, grams) {
   target.fridgeG = (target.fridgeG || 0) + grams;
 }
 
-// 급여 기록 한 건이 재고에 반영했던 차감분을 복원 (기록 삭제 시 사용)
-// deductedQty(실제 차감량)가 있으면 그만큼만, 없는 구버전 기록은 qty로 폴백
+// 배치 id로 특정 배치를 찾음 (없으면 null - 배치가 이후 삭제된 경우)
+function findBatch(stock, name, batchId) {
+  const cur = stock[name];
+  if (!cur || !cur.batches) return null;
+  return cur.batches.find((b) => b.id === batchId) || null;
+}
+
+// (C-3) 배치별 차감 내역(deductedBatches)이 있으면 "차감됐던 바로 그 배치"로 복원.
+// 배치가 삭제돼 없으면 해당 몫만 기존 방식(최근 배치)으로 폴백
+function restoreItemDeduction(stock, it) {
+  const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+  if (Array.isArray(it.deductedBatches) && it.deductedBatches.length > 0) {
+    it.deductedBatches.forEach(({ batchId, qty }) => {
+      const b = findBatch(stock, it.name, batchId);
+      if (b) {
+        if (it.source === "fridge") b.fridgeG = (b.fridgeG || 0) + qty;
+        else b.frozen = (b.frozen || 0) + qty;
+      } else if (it.source === "fridge") restoreFridge(stock, it.name, qty);
+      else restoreFrozen(stock, it.name, qty);
+    });
+    return;
+  }
+  // 구버전 기록(배치 내역 없음): 기존 방식 폴백
+  if (it.source === "fridge") restoreFridge(stock, it.name, amt);
+  else restoreFrozen(stock, it.name, amt);
+}
+
+// (C-3) 재차감도 가능하면 원 배치에서: 배치별 내역이 있으면 그 배치에서(잔량 한도 내),
+// 부족분·배치 없음은 FIFO 차감으로 폴백
+function redeductItemDeduction(stock, it) {
+  const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+  if (Array.isArray(it.deductedBatches) && it.deductedBatches.length > 0) {
+    let leftover = 0;
+    it.deductedBatches.forEach(({ batchId, qty }) => {
+      const b = findBatch(stock, it.name, batchId);
+      if (!b) { leftover += qty; return; }
+      const avail = it.source === "fridge" ? Math.max(0, b.fridgeG || 0) : Math.max(0, b.frozen || 0);
+      const take = Math.min(avail, qty);
+      if (it.source === "fridge") b.fridgeG = (b.fridgeG || 0) - take;
+      else b.frozen = (b.frozen || 0) - take;
+      leftover += qty - take;
+    });
+    if (leftover > 0) {
+      if (it.source === "fridge") deductFridge(stock, it.name, leftover);
+      else deductFrozen(stock, it.name, leftover);
+    }
+    return;
+  }
+  if (it.source === "fridge") deductFridge(stock, it.name, amt);
+  else deductFrozen(stock, it.name, amt);
+}
+
+// 급여 기록 한 건이 재고에 반영했던 차감분을 복원 (기록 삭제·수정 시 사용)
+// deductedBatches가 있으면 원 배치로 정확히, 없으면 deductedQty(→qty) 폴백
 export function restoreLogDeductions(stock, log) {
   if (log.stockAffected === false) return;
   (log.items || []).forEach((it) => {
     if (it.deduct === false) return;
-    const amt = it.deductedQty != null ? it.deductedQty : it.qty;
-    if (it.source === "fridge") restoreFridge(stock, it.name, amt);
-    else restoreFrozen(stock, it.name, amt);
+    restoreItemDeduction(stock, it);
   });
 }
 
@@ -538,9 +586,7 @@ export function redeductLogDeductions(stock, log) {
   if (log.stockAffected === false) return;
   (log.items || []).forEach((it) => {
     if (it.deduct === false) return;
-    const amt = it.deductedQty != null ? it.deductedQty : it.qty;
-    if (it.source === "fridge") deductFridge(stock, it.name, amt);
-    else deductFrozen(stock, it.name, amt);
+    redeductItemDeduction(stock, it);
   });
 }
 
