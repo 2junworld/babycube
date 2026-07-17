@@ -1,0 +1,433 @@
+/* 더보기 탭 - 설정·공유 멤버·여행 모드·끼니 설정 */
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History } from "lucide-react";
+import { db } from "../firebase";
+import { doc, setDoc } from "firebase/firestore";
+import { C, primaryBtn, selectStyle } from "../theme";
+import { addDaysISO, ageText, fmtTime, todayISO, uid } from "../lib/dates";
+import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, avgPlannedMealsPerDay, isStaple, migrateState } from "../state/appState";
+import { useStore } from "../store";
+import { CatDot, ConfirmModal, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
+import { downloadFile, feedingLogsToCSV } from "../lib/exporters";
+
+/* =====================================================================
+   더보기 하위 화면들
+   ===================================================================== */
+export function SettingsScreen({ onBack }) {
+  const { state, dispatch, notify } = useStore();
+  const s = state.settings;
+  const baby = state.baby;
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [importPending, setImportPending] = useState(null); // 검증 통과한 백업 데이터 (확인 대기)
+  const [importError, setImportError] = useState("");
+  const fileInputRef = useRef(null);
+  const set = (key, value) => dispatch({ type: "SET_SETTING", key, value });
+  const setBaby = (patch) => dispatch({ type: "BABY_SET", patch });
+  const doReset = () => { dispatch({ type: "RESET" }); setConfirmingReset(false); };
+  const handleFileSelected = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // 같은 파일을 다시 선택해도 onChange가 동작하도록 초기화
+    if (!file) return;
+    setImportError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        // 최소한의 형태 검증 - 베이비큐브 백업 파일인지 확인 (핵심 필드 존재 + 재료 마스터가 비어있지 않은지)
+        const looksValid = parsed && typeof parsed === "object"
+          && parsed.ingredients && typeof parsed.ingredients === "object" && Object.keys(parsed.ingredients).length > 0
+          && parsed.stock && typeof parsed.stock === "object"
+          && parsed.logs && typeof parsed.logs === "object"
+          && parsed.plans && typeof parsed.plans === "object";
+        if (!looksValid) {
+          setImportError("올바른 베이비큐브 백업 파일이 아니거나, 재료 정보가 비어있는 파일입니다.");
+          return;
+        }
+        setImportPending(parsed);
+      } catch (err) {
+        setImportError("파일을 읽을 수 없습니다. JSON 백업 파일인지 확인해 주세요.");
+      }
+    };
+    reader.readAsText(file);
+  };
+  const doImport = () => {
+    const backup = state; // 실행취소용 현재 데이터 백업 (가져오기 직전 상태)
+    const migrated = migrateState(importPending);
+    dispatch({ type: "HYDRATE", state: migrated });
+    setImportPending(null);
+    // 가족 공유 앱 특성상, 실행취소를 누르는 시점에 이미 다른 기기(배우자 등)의 변경이 반영돼 있을 수 있음.
+    // 그 사이 변화가 없을 때만 조용히 되돌리고, 변화가 있었다면 그 변경을 덮어써도 되는지 다시 물어봄.
+    notify("백업 데이터를 가져왔습니다", (currentState) => {
+      const unchangedSinceImport = JSON.stringify(currentState) === JSON.stringify(migrated);
+      if (!unchangedSinceImport) {
+        const proceed = window.confirm(
+          "가져오기 이후 추가로 반영된 변경사항이 있어요(다른 가족 구성원의 변경일 수 있어요). 그래도 가져오기 이전 데이터로 되돌릴까요? 그 사이 변경사항은 사라집니다."
+        );
+        if (!proceed) return;
+      }
+      dispatch({ type: "HYDRATE", state: backup });
+    }, 15000);
+  };
+  return (
+    <div style={{ paddingBottom: 90, position: "relative" }}>
+      <SubHeader title="설정" onBack={onBack} />
+      <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 18 }}>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>시간 표시 형식</div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px" }}>
+            <Segmented value={s.timeFmt} onChange={(v) => set("timeFmt", v)} options={[{ value: "24h", label: "24시간 (18:00)" }, { value: "ampm", label: "오전/오후 (오후 6:00)" }]} />
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, padding: "0 2px" }}>예시: {fmtTime("07:00", s.timeFmt)} · {fmtTime("18:00", s.timeFmt)}</div>
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>글자 크기</div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px" }}>
+            <Segmented value={s.fontScale || 1} onChange={(v) => set("fontScale", v)} options={[
+              { value: 0.9, label: "작게" },
+              { value: 1, label: "보통" },
+              { value: 1.15, label: "크게" },
+              { value: 1.3, label: "아주크게" },
+            ]} />
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, padding: "0 2px" }}>앱 전체 글자·화면 크기가 함께 조정됩니다.</div>
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>알림 · 보관</div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+            {[["frozenAlertDays", "냉동 소진 알림", "일 전"], ["fridgeAlertDays", "냉장 소진 알림", "일 전"], ["fridgeKeepDays", "냉장 보관 기본 기간", "일"]].map(([key, label, unit], i) => (
+              <div key={key} className="flex items-center justify-between" style={{ padding: "12px 14px", borderTop: i === 0 ? "none" : `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{label}</span>
+                <NumInput value={s[key]} onChange={(v) => set(key, v)} width={42} suffix={unit} />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>아기 정보</div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 11 }}>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12.5, color: C.ink }}>이름</span>
+              <input value={baby.name} onChange={(e) => setBaby({ name: e.target.value })} placeholder="이름 (선택)"
+                style={{ border: "none", background: "transparent", textAlign: "right", fontSize: 12.5, fontWeight: 700, color: C.ink, width: 130, outline: "none" }} />
+            </div>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12.5, color: C.ink }}>성별</span>
+              <Segmented value={baby.sex} onChange={(v) => setBaby({ sex: v })} options={[{ value: "남아", label: "남아" }, { value: "여아", label: "여아" }]} />
+            </div>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12.5, color: C.ink }}>생년월일</span>
+              <input type="date" value={baby.birth} onChange={(e) => setBaby({ birth: e.target.value })}
+                style={{ border: "none", background: "transparent", fontSize: 12.5, fontWeight: 700, color: C.ink, outline: "none" }} />
+            </div>
+            <div className="flex items-center justify-between" style={{ paddingTop: 7, borderTop: `1px dashed ${C.border}` }}>
+              <span style={{ fontSize: 12.5, color: C.ink }}>현재</span>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>{ageText(baby.birth)}</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>데이터</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(() => {
+              // 클라우드 문서 사용량 - Firestore 문서 한도(1MiB) 대비 현재 크기
+              const bytes = JSON.stringify(state).length;
+              const pct = Math.round((bytes / DOC_SIZE_LIMIT_BYTES) * 100);
+              const warn = bytes > DOC_SIZE_WARN_BYTES;
+              return (
+                <div style={{ background: C.surface, border: `1px solid ${warn ? C.apricot : C.border}`, borderRadius: 12, padding: "12px 14px" }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>저장 공간 사용량</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: warn ? C.apricot : C.sageDeep }}>{Math.round(bytes / 1024)}KB / 1MB ({pct}%)</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, background: C.border, overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: warn ? C.apricot : C.sage }} />
+                  </div>
+                  {warn && (
+                    <div style={{ fontSize: 11, color: C.apricot, fontWeight: 600, marginTop: 7 }}>
+                      한도에 가까워지고 있어요. 오래된 급여 기록·식단을 정리하면 공간이 줄어듭니다.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <button onClick={() => downloadFile(`babycube-backup-${todayISO()}.json`, JSON.stringify(state, null, 2), "application/json")}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
+              전체 데이터 내보내기 (JSON 백업)
+            </button>
+            <button onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
+              데이터 가져오기 (JSON 백업 복원)
+            </button>
+            <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleFileSelected} style={{ display: "none" }} />
+            {importError && <div style={{ fontSize: 11, color: C.apricot, fontWeight: 600, padding: "0 2px" }}>{importError}</div>}
+            <button onClick={() => downloadFile(`babycube-feeding-logs-${todayISO()}.csv`, "﻿" + feedingLogsToCSV(state), "text/csv;charset=utf-8;")}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
+              급여 기록 내보내기 (CSV)
+            </button>
+            <button onClick={() => setConfirmingReset(true)}
+              style={{ width: "100%", background: C.surface, border: `1px solid ${C.apricot}`, borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 700, color: C.apricot, cursor: "pointer" }}>
+              초기 데이터로 재설정
+            </button>
+          </div>
+        </div>
+      </div>
+      {confirmingReset && (
+        <ConfirmModal
+          title="모든 데이터를 초기화할까요?"
+          message="식단·재고·기록이 모두 초기 상태로 되돌아갑니다. 되돌릴 수 없습니다."
+          confirmLabel="초기화"
+          onConfirm={doReset}
+          onCancel={() => setConfirmingReset(false)}
+        />
+      )}
+      {importPending && (
+        <ConfirmModal
+          title="백업 데이터를 가져올까요?"
+          message="가져오기를 하면 현재 저장된 모든 데이터(식단·재고·기록 등)가 선택한 백업 파일 내용으로 완전히 교체됩니다. 가족 구성원 모두의 화면에 즉시 반영돼요."
+          warning="가져온 직후 잠시 동안은 하단 '실행취소'로 가져오기 전 데이터로 되돌릴 수 있습니다. 그 이후엔 되돌릴 수 없으니 신중하게 진행해 주세요."
+          confirmLabel="가져오기"
+          danger
+          onConfirm={doImport}
+          onCancel={() => setImportPending(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+export function MembersScreen({ onBack }) {
+  const { cloud } = useStore();
+  const [copied, setCopied] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  // (C-1) 구버전 가족 호환: 초대 코드 매핑 문서(invites/{code})가 없으면
+  // 멤버가 이 화면을 열 때 만들어 둠 - 강화된 규칙에서도 기존 코드로 합류 가능해짐
+  const inviteFamilyId = cloud && cloud.user && cloud.user.uid !== "demo" ? cloud.familyId : null;
+  useEffect(() => {
+    if (!inviteFamilyId) return;
+    setDoc(doc(db, "invites", inviteFamilyId), { familyId: inviteFamilyId }, { merge: true }).catch(() => {});
+  }, [inviteFamilyId]);
+  if (!cloud) return null;
+  const { familyId, user, meta, leaveFamily, logout } = cloud;
+  const memberList = (meta.members || []).map((uid) => ({ uid, ...(meta.memberInfo?.[uid] || {}) }));
+
+  const copyCode = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(familyId).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div style={{ paddingBottom: 90, position: "relative" }}>
+      <SubHeader title="공유 멤버" onBack={onBack} />
+      <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ background: C.sageLight, borderRadius: 14, padding: 16, textAlign: "center" }}>
+          <div style={{ fontSize: 11, color: C.sageDeep, fontWeight: 700, marginBottom: 6 }}>초대 코드</div>
+          <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: 3, color: C.sageDeep, fontFamily: "'Gowun Dodum', sans-serif", marginBottom: 10 }}>{familyId}</div>
+          <button onClick={copyCode} style={{ background: C.surface, border: "none", borderRadius: 999, padding: "6px 14px", fontSize: 11.5, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>{copied ? "복사됨" : "코드 복사"}</button>
+        </div>
+
+        <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px" }}>구성원 ({memberList.length})</div>
+        {memberList.map((m) => (
+          <div key={m.uid} className="flex items-center" style={{ gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 14px" }}>
+            <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: "50%", background: C.sageLight }}><Users size={16} color={C.sageDeep} /></div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{m.name || m.email || "이름 없음"}{m.uid === user.uid ? " (나)" : ""}</div>
+              {m.email && <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>{m.email}</div>}
+            </div>
+          </div>
+        ))}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          <button onClick={() => setConfirmLeave(true)} style={{ background: "none", border: `1px solid ${C.apricot}`, borderRadius: 12, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.apricot, cursor: "pointer" }}>이 가족에서 나가기</button>
+          <button onClick={logout} style={{ background: "none", border: "none", fontSize: 12, color: C.muted, cursor: "pointer" }}>로그아웃</button>
+        </div>
+      </div>
+      {confirmLeave && (
+        <ConfirmModal
+          title="가족에서 나가시겠어요?"
+          message="더 이상 이 가족의 데이터를 볼 수 없게 됩니다."
+          confirmLabel="나가기"
+          onConfirm={leaveFamily}
+          onCancel={() => setConfirmLeave(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+export function TravelScreen({ onBack }) {
+  const { state, dispatch } = useStore();
+  const tv = state.travel;
+  const set = (patch) => dispatch({ type: "TRAVEL_SET", patch });
+  // 필요 큐브 산출: 최근 식단 평균 재료 사용량 기반
+  const cubeNeed = useMemo(() => {
+    if (!tv.start || !tv.end) return [];
+    const days = Math.max(1, Math.round((new Date(tv.end) - new Date(tv.start)) / 86400000) + 1);
+    const usage = {};
+    const t = todayISO();
+    let counted = 0;
+    for (let i = 1; i <= 7; i++) {
+      const meals = state.plans[addDaysISO(t, -i)] || [];
+      if (meals.length) counted++;
+      meals.forEach((m) => m.items.forEach((it) => { if (!isStaple(state, it.name)) usage[it.name] = (usage[it.name] || 0) + it.qty; }));
+    }
+    const perDay = counted || 1;
+    // 분모: 하루 3끼 고정 대신 최근 7일 계획의 하루 평균 끼니 수 (계획 없으면 끼니 설정 개수) - P2-3
+    const avgMeals = avgPlannedMealsPerDay(state);
+    return Object.entries(usage).map(([name, q]) => ({ name, cubes: Math.ceil((q / perDay) * days * (tv.mealsPerDay / avgMeals)) })).sort((a, b) => b.cubes - a.cubes);
+  }, [tv.start, tv.end, tv.mealsPerDay, state.plans, state.mealSlots]);
+
+  const defChecklist = ["냉동 큐브 챙기기 (드라이아이스)", "카페리 탑승용 1끼 캐리어 별도 포장", "숙소 냉동고·전자레인지 확인", "상비용 시판 이유식"];
+  const checklist = tv.checklist.length ? tv.checklist : defChecklist.map((t) => ({ text: t, done: false }));
+
+  return (
+    <div style={{ paddingBottom: 90 }}>
+      <SubHeader title="여행 모드" onBack={onBack} right={
+        <button onClick={() => set({ active: !tv.active })} style={{ fontSize: 11.5, fontWeight: 700, padding: "5px 12px", borderRadius: 999, border: "none", cursor: "pointer", background: tv.active ? C.sage : C.sageLight, color: tv.active ? "#fff" : C.sageDeep }}>{tv.active ? "켜짐" : "꺼짐"}</button>
+      } />
+      <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 11 }}>
+          <div className="flex items-center justify-between"><span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>출발</span><input type="date" value={tv.start} onChange={(e) => set({ start: e.target.value })} style={{ border: "none", background: "transparent", fontSize: 12.5, fontWeight: 700, color: C.ink, outline: "none" }} /></div>
+          <div className="flex items-center justify-between"><span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>도착</span><input type="date" value={tv.end} onChange={(e) => set({ end: e.target.value })} style={{ border: "none", background: "transparent", fontSize: 12.5, fontWeight: 700, color: C.ink, outline: "none" }} /></div>
+          <div className="flex items-center justify-between"><span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>하루 끼니 수</span>
+            <select value={tv.mealsPerDay} onChange={(e) => set({ mealsPerDay: Number(e.target.value) })} style={selectStyle}>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}끼</option>)}</select>
+          </div>
+        </div>
+        {cubeNeed.length > 0 && (
+          <div>
+            <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>필요 큐브 (예상)</div>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 7, padding: "0 2px" }}>최근 7일 계획 기준 하루 평균 {Math.round(avgPlannedMealsPerDay(state) * 10) / 10}끼 대비 여행 중 {tv.mealsPerDay}끼로 환산한 값이에요.</div>
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 7 }}>
+              {cubeNeed.map((c) => (
+                <div key={c.name} className="flex items-center justify-between"><div className="flex items-center"><CatDot name={c.name} size={7} /><span style={{ fontSize: 12.5, color: C.ink }}>{c.name}</span></div><span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{c.cubes}큐브</span></div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>준비 체크리스트</div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+            {checklist.map((c, i) => (
+              <button key={i} onClick={() => { const nc = checklist.map((x, j) => j === i ? { ...x, done: !x.done } : x); set({ checklist: nc }); }}
+                className="flex items-center" style={{ width: "100%", gap: 10, padding: "11px 13px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
+                <span style={{ width: 19, height: 19, borderRadius: 6, border: `1.5px solid ${c.done ? C.sage : C.border}`, background: c.done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{c.done && <Check size={12} color="#fff" />}</span>
+                <span style={{ fontSize: 12.5, color: c.done ? C.muted : C.ink, textDecoration: c.done ? "line-through" : "none" }}>{c.text}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   끼니 설정 (끼니 종류 이름·시간을 미리 정의 → 식단표 입력 시 선택 목록으로 사용)
+   ===================================================================== */
+export function MealSlotsScreen({ onBack }) {
+  const { state } = useStore();
+  const [editing, setEditing] = useState(null); // null | 'new' | slotObj
+  const timeFmt = state.settings.timeFmt;
+  const sorted = [...state.mealSlots].sort((a, b) => a.time.localeCompare(b.time));
+
+  return (
+    <div style={{ paddingBottom: 90, position: "relative" }}>
+      <SubHeader title="끼니 설정" onBack={onBack} right={
+        <button onClick={() => setEditing("new")} className="flex items-center" style={{ gap: 3, background: "none", border: "none", cursor: "pointer" }}>
+          <Plus size={14} color={C.sageDeep} /><span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>추가</span>
+        </button>
+      } />
+      <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, padding: "0 2px" }}>
+          여기서 정한 끼니 이름과 시간이 식단표에서 끼니를 추가할 때 선택 목록으로 사용됩니다. 예: 아침 · 점심 · 저녁, 또는 첫 끼니 · 둘째 끼니 · 간식1
+        </div>
+        {sorted.length === 0 && <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12.5, color: C.muted }}>등록된 끼니 종류가 없습니다.</div>}
+        {sorted.map((s) => (
+          <button key={s.id} onClick={() => setEditing(s)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "13px 14px", cursor: "pointer" }}>
+            <div className="flex items-center" style={{ gap: 10 }}>
+              <div className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: 9, background: C.sageLight, flexShrink: 0 }}><Clock size={14} color={C.sageDeep} /></div>
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{s.label}</span>
+            </div>
+            <div className="flex items-center" style={{ gap: 6 }}>
+              <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{fmtTime(s.time, timeFmt)}</span>
+              <ChevronRight size={15} color={C.muted} />
+            </div>
+          </button>
+        ))}
+      </div>
+      {editing && <MealSlotEditModal slot={editing} timeFmt={timeFmt} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+export function MealSlotEditModal({ slot, timeFmt, onClose }) {
+  const { dispatch } = useStore();
+  const isNew = slot === "new";
+  const base = isNew ? {} : slot;
+  const [label, setLabel] = useState(base.label || "");
+  const [time, setTime] = useState(base.time || "12:00");
+  const [confirmingDel, setConfirmingDel] = useState(false);
+
+  const save = () => {
+    if (!label) return;
+    dispatch({ type: "MEALSLOT_UPSERT", slot: { id: isNew ? undefined : base.id, label, time } });
+    onClose();
+  };
+  const del = () => { dispatch({ type: "MEALSLOT_DELETE", id: base.id }); onClose(); };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px 26px", position: "relative" }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{isNew ? "끼니 종류 추가" : "끼니 종류 수정"}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>이름</span>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="예: 간식1, 첫 끼니"
+              style={{ border: "none", background: "transparent", textAlign: "right", fontSize: 13, fontWeight: 700, color: C.ink, width: 150, outline: "none" }} />
+          </div>
+          <TimePicker time={time} setTime={setTime} timeFmt={timeFmt} />
+          <button onClick={save} style={primaryBtn}>{isNew ? "추가" : "저장"}</button>
+          {!isNew && <button onClick={() => setConfirmingDel(true)} style={{ background: "none", border: "none", color: C.apricot, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "2px 0" }}>이 끼니 종류 삭제</button>}
+        </div>
+        {confirmingDel && (
+          <ConfirmModal
+            title={`'${label}' 끼니 종류를 삭제할까요?`}
+            message="이미 식단표·기록에 저장된 항목은 그대로 남아있습니다."
+            onConfirm={del}
+            onCancel={() => setConfirmingDel(false)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function MoreTab({ go }) {
+  const items = [
+    { key: "mealSlots", icon: Clock, label: "끼니 설정", sub: "끼니 이름·시간 관리" },
+    { key: "manufactureHistory", icon: History, label: "제조 이력", sub: "재료별 제조 배치 기록 조회" },
+    { key: "members", icon: Users, label: "공유 멤버", sub: "초대 코드 · 구성원 관리" },
+    { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
+    { key: "settings", icon: Settings2, label: "설정", sub: "시간 형식 · 알림 · 아기 정보" },
+  ];
+  return (
+    <div style={{ paddingBottom: 90 }}>
+      <ScreenHeader title="더보기" />
+      <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {items.map((it) => (
+          <button key={it.key} onClick={() => go(it.key)} className="flex items-center" style={{ gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "13px 14px", cursor: "pointer", width: "100%", textAlign: "left" }}>
+            <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: 10, background: C.sageLight, flexShrink: 0 }}><it.icon size={16} color={C.sageDeep} /></div>
+            <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{it.label}</div><div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{it.sub}</div></div>
+            <ChevronRight size={16} color={C.muted} />
+          </button>
+        ))}
+      </div>
+      <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
+        베이비큐브 · v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?"} — 업데이트 후 앱을 완전히 종료했다 열면 적용돼요
+      </div>
+    </div>
+  );
+}

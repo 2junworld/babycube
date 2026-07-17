@@ -1,0 +1,287 @@
+/* 선택기 모달 - 재료·끼니 종류·식단 복사 */
+import React, { useState, useEffect } from "react";
+import { Plus, X, Check, Search, Star } from "lucide-react";
+import { C, CATEGORIES } from "../theme";
+import { fmtTime, todayISO } from "../lib/dates";
+import { DB_CATEGORY } from "../data/nutrition";
+import { catOf, normalizeIngredientName, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
+import { useStore } from "../store";
+import { BottomSheet, CatDot, MealItemList, useVisualViewport } from "./common";
+import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedTodayMap } from "../lib/pairing";
+import { primaryBtn } from "../theme";
+
+/* =====================================================================
+   재료 선택 모달
+   ===================================================================== */
+// multi=true면 체크박스로 여러 재료를 한 번에 골라 onPick(names[])으로 전달, false면 기존처럼 탭 즉시 onPick(name) 1건
+// 정렬은 여러 기준을 동시에 켤 수 있음(중복 선택) — 아래 고정된 우선순위(즐겨찾기 > 오늘 사용 재료 > 궁합 좋은 재료 >
+// 재고순 > 카테고리순) 순서로 앞 기준이 같을 때만 다음 기준으로 넘어가며, 마지막엔 항상 이름순으로 마무리함.
+// 재고순만 한 칩을 반복 클릭하면 꺼짐→적은순→많은순→꺼짐 순으로 도는 3단 토글.
+export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], date = todayISO() }) {
+  const { state, dispatch } = useStore();
+  const vv = useVisualViewport();
+  const [q, setQ] = useState("");
+  const [cat, setCat] = useState("전체");
+  const [newCat, setNewCat] = useState("채소");
+  const [selected, setSelected] = useState([]);
+  const [sortSel, setSortSel] = useState({ fav: false, excludeUsedToday: false, pairing: false, stock: null, cat: true });
+  const [linkBase, setLinkBase] = useState(true); // 변형 재료 자동 연결 여부 (기본 켬)
+  const names = Object.keys(state.ingredients);
+  // 새 재료 입력 시: 영양 DB에 있으면 카테고리 자동 선택, 변형 재료로 보이면 기본 재료의 카테고리를 미리 선택
+  const newSuggestion = q && !names.includes(q) ? suggestBaseFor(state, q) : null;
+  useEffect(() => {
+    setLinkBase(true);
+    if (DB_CATEGORY[q]) setNewCat(DB_CATEGORY[q]);
+    else if (newSuggestion) setNewCat(catOf(state, newSuggestion));
+  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+  const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
+  const isFavorite = (n) => !!(state.ingredients[n] && state.ingredients[n].favorite);
+  const usedTodayG = usedTodayMap(state, date);
+  const toggleSortFav = () => setSortSel((s) => ({ ...s, fav: !s.fav }));
+  const toggleExcludeUsedToday = () => setSortSel((s) => ({ ...s, excludeUsedToday: !s.excludeUsedToday }));
+  const toggleSortPairing = () => setSortSel((s) => ({ ...s, pairing: !s.pairing }));
+  const toggleSortStock = () => setSortSel((s) => ({ ...s, stock: s.stock === null ? "asc" : s.stock === "asc" ? "desc" : null }));
+  const toggleSortCat = () => setSortSel((s) => ({ ...s, cat: !s.cat }));
+  // "오늘 사용 재료 제외"는 정렬이 아니라 목록 자체에서 걸러내는 필터
+  const base = names.filter((n) => (cat === "전체" || catOf(state, n) === cat) && n.includes(q) && (!sortSel.excludeUsedToday || !usedTodayG.has(n)));
+  const sortChain = [];
+  if (sortSel.fav) sortChain.push((a, b) => { const fa = isFavorite(a), fb = isFavorite(b); return fa !== fb ? (fa ? -1 : 1) : 0; });
+  if (sortSel.pairing) sortChain.push((a, b) => {
+    const ra = pairingRankFor(state, alreadyAdded, a), rb = pairingRankFor(state, alreadyAdded, b);
+    if (ra === rb) return 0;
+    if (ra === null) return 1;
+    if (rb === null) return -1;
+    return ra - rb; // 궁합 근거 A(0) > B(1)
+  });
+  if (sortSel.stock) sortChain.push((a, b) => {
+    const sa = stockAmt(a), sb = stockAmt(b);
+    const aHas = sa > 0, bHas = sb > 0;
+    if (aHas !== bHas) return aHas ? -1 : 1; // 재고 있는 재료가 항상 먼저
+    return sortSel.stock === "asc" ? sa - sb : sb - sa;
+  });
+  if (sortSel.cat) sortChain.push((a, b) => CATEGORIES.indexOf(catOf(state, a)) - CATEGORIES.indexOf(catOf(state, b)));
+  sortChain.push((a, b) => a.localeCompare(b, "ko")); // 최종 안정 정렬(동률 시 이름순)
+  const filtered = [...base].sort((a, b) => {
+    for (const cmp of sortChain) {
+      const r = cmp(a, b);
+      if (r !== 0) return r;
+    }
+    return 0;
+  });
+  const isNew = (q || "").trim() && !names.includes((q || "").trim());
+  const addedSet = new Set(alreadyAdded);
+
+  const confirmNew = () => {
+    // 이후 식단·기록에 들어가는 이름과 재료 마스터 키가 일치하도록 등록 전에 정규화(공백 제거)
+    const name = normalizeIngredientName(q);
+    if (!name) return;
+    // 변형 재료 연결이 켜져 있으면 baseOf까지 함께 등록 → 영양 태그·궁합 특성이 즉시 따라옴
+    dispatch({ type: "INGREDIENT_ENSURE", name, cat: newCat, baseOf: linkBase && newSuggestion ? newSuggestion : undefined });
+    dispatch({ type: "INGREDIENT_TOUCH", name });
+    if (multi) {
+      setSelected((p) => p.includes(name) ? p : [...p, name]);
+      setQ("");
+    } else {
+      onPick(name, newCat);
+    }
+  };
+
+  const pickOne = (n) => { dispatch({ type: "INGREDIENT_TOUCH", name: n }); onPick(n); };
+  const toggleFavorite = (n, e) => { e.stopPropagation(); dispatch({ type: "INGREDIENT_TOGGLE_FAVORITE", name: n }); };
+  const toggle = (n) => setSelected((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n]);
+  const confirmSelection = () => { dispatch({ type: "INGREDIENT_TOUCH", names: selected }); onPick(selected); onClose(); };
+
+  return (
+    <div style={{ position: "fixed", top: vv.offsetTop, left: 0, right: 0, height: vv.height, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
+        <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{multi ? `재료 선택${selected.length ? ` (${selected.length})` : ""}` : "재료 선택"}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
+        </div>
+        <div style={{ padding: "0 18px 10px" }}>
+          <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px", marginBottom: 9 }}>
+            <Search size={15} color={C.muted} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료 검색 또는 새 재료 입력"
+              style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+          </div>
+          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {["전체", ...CATEGORIES].map((c) => (
+              <button key={c} onClick={() => setCat(c)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+                border: "none", background: cat === c ? C.sage : C.sageLight, color: cat === c ? "#fff" : C.sageDeep }}>{c}</button>
+            ))}
+          </div>
+          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>정렬(중복 선택 가능)</span>
+            {[
+              { on: sortSel.fav, onClick: toggleSortFav, label: "즐겨찾기" },
+              { on: sortSel.excludeUsedToday, onClick: toggleExcludeUsedToday, label: "오늘 사용 재료 제외" },
+              { on: sortSel.pairing, onClick: toggleSortPairing, label: "궁합 좋은 재료" },
+              { on: sortSel.stock !== null, onClick: toggleSortStock, label: sortSel.stock === "desc" ? "재고 많은순" : sortSel.stock === "asc" ? "재고 적은순" : "재고순" },
+              { on: sortSel.cat, onClick: toggleSortCat, label: "카테고리순" },
+            ].map((o, i) => (
+              <button key={i} onClick={o.onClick} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+                border: `1px solid ${o.on ? C.sage : C.border}`, background: o.on ? C.sageLight : "transparent", color: o.on ? C.sageDeep : C.muted }}>{o.label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
+          {isNew && (
+            <div style={{ marginBottom: 10, background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "11px 12px" }}>
+              <div className="flex items-center" style={{ gap: 8, marginBottom: 9 }}>
+                <Plus size={15} color={C.sageDeep} />
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>'{q}' 새 재료로 추가</span>
+              </div>
+              <div style={{ fontSize: 10.5, color: C.sageDeep, fontWeight: 700, marginBottom: 6 }}>카테고리</div>
+              <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {CATEGORIES.map((c) => (
+                  <button key={c} onClick={() => setNewCat(c)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+                    border: "none", background: newCat === c ? C.sage : C.surface, color: newCat === c ? "#fff" : C.sageDeep }}>{c}</button>
+                ))}
+              </div>
+              {newSuggestion && (
+                <button onClick={() => setLinkBase((v) => !v)} className="flex items-center" style={{ gap: 8, background: C.surface, border: "none", borderRadius: 10, padding: "8px 10px", marginBottom: 10, width: "100%", cursor: "pointer", textAlign: "left" }}>
+                  <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${linkBase ? C.sage : C.border}`,
+                    background: linkBase ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {linkBase && <Check size={12} color="#fff" />}
+                  </span>
+                  <span style={{ fontSize: 11.5, color: C.sageDeep, lineHeight: 1.4 }}>'{newSuggestion}'의 변형으로 연결 — 영양·궁합 특성을 물려받아요</span>
+                </button>
+              )}
+              <button onClick={confirmNew} style={{ ...primaryBtn, padding: "9px 0", fontSize: 12.5 }}>'{q}' 추가하기</button>
+              <div style={{ fontSize: 9.5, color: C.sageDeep, marginTop: 8, lineHeight: 1.4, opacity: 0.8 }}>
+                여러 재료가 섞인 혼합 큐브라면, 추가 후 재고 탭 → 재료 정보에서 구성 재료를 지정하면 궁합 계산에 반영돼요.
+              </div>
+            </div>
+          )}
+          {filtered.map((n) => {
+            const cubes = stockTotalCubes(state, n), fg = stockFridgeG(state, n);
+            const already = multi && addedSet.has(n);
+            const checked = selected.includes(n);
+            const fav = isFavorite(n);
+            const pairInfo = sortSel.pairing ? pairingInfoFor(state, alreadyAdded, n) : null;
+            return (
+              <button key={n} onClick={() => (multi ? (already ? null : toggle(n)) : pickOne(n))} disabled={already}
+                className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
+                borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid",
+                cursor: already ? "default" : "pointer", opacity: already ? 0.45 : 1 }}>
+                <div className="flex items-center" style={{ gap: multi ? 9 : 6, minWidth: 0 }}>
+                  {multi && (
+                    <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${checked ? C.sage : C.border}`,
+                      background: checked ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      {checked && <Check size={12} color="#fff" />}
+                    </span>
+                  )}
+                  <span role="button" onClick={(e) => toggleFavorite(n, e)} style={{ display: "flex", padding: 2, cursor: "pointer" }}>
+                    <Star size={13} color={fav ? C.apricot : C.border} fill={fav ? C.apricot : "none"} />
+                  </span>
+                  <CatDot name={n} size={8} /><span style={{ fontSize: 13, color: C.ink }}>{n}</span>
+                  {usedTodayG.has(n) && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>오늘 {Math.round(usedTodayG.get(n))}g</span>
+                  )}
+                  {pairInfo && pairInfo.goodWith.length > 0 && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>{pairInfo.goodWith.join("·")}와 궁합</span>
+                  )}
+                  {pairInfo && pairInfo.avoidWith.length > 0 && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: "#9A4A1E", background: C.apricotLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>{pairInfo.avoidWith.join("·")}와 비추천</span>
+                  )}
+                </div>
+                <span style={{ fontSize: 11, color: cubes || fg ? C.muted : C.apricot, flexShrink: 0 }}>
+                  {already ? "이미 담김" : cubes || fg ? `냉동 ${cubes}${fg ? ` · 냉장 ${fg}g` : ""}` : "재고없음"}
+                </span>
+              </button>
+            );
+          })}
+          {filtered.length === 0 && !isNew && (
+            <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>검색 결과가 없습니다</div>
+          )}
+        </div>
+        {multi && (
+          <div style={{ padding: "10px 18px 20px", borderTop: `1px solid ${C.border}` }}>
+            <button onClick={confirmSelection} disabled={selected.length === 0}
+              style={{ ...primaryBtn, background: selected.length ? C.sage : C.sageLight, color: selected.length ? "#fff" : C.muted, cursor: selected.length ? "pointer" : "default" }}>
+              {selected.length > 0 ? `${selected.length}개 재료 추가` : "재료를 선택하세요"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   끼니 종류 선택 모달 (더보기 → 끼니 설정에서 미리 정의한 목록 중 선택)
+   ===================================================================== */
+export function MealSlotPicker({ slots, timeFmt, onPick, onClose }) {
+  const [custom, setCustom] = useState("");
+  const sorted = [...slots].sort((a, b) => a.time.localeCompare(b.time));
+  return (
+    <BottomSheet title="끼니 종류 선택" onClose={onClose}>
+        <div style={{ overflowY: "auto", padding: "0 18px 10px" }}>
+          {sorted.map((s) => (
+            <button key={s.id} onClick={() => onPick(s.label, s.time)} className="flex items-center justify-between" style={{ width: "100%", padding: "12px 12px",
+              borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{s.label}</span>
+              <span style={{ fontSize: 11.5, color: C.muted }}>{fmtTime(s.time, timeFmt)}</span>
+            </button>
+          ))}
+          {sorted.length === 0 && (
+            <div style={{ textAlign: "center", padding: "20px 0", fontSize: 12, color: C.muted }}>
+              등록된 끼니 종류가 없습니다.<br />더보기 → 끼니 설정에서 추가해 보세요.
+            </div>
+          )}
+        </div>
+        <div style={{ padding: "10px 18px 24px", borderTop: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginBottom: 7 }}>목록에 없는 끼니라면 직접 입력</div>
+          <div className="flex items-center" style={{ gap: 8 }}>
+            <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="예: 야식"
+              style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.ink, outline: "none" }} />
+            <button onClick={() => custom && onPick(custom, null)} disabled={!custom}
+              style={{ background: custom ? C.sage : C.sageLight, border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, color: custom ? "#fff" : C.muted, cursor: custom ? "pointer" : "default" }}>선택</button>
+          </div>
+        </div>
+    </BottomSheet>
+  );
+}
+
+/* =====================================================================
+   다른 날짜의 끼니를 복사해오는 선택기 (식단표 재료 재입력 수고를 줄이기 위함)
+   ===================================================================== */
+export function MealCopyPicker({ onPick, onClose }) {
+  const { state } = useStore();
+  const [q, setQ] = useState("");
+  const timeFmt = state.settings.timeFmt;
+  const all = [];
+  Object.keys(state.plans).sort((a, b) => b.localeCompare(a)).forEach((d) => {
+    (state.plans[d] || []).forEach((m) => all.push({ date: d, meal: m }));
+  });
+  const filtered = all.filter(({ date, meal }) =>
+    !q || meal.label.includes(q) || date.includes(q) || meal.items.some((it) => it.name.includes(q))
+  );
+  return (
+    <BottomSheet title="식단 복사" onClose={onClose}>
+        <div style={{ padding: "0 18px 10px" }}>
+          <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
+            <Search size={15} color={C.muted} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="날짜, 끼니 이름, 재료로 검색"
+              style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+          </div>
+          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8 }}>선택하면 현재 재료 목록이 해당 끼니 재료로 대체됩니다.</div>
+        </div>
+        <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
+          {filtered.map(({ date, meal }) => (
+            <button key={date + meal.id} onClick={() => { onPick(meal); onClose(); }} className="flex flex-col" style={{ width: "100%", textAlign: "left", padding: "10px 12px",
+              borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{date} · {meal.label}</span>
+                <span style={{ fontSize: 10.5, color: C.muted }}>{fmtTime(meal.time, timeFmt)}</span>
+              </div>
+              <MealItemList items={meal.items} fontSize={10.5} wrap />
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>복사할 수 있는 끼니 기록이 없습니다</div>
+          )}
+        </div>
+    </BottomSheet>
+  );
+}

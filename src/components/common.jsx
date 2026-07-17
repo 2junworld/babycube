@@ -310,3 +310,25 @@ export function BottomSheet({ title, onClose, maxHeight = "78%", children }) {
     </div>
   );
 }
+
+/* =====================================================================
+   기록 탭
+   ===================================================================== */
+export function Chip({ children, cat, tone = "default", onClick, onDelete }) {
+  const tones = { default: { bg: C.sageLight, fg: C.sageDeep }, warn: { bg: C.apricotLight, fg: C.apricot } };
+  const tn = (cat && CATEGORY[cat]) ? { bg: CATEGORY[cat].light, fg: CATEGORY[cat].color } : tones[tone];
+  return (
+    <span className="flex items-center" style={{ background: tn.bg, borderRadius: 999, overflow: "hidden" }}>
+      <button onClick={onClick} disabled={!onClick} style={{ background: "none", border: "none", padding: onDelete ? "5px 4px 5px 10px" : "5px 10px",
+        fontSize: 11.5, fontWeight: 600, color: tn.fg, cursor: onClick ? "pointer" : "default" }}>
+        {children}
+      </button>
+      {onDelete && (
+        <button onClick={onDelete} style={{ background: "rgba(0,0,0,0.08)", border: "none", width: 16, height: 16, borderRadius: "50%",
+          display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, marginRight: 5, flexShrink: 0 }}>
+          <X size={9} color={tn.fg} />
+        </button>
+      )}
+    </span>
+  );
+}
