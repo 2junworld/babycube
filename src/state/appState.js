@@ -680,3 +680,7 @@ export function sortByCategory(state, list, nameOf = (x) => x.name) {
     return nameOf(a).localeCompare(nameOf(b), "ko");
   });
 }
+
+// Firestore 문서 한도(1MiB)와 경고 임계치 - state가 이 한도를 넘으면 저장 자체가 실패하므로 미리 경고
+export const DOC_SIZE_LIMIT_BYTES = 1048576;
+export const DOC_SIZE_WARN_BYTES = 700 * 1024;
