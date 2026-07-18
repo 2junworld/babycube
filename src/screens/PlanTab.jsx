@@ -5,7 +5,7 @@ import { C } from "../theme";
 import { WD, addDaysISO, fmtTime, pad2, todayISO, uid } from "../lib/dates";
 import { totalG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
-import { CategoryBar, CategoryLegend, FromRecordBadge, IngredientTable, MealItemList, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
+import { AuthorInfo, CategoryBar, CategoryLegend, FromRecordBadge, IngredientTable, MealItemList, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { useDetailView } from "./uiPrefs";
 import { weekMealLabels } from "../lib/mealLabels";
 import { GrowthStageHint, MealTipsPanel } from "../components/hints";
@@ -85,6 +85,10 @@ export function MealEditScreen({ date, meal, onBack }) {
         <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
           <Plus size={14} /> 재료 추가
         </button>
+
+        {meal.id && (
+          <AuthorInfo createdBy={meal.createdBy} createdAt={meal.createdAt} updatedBy={meal.updatedBy} updatedAt={meal.updatedAt} />
+        )}
 
         <button onClick={save} disabled={!label} style={{ ...primaryBtn, background: label ? C.sage : C.sageLight, color: label ? "#fff" : C.muted, cursor: label ? "pointer" : "default" }}>
           {label ? "저장" : "끼니 종류를 선택하세요"}

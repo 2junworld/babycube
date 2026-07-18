@@ -6,7 +6,7 @@ import { C, CATEGORIES, primaryBtn } from "../theme";
 import { WD, addDaysISO, fmtTime, pad2, todayISO } from "../lib/dates";
 import { catOf, gOf, logProvideG, sortByCategory, totalG, unrestorableStockNames } from "../state/appState";
 import { useStore } from "../store";
-import { BottomSheet, CatDot, CategoryLegend, CategoryTotalsBar, Chip, ConfirmModal, ScreenHeader, Segmented, SubHeader } from "../components/common";
+import { AuthorInfo, BottomSheet, CatDot, CategoryLegend, CategoryTotalsBar, Chip, ConfirmModal, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE } from "./uiPrefs";
 import { monthProducedG, monthStats, weeklyRates } from "../lib/stats";
 import { weekLogLabels } from "../lib/mealLabels";
@@ -498,14 +498,17 @@ export function RecordHistoryScreen({ onBack }) {
               const prov = logProvideG(log);
               const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
               return (
-                <div key={log.id} className="flex items-center justify-between" style={{ marginBottom: 3, gap: 8 }}>
-                  <span style={{ fontSize: 11.5, color: C.inkSoft }}>{log.label} · {prov}g 중 {log.intakeG}g</span>
-                  <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11.5, fontWeight: 700, color: pct >= 85 ? C.sageDeep : C.apricot }}>{pct}%</span>
-                    <button onClick={() => setDelEntry({ date: d, logId: log.id, label: log.label })} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}>
-                      <X size={13} color={C.muted} />
-                    </button>
+                <div key={log.id} style={{ marginBottom: 5 }}>
+                  <div className="flex items-center justify-between" style={{ gap: 8 }}>
+                    <span style={{ fontSize: 11.5, color: C.inkSoft }}>{log.label} · {prov}g 중 {log.intakeG}g</span>
+                    <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: pct >= 85 ? C.sageDeep : C.apricot }}>{pct}%</span>
+                      <button onClick={() => setDelEntry({ date: d, logId: log.id, label: log.label })} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}>
+                        <X size={13} color={C.muted} />
+                      </button>
+                    </div>
                   </div>
+                  <AuthorInfo createdBy={log.createdBy} createdAt={log.createdAt} updatedBy={log.updatedBy} updatedAt={log.updatedAt} size={10} />
                 </div>
               );
             })}
@@ -592,6 +595,11 @@ export function FeedingCompareScreen({ date, logId, label: labelProp, onBack }) 
               ? <span style={{ fontSize: 12.5, fontWeight: 800, color: C.sageDeep }}>{provTotal}g 중 {log.intakeG}g ({pct}%)</span>
               : <span style={{ fontSize: 12, color: C.muted }}>급여 기록 없음</span>}
           </div>
+          {log && (
+            <div style={{ marginTop: 8 }}>
+              <AuthorInfo createdBy={log.createdBy} createdAt={log.createdAt} updatedBy={log.updatedBy} updatedAt={log.updatedAt} />
+            </div>
+          )}
         </div>
 
         {/* 항목별 계획 대비 기록 비교표 */}

@@ -7,7 +7,7 @@ import { addDaysISO, todayISO } from "../lib/dates";
 import { NUTRIENT_TAGS, TAG_KEYS, TAG_LABELS } from "../data/nutrition";
 import { catOf, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
-import { CatDot, ConfirmModal, CubeGrid, NumInput, ScreenHeader, Segmented, SubHeader } from "../components/common";
+import { AuthorInfo, CatDot, ConfirmModal, CubeGrid, NumInput, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE, readStockPref, writeStockPref } from "./uiPrefs";
 import { ingredientPairsFor, suggestBaseFor, tagsOf } from "../lib/pairing";
 import { frozenAlerts, urgentStockNames } from "../lib/stockAlerts";
@@ -312,6 +312,7 @@ export function StockDetailScreen({ name, onBack }) {
             <div style={{ fontSize: 10, color: C.muted }}>
               냉동 만료 ~{b.frozenExp ? b.frozenExp.slice(5) : "-"} · {(b.fridgeG || 0) > 0 ? `냉장 만료 ~${b.fridgeExp ? b.fridgeExp.slice(5) : "-"}` : "냉장 없음"}
             </div>
+            <AuthorInfo createdBy={b.createdBy} createdAt={b.createdAt} updatedBy={b.updatedBy} updatedAt={b.updatedAt} size={10} />
           </div>
         ))}
 
@@ -372,6 +373,9 @@ export function ManufactureHistoryScreen({ onBack }) {
                   : <>현재 냉동 {b.frozen}큐브{b.fridgeG ? ` · 냉장 ${b.fridgeG}g` : ""} <span style={{ color: C.muted }}>(제조 당시 수량 기록 이전 배치)</span></>}
               </div>
               {usedUp && <div style={{ fontSize: 10, color: C.muted, marginTop: 5, fontWeight: 700 }}>소진됨</div>}
+              <div style={{ marginTop: 6 }}>
+                <AuthorInfo createdBy={b.createdBy} createdAt={b.createdAt} updatedBy={b.updatedBy} updatedAt={b.updatedAt} size={10} />
+              </div>
             </div>
           );
         })}
