@@ -388,7 +388,7 @@ export function ShoppingScreen({ onBack }) {
   const [batchFor, setBatchFor] = useState(null);
   const [adding, setAdding] = useState(false);
   // 재고 임박 항목도 합류
-  const lowStock = frozenAlerts(state).filter((a) => a.daysLeft <= 3).map((a) => ({ id: "low-" + a.name, name: a.name, reason: `재고 임박 (~${a.daysLeft}일)`, done: false, low: true }));
+  const lowStock = frozenAlerts(state).filter((a) => a.daysLeft <= 3).map((a) => ({ id: "low-" + a.name, name: a.name, reason: a.cubes <= 0 ? "재고 소진" : `재고 임박 (~${a.daysLeft}일)`, done: false, low: true }));
   const list = [...state.shopping, ...lowStock.filter((l) => !state.shopping.some((s) => s.name === l.name && !s.done))];
 
   return (
