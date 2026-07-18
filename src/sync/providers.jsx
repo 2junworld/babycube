@@ -1,9 +1,9 @@
 /* 동기화 계층 - 로그인·가족 설정·Firestore 실시간 동기화·데모 Provider (C-2 2단계) */
-import React, { useState, useEffect, useReducer, useRef } from "react";
+import React, { useState, useEffect, useReducer, useRef, useCallback } from "react";
 import { db, auth, googleProvider } from "../firebase";
 import { doc, setDoc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
-import { C, FONT_IMPORT, primaryBtn } from "../theme";
+import { C, FONT_IMPORT, primaryBtn, MEMBER_COLOR_PALETTE } from "../theme";
 import { addDaysISO, todayISO, uid } from "../lib/dates";
 import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, migrateState, reducer, seedState, totalG } from "../state/appState";
 import { Store } from "../store";
@@ -194,6 +194,27 @@ export function ToastView({ toast, setToast, state }) {
   );
 }
 
+/* ----------------------------- 표시명 입력 바텀시트 (작성자 추적) -----------------------------
+   가족 합류 후 내 uid가 memberProfiles에 없으면 1회 표시. 급여 기록·식단표·제조 배치에
+   "누가 했는지" 뱃지를 남기려면 표시명이 필요하므로, 취소 없이 확인해야 닫힘 */
+function DisplayNameSheet({ defaultName, onSubmit }) {
+  const [name, setName] = useState(defaultName || "");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 90, display: "flex", alignItems: "flex-end", fontFamily: "'Noto Sans KR', sans-serif" }}>
+      <div style={{ background: C.bg, width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: "20px 20px 0 0", padding: "20px 18px 26px", boxSizing: "border-box" }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 6 }}>표시명을 입력해 주세요</div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, lineHeight: 1.5 }}>
+          급여 기록·식단표 등에서 "누가 했는지" 표시할 때 사용돼요. 나중에 공유 멤버 화면에서 바꿀 수 있어요.
+        </div>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 엄마, 아빠" maxLength={12}
+          style={{ width: "100%", border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 14px", fontSize: 14, fontWeight: 700, color: C.ink, outline: "none", boxSizing: "border-box", marginBottom: 14 }} />
+        <button onClick={() => name.trim() && onSubmit(name.trim())} disabled={!name.trim()}
+          style={{ ...primaryBtn, opacity: name.trim() ? 1 : 0.5, cursor: name.trim() ? "pointer" : "default" }}>확인</button>
+      </div>
+    </div>
+  );
+}
+
 // 원격 스냅샷(remote) 위에, 마지막 동기화 기준점(base) 이후 바뀐 로컬 최상위 키를 덮어 병합.
 // 아직 서버에 보내지 못한 내 변경이 배우자 기기의 스냅샷에 덮여 사라지는 것을 방지 (P0-1)
 export function mergeRemoteWithLocalChanges(remote, local, base) {
@@ -208,7 +229,12 @@ export function mergeRemoteWithLocalChanges(remote, local, base) {
 }
 
 export function FamilyStoreProvider({ familyId, user, onLogout }) {
-  const [state, dispatch] = useReducer(reducer, undefined, () => seedState());
+  const [state, rawDispatch] = useReducer(reducer, undefined, () => seedState());
+  // 모든 액션에 작성자(_actor)·시각(_at)을 자동 주입 - 화면 코드는 dispatch를 그대로 쓰면 됨 (작성자 추적)
+  const dispatch = useCallback(
+    (action) => rawDispatch({ ...action, _actor: user.uid, _at: new Date().toISOString() }),
+    [user.uid]
+  );
   const [ready, setReady] = useState(false);
   const [meta, setMeta] = useState({ members: [], memberInfo: {}, ownerUid: null });
   const [syncError, setSyncError] = useState(false);
@@ -339,6 +365,12 @@ export function FamilyStoreProvider({ familyId, user, onLogout }) {
         </div>
       )}
       <ToastView toast={toast} setToast={setToast} state={state} />
+      {!state.memberProfiles[user.uid] && (
+        <DisplayNameSheet
+          defaultName={user.displayName || ""}
+          onSubmit={(name) => dispatch({ type: "MEMBER_PROFILE_SET", uid: user.uid, name })}
+        />
+      )}
     </Store.Provider>
   );
 }
@@ -446,12 +478,18 @@ export function demoState() {
     names.forEach((name) => intros.push({ id: uid(), name, cat, status: "이상없음", memo: "", date: addDaysISO(t, -20) }))
   );
   intros.unshift({ id: uid(), name: "새송이버섯", cat: "채소", status: "관찰중", memo: "곱게 갈아서 제공", date: addDaysISO(t, -2) });
+  // 작성자 추적 기능 데모: 고정 uid "demo"를 미리 등록해 표시명 입력 바텀시트를 건너뜀
+  const memberProfiles = { demo: { name: "데모 사용자", color: MEMBER_COLOR_PALETTE[0], joinedAt: addDaysISO(t, -20) } };
   // 가상의 생일 (~생후 9개월) - 실제 개인 정보 아님
-  return { ...s, stock, plans, logs, intros, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: addDaysISO(t, -280) } };
+  return { ...s, stock, plans, logs, intros, memberProfiles, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: addDaysISO(t, -280) } };
 }
 
 export function DemoProvider() {
-  const [state, dispatch] = useReducer(reducer, undefined, () => demoState());
+  const [state, rawDispatch] = useReducer(reducer, undefined, () => demoState());
+  const dispatch = useCallback(
+    (action) => rawDispatch({ ...action, _actor: "demo", _at: new Date().toISOString() }),
+    []
+  );
   // 실제 앱과 동일한 공용 토스트 (데모에서도 저장/삭제 피드백 확인 가능)
   const { toast, setToast, notify } = useToast();
   const cloud = {
