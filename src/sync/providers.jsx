@@ -224,7 +224,19 @@ export function mergeRemoteWithLocalChanges(remote, local, base) {
   );
   if (changed.length === 0) return remote;
   const merged = { ...remote };
-  changed.forEach((k) => { merged[k] = local[k]; });
+  changed.forEach((k) => {
+    if (k === "activity") {
+      // 활동 로그는 append-only이고 id가 유일하므로, 다른 키처럼 통째로 한쪽 값으로 덮지 않고
+      // 원격·로컬을 id 기준 union 후 시각순 정렬·최근 200건만 유지한다 (작성자 추적).
+      // 그렇지 않으면 두 기기가 거의 동시에 기록해 activity가 동시에 바뀐 경우, 한쪽 기기의
+      // append가 흔적 없이 사라질 수 있다.
+      const byId = new Map();
+      [...(remote.activity || []), ...(local.activity || [])].forEach((a) => byId.set(a.id, a));
+      merged.activity = [...byId.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-200);
+    } else {
+      merged[k] = local[k];
+    }
+  });
   return merged;
 }
 
