@@ -159,6 +159,34 @@ export function FromRecordBadge({ small = false }) {
   );
 }
 
+// 급여 기록·식단표 끼니·제조 배치 3종에 붙는 작성자 뱃지 (작성자 추적 기능).
+// createdBy·updatedBy가 memberProfiles에 매핑되지 않으면(구버전 데이터) 아무것도 렌더하지 않음
+export const authorTime = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+export function AuthorInfo({ createdBy, createdAt, updatedBy, updatedAt, createdLabel = "기록", updatedLabel = "수정", size = 11 }) {
+  const { state } = useStore();
+  const profiles = (state && state.memberProfiles) || {};
+  const created = createdBy && profiles[createdBy];
+  const updated = updatedBy && profiles[updatedBy];
+  if (!created && !updated) return null;
+  const dotSize = Math.max(5, size - 5);
+  const Person = ({ label, profile, at }) => (
+    <span className="flex items-center" style={{ gap: 5, fontSize: size, color: C.muted, fontWeight: 600 }}>
+      <span style={{ width: dotSize, height: dotSize, borderRadius: "50%", background: profile.color, display: "inline-block", flexShrink: 0 }} />
+      {label}: {profile.name}{at ? ` · ${authorTime(at)}` : ""}
+    </span>
+  );
+  return (
+    <div className="flex items-center" style={{ gap: 10, flexWrap: "wrap" }}>
+      {created && <Person label={createdLabel} profile={created} at={createdAt} />}
+      {updated && <Person label={updatedLabel} profile={updated} at={updatedAt} />}
+    </div>
+  );
+}
+
 export function ScreenHeader({ title, right }) {
   return (
     <div className="flex items-center justify-between" style={{ padding: "14px 18px 10px" }}>

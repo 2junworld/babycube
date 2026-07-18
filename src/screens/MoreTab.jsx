@@ -1,13 +1,13 @@
 /* 더보기 탭 - 설정·공유 멤버·여행 모드·끼니 설정 */
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History } from "lucide-react";
+import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity } from "lucide-react";
 import { db } from "../firebase";
 import { doc, setDoc } from "firebase/firestore";
 import { C, primaryBtn, selectStyle } from "../theme";
 import { addDaysISO, ageText, fmtTime, todayISO, uid } from "../lib/dates";
 import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, avgPlannedMealsPerDay, isStaple, migrateState } from "../state/appState";
 import { useStore } from "../store";
-import { CatDot, ConfirmModal, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
+import { authorTime, CatDot, ConfirmModal, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { downloadFile, feedingLogsToCSV } from "../lib/exporters";
 
 /* =====================================================================
@@ -195,8 +195,8 @@ export function SettingsScreen({ onBack }) {
   );
 }
 
-export function MembersScreen({ onBack }) {
-  const { cloud } = useStore();
+export function MembersScreen({ onBack, go }) {
+  const { state, cloud } = useStore();
   const [copied, setCopied] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   // (C-1) 구버전 가족 호환: 초대 코드 매핑 문서(invites/{code})가 없으면
@@ -208,7 +208,16 @@ export function MembersScreen({ onBack }) {
   }, [inviteFamilyId]);
   if (!cloud) return null;
   const { familyId, user, meta, leaveFamily, logout } = cloud;
-  const memberList = (meta.members || []).map((uid) => ({ uid, ...(meta.memberInfo?.[uid] || {}) }));
+  const profiles = state.memberProfiles || {};
+  // 표시명은 직접 지정한 프로필(memberProfiles)을 우선 사용 - 구글 이름보다 최신 의사를 반영
+  const memberList = (meta.members || []).map((uid) => ({ uid, ...(meta.memberInfo?.[uid] || {}), ...(profiles[uid] ? { name: profiles[uid].name } : {}) }));
+  // 구성원별 최근 활동 1건 (미리보기)
+  const lastActivityOf = (uid) => {
+    for (let i = state.activity.length - 1; i >= 0; i--) {
+      if (state.activity[i].by === uid) return state.activity[i];
+    }
+    return null;
+  };
 
   const copyCode = () => {
     if (navigator.clipboard) navigator.clipboard.writeText(familyId).catch(() => {});
@@ -226,16 +235,25 @@ export function MembersScreen({ onBack }) {
           <button onClick={copyCode} style={{ background: C.surface, border: "none", borderRadius: 999, padding: "6px 14px", fontSize: 11.5, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>{copied ? "복사됨" : "코드 복사"}</button>
         </div>
 
-        <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px" }}>구성원 ({memberList.length})</div>
-        {memberList.map((m) => (
-          <div key={m.uid} className="flex items-center" style={{ gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 14px" }}>
-            <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: "50%", background: C.sageLight }}><Users size={16} color={C.sageDeep} /></div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{m.name || m.email || "이름 없음"}{m.uid === user.uid ? " (나)" : ""}</div>
-              {m.email && <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>{m.email}</div>}
-            </div>
-          </div>
-        ))}
+        <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px" }}>구성원 ({memberList.length}) · 탭하면 활동 내역을 볼 수 있어요</div>
+        {memberList.map((m) => {
+          const last = lastActivityOf(m.uid);
+          const displayName = m.name || m.email || "이름 없음";
+          return (
+            <button key={m.uid} onClick={() => go && go("activity", { uid: m.uid, name: displayName })}
+              className="flex items-center" style={{ width: "100%", textAlign: "left", gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 14px", cursor: "pointer" }}>
+              <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: "50%", background: profiles[m.uid] ? profiles[m.uid].color : C.sageLight, flexShrink: 0 }}>
+                <Users size={16} color={profiles[m.uid] ? "#fff" : C.sageDeep} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{displayName}{m.uid === user.uid ? " (나)" : ""}</div>
+                {m.email && <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>{m.email}</div>}
+                {last && <div style={{ fontSize: 10.5, color: C.sageDeep, marginTop: 3 }}>마지막 활동: {authorTime(last.at)} {last.summary}</div>}
+              </div>
+              <ChevronRight size={15} color={C.muted} />
+            </button>
+          );
+        })}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
           <button onClick={() => setConfirmLeave(true)} style={{ background: "none", border: `1px solid ${C.apricot}`, borderRadius: 12, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.apricot, cursor: "pointer" }}>이 가족에서 나가기</button>
@@ -251,6 +269,83 @@ export function MembersScreen({ onBack }) {
           onCancel={() => setConfirmLeave(false)}
         />
       )}
+    </div>
+  );
+}
+
+/* =====================================================================
+   활동 내역 (작성자 추적) - 더보기 진입점 또는 공유 멤버 화면에서 구성원 탭으로 진입.
+   filterUid가 있으면 그 구성원으로 필터 고정된 상태로 시작(초기값일 뿐, 안에서 전환 가능)
+   ===================================================================== */
+export function ActivityScreen({ onBack, go, filterUid, filterName }) {
+  const { state, notify } = useStore();
+  const [filter, setFilter] = useState(filterUid || "all");
+  const profiles = state.memberProfiles || {};
+  const memberOptions = Object.entries(profiles).map(([mUid, p]) => ({ value: mUid, label: p.name }));
+
+  const NAVIGABLE_ACTIONS = ["LOG_SAVE", "RESTORE_LOG_ENTRY", "STOCK_ADD_BATCH", "STOCK_UPDATE_BATCH", "STOCK_DELETE_BATCH", "RESTORE_BATCH", "INTRO_UPSERT", "INTRO_DELETE", "RESTORE_INTRO", "INGREDIENT_SET_META", "INGREDIENT_TAGS_SET"];
+  const isNavigable = (a) => a.ref && NAVIGABLE_ACTIONS.includes(a.action);
+  const handleTap = (a) => {
+    if (!isNavigable(a)) return;
+    if (a.action === "LOG_SAVE" || a.action === "RESTORE_LOG_ENTRY") {
+      const exists = (state.logs[a.ref.date] || []).some((l) => l.id === a.ref.logId);
+      if (!exists) { notify("삭제된 항목입니다"); return; }
+      go("feedCompare", { date: a.ref.date, logId: a.ref.logId, label: a.ref.label });
+    } else if (["STOCK_ADD_BATCH", "STOCK_UPDATE_BATCH", "STOCK_DELETE_BATCH", "RESTORE_BATCH"].includes(a.action)) {
+      go("stockDetail", { name: a.ref.name });
+    } else {
+      go("ingredientInfo", { name: a.ref.name });
+    }
+  };
+
+  const list = [...state.activity].reverse().filter((a) => filter === "all" || a.by === filter);
+  const groups = [];
+  let curDate = null, curArr = null;
+  list.forEach((a) => {
+    const d = (a.at || "").slice(0, 10);
+    if (d !== curDate) { curDate = d; curArr = []; groups.push({ date: d, items: curArr }); }
+    curArr.push(a);
+  });
+
+  return (
+    <div style={{ paddingBottom: 90 }}>
+      <SubHeader title={filterName ? `${filterName}의 활동` : "활동 내역"} onBack={onBack} />
+      {memberOptions.length > 1 && (
+        <div style={{ padding: "0 18px 10px" }}>
+          <Segmented value={filter} onChange={setFilter} options={[{ value: "all", label: "전체" }, ...memberOptions]} />
+        </div>
+      )}
+      <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+        {groups.length === 0 && (
+          <div style={{ textAlign: "center", padding: "40px 0", fontSize: 12.5, color: C.muted, lineHeight: 1.6 }}>
+            아직 활동 기록이 없어요.<br />지금부터의 활동이 기록됩니다.
+          </div>
+        )}
+        {groups.map((g) => (
+          <div key={g.date}>
+            <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>{g.date}</div>
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+              {g.items.map((a, i) => {
+                const p = profiles[a.by];
+                const nav = isNavigable(a);
+                return (
+                  <button key={a.id} onClick={() => handleTap(a)} disabled={!nav}
+                    className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", padding: "11px 13px",
+                      background: "none", border: "none", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, cursor: nav ? "pointer" : "default" }}>
+                    <div className="flex items-center" style={{ gap: 8, minWidth: 0 }}>
+                      {p && <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.color, flexShrink: 0 }} />}
+                      <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {p ? `${p.name} · ` : ""}{a.summary}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 11, color: C.muted, flexShrink: 0, marginLeft: 8 }}>{authorTime(a.at)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -410,6 +505,7 @@ export function MoreTab({ go }) {
     { key: "mealSlots", icon: Clock, label: "끼니 설정", sub: "끼니 이름·시간 관리" },
     { key: "manufactureHistory", icon: History, label: "제조 이력", sub: "재료별 제조 배치 기록 조회" },
     { key: "members", icon: Users, label: "공유 멤버", sub: "초대 코드 · 구성원 관리" },
+    { key: "activity", icon: Activity, label: "활동 내역", sub: "누가 언제 기록·수정했는지 확인" },
     { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
     { key: "settings", icon: Settings2, label: "설정", sub: "시간 형식 · 알림 · 아기 정보" },
   ];

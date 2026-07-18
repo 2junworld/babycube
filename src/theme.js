@@ -30,3 +30,6 @@ export const stepBtn = { width: 24, height: 24, borderRadius: "50%", border: `1p
 
 export const primaryBtn = { background: C.sage, border: "none", borderRadius: 14, padding: "13px 0",
   fontSize: 13.5, fontWeight: 700, color: "#fff", cursor: "pointer", width: "100%" };
+
+// 구성원별 뱃지·타임라인 색상 - 가족 참여 순서대로 자동 배정 (작성자 추적 기능)
+export const MEMBER_COLOR_PALETTE = ["#5B8DEF", "#E07A3F", "#6B8F71", "#BB6BD9", "#EB5757", "#4F9DA6"];

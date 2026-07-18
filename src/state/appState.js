@@ -2,7 +2,7 @@
    UI를 포함하지 않는 순수 로직 계층. 컴포넌트는 App.jsx 참고 */
 import { todayISO, addDaysISO, uid } from "../lib/dates";
 import { SEED_INGREDIENTS, DB_CATEGORY } from "../data/nutrition";
-import { CATEGORIES } from "../theme";
+import { CATEGORIES, MEMBER_COLOR_PALETTE } from "../theme";
 
 export function seedState() {
   const t = todayISO();
@@ -40,6 +40,8 @@ export function seedState() {
     settings: { timeFmt: "24h", frozenAlertDays: 3, fridgeAlertDays: 1, fridgeKeepDays: 2, fontScale: 1, mealTips: { stock: true, pairing: true, usedToday: true } },
     travel: { active: false, start: "", end: "", mealsPerDay: 2, checklist: [] },
     members: ["엄마", "아빠"],
+    memberProfiles: {}, // uid → { name, color, joinedAt } - 작성자 표시명·뱃지 색상 (로그인 시 자동 등록)
+    activity: [], // 최근 200건 활동 로그 (작성자 추적)
     baby: { name: "", sex: "남아", birth: "" }, // 생년월일 미설정 - 설정 화면에서 입력 안내
     ui: { fridgeBannerHiddenDate: null },
     mealSlots: [
@@ -107,6 +109,9 @@ export function migrateState(s) {
   if (out.settings && !out.settings.mealTips) {
     out.settings = { ...out.settings, mealTips: { stock: true, pairing: true, usedToday: true } };
   }
+  // 작성자 추적 기능 도입 - 구버전 데이터는 빈 값으로 시작 (기존 기록에 소급 기입하지 않음)
+  if (!out.memberProfiles) out.memberProfiles = {};
+  if (!out.activity) out.activity = [];
 
   /* ---- 데이터 위생 치유 (멱등 - 매 로드마다 실행해도 안전) ---- */
   // 음수 배치 정규화(과거 입력 오류) + 빈 재고 키 제거 + 재료명 공백 키 병합
@@ -168,8 +173,51 @@ export function migrateState(s) {
   return out;
 }
 
+/* ----------------------------- 작성자 메타 헬퍼 (작성자 추적) ----------------------------- */
+// 급여 기록·식단 끼니·제조 배치 3종에 createdBy/At·updatedBy/At을 부여.
+// prev가 없으면 생성으로 기록하고, 있으면 "실질적인 내용"이 바뀐 경우에만 updatedBy를 갱신한다
+// (단순 열람 후 재저장으로 작성자가 바뀌는 것 방지). Firestore가 undefined 필드를 거부하므로
+// 값이 없는 메타 키는 아예 객체에 넣지 않는다.
+function stripMetaFields(obj) {
+  const { createdBy, createdAt, updatedBy, updatedAt, ...rest } = obj;
+  return rest;
+}
+function withAuthorMeta(prev, next, actor, at, compareOf = stripMetaFields) {
+  if (!prev) return actor ? { ...next, createdBy: actor, createdAt: at } : next;
+  const changed = JSON.stringify(compareOf(prev)) !== JSON.stringify(compareOf(next));
+  const out = { ...next };
+  if (prev.createdBy !== undefined) { out.createdBy = prev.createdBy; out.createdAt = prev.createdAt; }
+  if (changed && actor) { out.updatedBy = actor; out.updatedAt = at; }
+  else if (prev.updatedBy !== undefined) { out.updatedBy = prev.updatedBy; out.updatedAt = prev.updatedAt; }
+  return out;
+}
+// 급여 기록은 내용 비교 시 파생 필드를 제외해야 "같은 내용을 다시 저장"했을 뿐인데 updatedBy가
+// 바뀌는 것을 막을 수 있음: deductedQty/deductedBatches(재고 상태에 따라 달라짐),
+// planSnapshot(최초 저장 때 한 번 고정되는 값 - 사용자가 직접 편집하는 내용이 아님)
+function stripLogForCompare(log) {
+  const { planSnapshot, ...rest } = stripMetaFields(log);
+  return { ...rest, items: (rest.items || []).map(({ deductedQty, deductedBatches, ...it }) => it) };
+}
+// 식단 끼니는 편집 화면을 거치면 unitG/gramsOverride 같은 필드가 기본값으로 채워져 저장되는데,
+// 구버전(seed·데모) 데이터는 그런 필드가 아예 없을 수 있어 단순 JSON 비교로는 "값은 같지만 모양이
+// 다른" 항목을 변경으로 오판한다. 실효값(effective value) 기준으로 비교해 이 문제를 없앤다.
+function mealCompareOf(state) {
+  return (meal) => {
+    const rest = stripMetaFields(meal);
+    return {
+      ...rest,
+      items: (rest.items || []).map((it) => ({
+        name: it.name,
+        qty: it.qty,
+        unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
+        gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
+      })),
+    };
+  };
+}
+
 /* --------------------------------- 리듀서 -------------------------------- */
-export function reducer(state, action) {
+function rawReducer(state, action) {
   switch (action.type) {
     case "HYDRATE":
       return action.state;
@@ -217,8 +265,9 @@ export function reducer(state, action) {
       const { date, meal } = action;
       const dayMeals = state.plans[date] ? [...state.plans[date]] : [];
       const idx = dayMeals.findIndex((m) => m.id === meal.id);
-      if (idx >= 0) dayMeals[idx] = meal;
-      else dayMeals.push(meal);
+      const savedMeal = withAuthorMeta(idx >= 0 ? dayMeals[idx] : null, meal, action._actor, action._at, mealCompareOf(state));
+      if (idx >= 0) dayMeals[idx] = savedMeal;
+      else dayMeals.push(savedMeal);
       dayMeals.sort((a, b) => a.time.localeCompare(b.time));
       // 재고에 없는 재료 → 장보기 목록 자동 등록
       let shopping = state.shopping;
@@ -256,16 +305,17 @@ export function reducer(state, action) {
       }
       // 장보기 목록에서 완료 처리
       const shopping = state.shopping.map((s) => (s.name === name && !s.done ? { ...s, done: true } : s));
+      const newBatch = withAuthorMeta(null, { id: uid(), ...batch }, action._actor, action._at);
       return {
         ...state, ingredients, intros, shopping,
-        stock: { ...state.stock, [name]: { batches: [...cur.batches, { id: uid(), ...batch }] } },
+        stock: { ...state.stock, [name]: { batches: [...cur.batches, newBatch] } },
       };
     }
     case "STOCK_UPDATE_BATCH": {
       const { name, batchId, patch } = action;
       const cur = state.stock[name];
       if (!cur) return state;
-      const batches = cur.batches.map((b) => (b.id === batchId ? { ...b, ...patch } : b));
+      const batches = cur.batches.map((b) => (b.id === batchId ? withAuthorMeta(b, { ...b, ...patch }, action._actor, action._at) : b));
       return { ...state, stock: { ...state.stock, [name]: { batches } } };
     }
     case "STOCK_DELETE_BATCH": {
@@ -295,7 +345,7 @@ export function reducer(state, action) {
       // 실제 차감된 양(deductedQty)과 배치별 내역(deductedBatches)을 기록에 남김
       // (재고 부족 시 요청량보다 적을 수 있음 - 이후 수정·삭제 시 원 배치로 정확히 복원).
       // action의 log 객체를 직접 변형하지 않고 새 객체로 만들어 저장 (리듀서 순수성 유지)
-      const savedLog = {
+      const builtLog = {
         ...log,
         items: log.items.map((it) => {
           if (it.deduct === false) return { ...it, deductedQty: 0, deductedBatches: [] };
@@ -306,6 +356,7 @@ export function reducer(state, action) {
           return { ...it, deductedQty: actual, deductedBatches: trace };
         }),
       };
+      const savedLog = withAuthorMeta(idx >= 0 ? dayLogs[idx] : null, builtLog, action._actor, action._at, stripLogForCompare);
       if (idx >= 0) dayLogs[idx] = savedLog;
       else dayLogs.push(savedLog);
       dayLogs.sort((a, b) => a.time.localeCompare(b.time));
@@ -447,9 +498,185 @@ export function reducer(state, action) {
     case "MEALSLOT_DELETE":
       return { ...state, mealSlots: state.mealSlots.filter((s) => s.id !== action.id) };
 
+    /* ---- 구성원 프로필 (작성자 표시명·뱃지 색상) ----
+       처음 등록 시 참여 순서대로 팔레트 색상을 배정. 이미 있으면 표시명만 갱신(색상·가입일 불변) */
+    case "MEMBER_PROFILE_SET": {
+      const { uid: profileUid, name } = action;
+      if (!profileUid || !name) return state;
+      const existing = state.memberProfiles[profileUid];
+      if (existing) {
+        return { ...state, memberProfiles: { ...state.memberProfiles, [profileUid]: { ...existing, name } } };
+      }
+      const color = MEMBER_COLOR_PALETTE[Object.keys(state.memberProfiles).length % MEMBER_COLOR_PALETTE.length];
+      return {
+        ...state,
+        memberProfiles: { ...state.memberProfiles, [profileUid]: { name, color, joinedAt: action._at || new Date().toISOString() } },
+      };
+    }
+
     default:
       return state;
   }
+}
+
+/* ----------------------------- 활동 로그 (작성자 추적) -----------------------------
+   급여 기록·식단표 끼니·제조 배치·장보기·먹어본 재료·재료 정보·끼니 설정 변경을
+   사람이 읽을 수 있는 한 줄로 남긴다. 액션 타입 → 요약 생성기 매핑 테이블 방식이라
+   새 액션이 추가돼도 이 테이블에 한 줄만 추가하면 됨. 재고 차감처럼 다른 액션의
+   "부수 효과"로 일어나는 변화는 원인이 된 액션 1건만 기록해 로그가 늘어지지 않게 한다. */
+const ds = (iso) => (iso || "").slice(5); // "2026-07-18" → "07-18"
+
+const ACTIVITY_BUILDERS = {
+  LOG_SAVE: (prev, next, action) => {
+    const { date, log } = action;
+    const prevLog = (prev.logs[date] || []).find((l) => l.id === log.id);
+    // 실질적인 내용 변경 여부는 withAuthorMeta가 이미 판단해 updatedAt에 반영해 둠 -
+    // 같은 판단을 여기서 중복 계산하지 않고 그 결과(이번 액션 시각과 일치하는지)만 재사용
+    if (prevLog) {
+      const nextLog = (next.logs[date] || []).find((l) => l.id === log.id);
+      if (!nextLog || nextLog.updatedAt !== action._at) return null;
+    }
+    const g = Math.round(logProvideG(log));
+    return {
+      kind: prevLog ? "update" : "create",
+      summary: `${ds(date)} ${log.label} 급여 기록 ${prevLog ? "수정" : "저장"} (재료 ${log.items.length}개, ${g}g)`,
+      ref: { date, logId: log.id, label: log.label },
+    };
+  },
+  LOG_DELETE_ENTRY: (prev, next, action) => {
+    const { date, logId } = action;
+    const target = (prev.logs[date] || []).find((l) => l.id === logId);
+    if (!target) return null;
+    return { kind: "delete", summary: `${ds(date)} ${target.label} 급여 기록 삭제` };
+  },
+  LOG_DELETE_DAY: (prev, next, action) => {
+    const { date } = action;
+    const n = (prev.logs[date] || []).length;
+    if (n === 0) return null;
+    return { kind: "delete", summary: `${ds(date)} 급여 기록 전체 삭제 (${n}건)` };
+  },
+  RESTORE_LOG_ENTRY: (prev, next, action) => {
+    const { date, log } = action;
+    return { kind: "restore", summary: `${ds(date)} ${log.label} 급여 기록 복원 (실행취소)`, ref: { date, logId: log.id, label: log.label } };
+  },
+  RESTORE_LOG_DAY: (prev, next, action) => {
+    const { date, logs } = action;
+    return { kind: "restore", summary: `${ds(date)} 급여 기록 전체 복원 (${(logs || []).length}건, 실행취소)` };
+  },
+  PLAN_SAVE_MEAL: (prev, next, action) => {
+    const { date, meal } = action;
+    const prevMeal = (prev.plans[date] || []).find((m) => m.id === meal.id);
+    if (prevMeal) {
+      const nextMeal = (next.plans[date] || []).find((m) => m.id === meal.id);
+      if (!nextMeal || nextMeal.updatedAt !== action._at) return null; // 실질적 변경 없는 재저장
+    }
+    return {
+      kind: prevMeal ? "update" : "create",
+      summary: `${ds(date)} ${meal.label} 식단 ${prevMeal ? "수정" : "추가"} (재료 ${meal.items.length}개)`,
+      ref: { date, mealId: meal.id, label: meal.label },
+    };
+  },
+  PLAN_DELETE_MEAL: (prev, next, action) => {
+    const { date, mealId } = action;
+    const target = (prev.plans[date] || []).find((m) => m.id === mealId);
+    if (!target) return null;
+    return { kind: "delete", summary: `${ds(date)} ${target.label} 식단 삭제` };
+  },
+  RESTORE_MEAL: (prev, next, action) => {
+    const { date, meal } = action;
+    return { kind: "restore", summary: `${ds(date)} ${meal.label} 식단 복원 (실행취소)`, ref: { date, mealId: meal.id, label: meal.label } };
+  },
+  STOCK_ADD_BATCH: (prev, next, action) => {
+    const name = normalizeIngredientName(action.name);
+    if (!name) return null;
+    const { batch } = action;
+    const parts = [`냉동 ${batch.frozen || 0}큐브`];
+    if (batch.fridgeG) parts.push(`냉장 ${batch.fridgeG}g`);
+    return { kind: "create", summary: `${name} 제조 기록 추가 (${parts.join(" · ")})`, ref: { name } };
+  },
+  STOCK_UPDATE_BATCH: (prev, next, action) => {
+    const { name, batchId } = action;
+    const nextBatch = next.stock[name] && next.stock[name].batches.find((b) => b.id === batchId);
+    if (!nextBatch || nextBatch.updatedAt !== action._at) return null; // 실질적 변경 없는 재저장
+    return { kind: "update", summary: `${name} 제조 배치 수정`, ref: { name } };
+  },
+  STOCK_DELETE_BATCH: (prev, next, action) => {
+    const { name } = action;
+    return { kind: "delete", summary: `${name} 제조 배치 삭제`, ref: { name } };
+  },
+  RESTORE_BATCH: (prev, next, action) => {
+    const { name } = action;
+    return { kind: "restore", summary: `${name} 제조 배치 복원 (실행취소)`, ref: { name } };
+  },
+  SHOP_ADD: (prev, next, action) => {
+    const name = normalizeIngredientName(action.name);
+    if (!name) return null;
+    return { kind: "create", summary: `${name} 장보기 목록에 추가` };
+  },
+  SHOP_TOGGLE: (prev, next, action) => {
+    const item = next.shopping.find((s) => s.id === action.id);
+    // 완료 처리만 기록하고, 완료 해제는 기록하지 않음 (실수로 눌렀다 되돌리는 경우가 많아 로그 소음이 큼)
+    if (!item || !item.done) return null;
+    return { kind: "update", summary: `${item.name} 장보기 완료 처리` };
+  },
+  INTRO_UPSERT: (prev, next, action) => {
+    const name = normalizeIngredientName(action.intro.name);
+    if (!name) return null;
+    const prevIntro = prev.intros.find((it) => it.id === action.intro.id);
+    if (!prevIntro) return { kind: "create", summary: `${name} 먹어본 재료 등록 (${action.intro.status})`, ref: { name } };
+    if (prevIntro.status !== action.intro.status) {
+      return { kind: "update", summary: `${name} 상태 변경: ${prevIntro.status} → ${action.intro.status}`, ref: { name } };
+    }
+    return null; // 메모만 수정한 경우는 로그 소음 방지를 위해 기록하지 않음
+  },
+  INTRO_DELETE: (prev, next, action) => {
+    const target = prev.intros.find((it) => it.id === action.id);
+    if (!target) return null;
+    return { kind: "delete", summary: `${target.name} 먹어본 재료 삭제` };
+  },
+  RESTORE_INTRO: (prev, next, action) => {
+    const { intro } = action;
+    return { kind: "restore", summary: `${intro.name} 먹어본 재료 복원 (실행취소)`, ref: { name: intro.name } };
+  },
+  INGREDIENT_SET_META: (prev, next, action) => {
+    const { name } = action;
+    if (!name || prev.ingredients[name] === next.ingredients[name]) return null;
+    return { kind: "update", summary: `${name} 재료 정보 수정`, ref: { name } };
+  },
+  INGREDIENT_TAGS_SET: (prev, next, action) => {
+    const { name } = action;
+    if (!name || prev.ingredientTags[name] === next.ingredientTags[name]) return null;
+    return { kind: "update", summary: `${name} 재료 정보 수정`, ref: { name } };
+  },
+  MEALSLOT_UPSERT: (prev, next, action) => {
+    const prevSlot = prev.mealSlots.find((s) => s.id === action.slot.id);
+    return { kind: prevSlot ? "update" : "create", summary: `끼니 종류 ${prevSlot ? "수정" : "추가"}: ${action.slot.label}` };
+  },
+  MEALSLOT_DELETE: (prev, next, action) => {
+    const target = prev.mealSlots.find((s) => s.id === action.id);
+    if (!target) return null;
+    return { kind: "delete", summary: `끼니 종류 삭제: ${target.label}` };
+  },
+};
+
+function withActivity(prevState, nextState, action) {
+  if (nextState === prevState || !action._actor) return nextState;
+  const builder = ACTIVITY_BUILDERS[action.type];
+  if (!builder) return nextState;
+  const entry = builder(prevState, nextState, action);
+  if (!entry) return nextState;
+  const record = {
+    id: uid(), at: action._at || new Date().toISOString(), by: action._actor,
+    action: action.type, kind: entry.kind, summary: entry.summary,
+    ...(entry.ref ? { ref: entry.ref } : {}),
+  };
+  // 최근 200건만 순환 보관 (오래된 것부터 자동 삭제)
+  return { ...nextState, activity: [...(nextState.activity || []), record].slice(-200) };
+}
+
+export function reducer(state, action) {
+  const next = rawReducer(state, action);
+  return withActivity(state, next, action);
 }
 
 /* ----------------------------- 재고 계산 헬퍼 ----------------------------- */

@@ -1,9 +1,9 @@
 /* 동기화 계층 - 로그인·가족 설정·Firestore 실시간 동기화·데모 Provider (C-2 2단계) */
-import React, { useState, useEffect, useReducer, useRef } from "react";
+import React, { useState, useEffect, useReducer, useRef, useCallback } from "react";
 import { db, auth, googleProvider } from "../firebase";
 import { doc, setDoc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
-import { C, FONT_IMPORT, primaryBtn } from "../theme";
+import { C, FONT_IMPORT, primaryBtn, MEMBER_COLOR_PALETTE } from "../theme";
 import { addDaysISO, todayISO, uid } from "../lib/dates";
 import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, migrateState, reducer, seedState, totalG } from "../state/appState";
 import { Store } from "../store";
@@ -194,6 +194,27 @@ export function ToastView({ toast, setToast, state }) {
   );
 }
 
+/* ----------------------------- 표시명 입력 바텀시트 (작성자 추적) -----------------------------
+   가족 합류 후 내 uid가 memberProfiles에 없으면 1회 표시. 급여 기록·식단표·제조 배치에
+   "누가 했는지" 뱃지를 남기려면 표시명이 필요하므로, 취소 없이 확인해야 닫힘 */
+function DisplayNameSheet({ defaultName, onSubmit }) {
+  const [name, setName] = useState(defaultName || "");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 90, display: "flex", alignItems: "flex-end", fontFamily: "'Noto Sans KR', sans-serif" }}>
+      <div style={{ background: C.bg, width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: "20px 20px 0 0", padding: "20px 18px 26px", boxSizing: "border-box" }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 6 }}>표시명을 입력해 주세요</div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, lineHeight: 1.5 }}>
+          급여 기록·식단표 등에서 "누가 했는지" 표시할 때 사용돼요. 나중에 공유 멤버 화면에서 바꿀 수 있어요.
+        </div>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 엄마, 아빠" maxLength={12}
+          style={{ width: "100%", border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 14px", fontSize: 14, fontWeight: 700, color: C.ink, outline: "none", boxSizing: "border-box", marginBottom: 14 }} />
+        <button onClick={() => name.trim() && onSubmit(name.trim())} disabled={!name.trim()}
+          style={{ ...primaryBtn, opacity: name.trim() ? 1 : 0.5, cursor: name.trim() ? "pointer" : "default" }}>확인</button>
+      </div>
+    </div>
+  );
+}
+
 // 원격 스냅샷(remote) 위에, 마지막 동기화 기준점(base) 이후 바뀐 로컬 최상위 키를 덮어 병합.
 // 아직 서버에 보내지 못한 내 변경이 배우자 기기의 스냅샷에 덮여 사라지는 것을 방지 (P0-1)
 export function mergeRemoteWithLocalChanges(remote, local, base) {
@@ -203,12 +224,29 @@ export function mergeRemoteWithLocalChanges(remote, local, base) {
   );
   if (changed.length === 0) return remote;
   const merged = { ...remote };
-  changed.forEach((k) => { merged[k] = local[k]; });
+  changed.forEach((k) => {
+    if (k === "activity") {
+      // 활동 로그는 append-only이고 id가 유일하므로, 다른 키처럼 통째로 한쪽 값으로 덮지 않고
+      // 원격·로컬을 id 기준 union 후 시각순 정렬·최근 200건만 유지한다 (작성자 추적).
+      // 그렇지 않으면 두 기기가 거의 동시에 기록해 activity가 동시에 바뀐 경우, 한쪽 기기의
+      // append가 흔적 없이 사라질 수 있다.
+      const byId = new Map();
+      [...(remote.activity || []), ...(local.activity || [])].forEach((a) => byId.set(a.id, a));
+      merged.activity = [...byId.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-200);
+    } else {
+      merged[k] = local[k];
+    }
+  });
   return merged;
 }
 
 export function FamilyStoreProvider({ familyId, user, onLogout }) {
-  const [state, dispatch] = useReducer(reducer, undefined, () => seedState());
+  const [state, rawDispatch] = useReducer(reducer, undefined, () => seedState());
+  // 모든 액션에 작성자(_actor)·시각(_at)을 자동 주입 - 화면 코드는 dispatch를 그대로 쓰면 됨 (작성자 추적)
+  const dispatch = useCallback(
+    (action) => rawDispatch({ ...action, _actor: user.uid, _at: new Date().toISOString() }),
+    [user.uid]
+  );
   const [ready, setReady] = useState(false);
   const [meta, setMeta] = useState({ members: [], memberInfo: {}, ownerUid: null });
   const [syncError, setSyncError] = useState(false);
@@ -339,6 +377,12 @@ export function FamilyStoreProvider({ familyId, user, onLogout }) {
         </div>
       )}
       <ToastView toast={toast} setToast={setToast} state={state} />
+      {!state.memberProfiles[user.uid] && (
+        <DisplayNameSheet
+          defaultName={user.displayName || ""}
+          onSubmit={(name) => dispatch({ type: "MEMBER_PROFILE_SET", uid: user.uid, name })}
+        />
+      )}
     </Store.Provider>
   );
 }
@@ -383,6 +427,16 @@ export function AuthGate() {
 
 /* ----------------------------- 데모 모드 (스크린샷용, 임시) ----------------------------- */
 // URL에 ?demo 를 붙이면 로그인 없이 데모 데이터로 앱을 보여줌. Firebase에 아무것도 저장하지 않음.
+// 작성자 추적 기능 미리보기: 구글 로그인 없이도 확인할 수 있도록 두 번째 가상 구성원("아빠")과
+// 예시 작성자 메타·활동 로그를 함께 심어둔다 (실제 계정·데이터에는 영향 없음)
+const DEMO_UID_2 = "demo2";
+// 지금 시각 기준 "daysAgo일 전 hh:mm"의 ISO 문자열 (authorTime()이 로컬시간으로 다시 읽으므로 왕복 일관성 유지)
+const atTime = (daysAgo, hh, mm) => {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  d.setHours(hh, mm, 0, 0);
+  return d.toISOString();
+};
 export function demoState() {
   const s = seedState();
   const t = todayISO();
@@ -407,23 +461,39 @@ export function demoState() {
       mk("저녁", "18:00", menus[(d + 4) % menus.length], Math.round(totalG(menus[(d + 4) % menus.length]) * ratios[2][d % 2])),
     ];
   }
-  logs[t] = [mk("아침", "07:00", [fz("죽", 4, 20), fz("소고기", 1), fz("브로콜리", 1), fz("애호박", 1)], 118)];
+  // 작성자 추적 데모: 오늘 아침 기록은 "아빠"가 남기고 "데모 사용자"가 섭취량을 다시 확인·수정한 것으로 구성
+  const todayBreakfastLogId = uid();
+  logs[t] = [{
+    ...mk("아침", "07:00", [fz("죽", 4, 20), fz("소고기", 1), fz("브로콜리", 1), fz("애호박", 1)], 118),
+    id: todayBreakfastLogId,
+    createdBy: DEMO_UID_2, createdAt: atTime(0, 7, 12),
+    updatedBy: "demo", updatedAt: atTime(0, 7, 45),
+  }];
   // 데모 전용 풍부한 재고·식단·먹어본 재료 (seedState는 중립 예시만 담으므로 여기서 채움)
+  const jukBatchId = uid(), beefBatchId = uid(), zucchiniBatchId = uid(), carrotBatchId = uid();
   const stock = {
-    죽: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 20, frozen: 8, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
-    소고기: { batches: [{ id: uid(), date: addDaysISO(t, -3), unitG: 15, frozen: 2, fridgeG: 40, frozenExp: addDaysISO(t, 11), fridgeExp: addDaysISO(t, 1) }] },
+    죽: { batches: [{ id: jukBatchId, date: addDaysISO(t, -2), unitG: 20, frozen: 8, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null,
+      createdBy: DEMO_UID_2, createdAt: atTime(2, 10, 5) }] },
+    소고기: { batches: [{ id: beefBatchId, date: addDaysISO(t, -3), unitG: 15, frozen: 2, fridgeG: 40, frozenExp: addDaysISO(t, 11), fridgeExp: addDaysISO(t, 1),
+      createdBy: "demo", createdAt: atTime(3, 14, 30), updatedBy: DEMO_UID_2, updatedAt: atTime(0, 8, 0) }] },
     브로콜리: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 4, fridgeG: 20, frozenExp: addDaysISO(t, 12), fridgeExp: addDaysISO(t, 1) }] },
-    애호박: { batches: [{ id: uid(), date: addDaysISO(t, -1), unitG: 15, frozen: 9, fridgeG: 0, frozenExp: addDaysISO(t, 13), fridgeExp: null }] },
+    애호박: { batches: [{ id: zucchiniBatchId, date: addDaysISO(t, -1), unitG: 15, frozen: 9, fridgeG: 0, frozenExp: addDaysISO(t, 13), fridgeExp: null,
+      createdBy: DEMO_UID_2, createdAt: atTime(1, 19, 40) }] },
     단호박: { batches: [{ id: uid(), date: addDaysISO(t, -1), unitG: 15, frozen: 6, fridgeG: 0, frozenExp: addDaysISO(t, 13), fridgeExp: null }] },
     닭고기: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 5, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
     청경채: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 5, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
-    당근: { batches: [{ id: uid(), date: addDaysISO(t, -2), unitG: 15, frozen: 7, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null }] },
+    당근: { batches: [{ id: carrotBatchId, date: addDaysISO(t, -2), unitG: 15, frozen: 7, fridgeG: 0, frozenExp: addDaysISO(t, 12), fridgeExp: null,
+      createdBy: "demo", createdAt: atTime(2, 9, 20) }] },
   };
+  const todayLunchMealId = uid(), todayDinnerMealId = uid();
   const plans = {
     [t]: [
-      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "브로콜리", qty: 1 }, { name: "애호박", qty: 1 }] },
-      { id: uid(), label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "단호박", qty: 1 }] },
-      { id: uid(), label: "저녁", time: "18:00", items: [{ name: "죽", qty: 4 }, { name: "닭고기", qty: 1 }, { name: "청경채", qty: 1 }] },
+      { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "브로콜리", qty: 1 }, { name: "애호박", qty: 1 }],
+        createdBy: DEMO_UID_2, createdAt: atTime(1, 20, 10) },
+      { id: todayLunchMealId, label: "점심", time: "12:00", items: [{ name: "죽", qty: 4 }, { name: "소고기", qty: 1 }, { name: "단호박", qty: 1 }],
+        createdBy: "demo", createdAt: atTime(1, 20, 12) },
+      { id: todayDinnerMealId, label: "저녁", time: "18:00", items: [{ name: "죽", qty: 4 }, { name: "닭고기", qty: 1 }, { name: "청경채", qty: 1 }],
+        createdBy: "demo", createdAt: atTime(1, 20, 15), updatedBy: DEMO_UID_2, updatedAt: atTime(0, 11, 5) },
     ],
     [addDaysISO(t, 1)]: [
       { id: uid(), label: "아침", time: "07:00", items: [{ name: "죽", qty: 4 }, { name: "두부", qty: 1 }, { name: "시금치", qty: 1 }] },
@@ -445,19 +515,50 @@ export function demoState() {
   Object.entries(eatenSeed).forEach(([cat, names]) =>
     names.forEach((name) => intros.push({ id: uid(), name, cat, status: "이상없음", memo: "", date: addDaysISO(t, -20) }))
   );
-  intros.unshift({ id: uid(), name: "새송이버섯", cat: "채소", status: "관찰중", memo: "곱게 갈아서 제공", date: addDaysISO(t, -2) });
+  const songiId = uid();
+  intros.unshift({ id: songiId, name: "새송이버섯", cat: "채소", status: "관찰중", memo: "곱게 갈아서 제공", date: addDaysISO(t, -2) });
+  // 작성자 추적 기능 데모: 고정 uid "demo" + 가상의 두 번째 구성원("아빠")을 미리 등록해
+  // 구글 로그인 없이도 뱃지·활동 내역·구성원 필터를 확인할 수 있게 함
+  const memberProfiles = {
+    demo: { name: "데모 사용자", color: MEMBER_COLOR_PALETTE[0], joinedAt: addDaysISO(t, -20) },
+    [DEMO_UID_2]: { name: "아빠", color: MEMBER_COLOR_PALETTE[1], joinedAt: addDaysISO(t, -18) },
+  };
+  // 활동 내역 화면 미리보기용 예시 로그 - 위에서 만든 실제 배치·끼니·기록과 동일한 id를 참조해
+  // 활동 내역에서 항목을 탭하면 해당 상세 화면으로 정상 이동한다
+  const activity = [
+    { id: uid(), at: atTime(2, 9, 20), by: "demo", action: "STOCK_ADD_BATCH", kind: "create", summary: "당근 제조 기록 추가 (냉동 7큐브)", ref: { name: "당근" } },
+    { id: uid(), at: atTime(2, 10, 5), by: DEMO_UID_2, action: "STOCK_ADD_BATCH", kind: "create", summary: "죽 제조 기록 추가 (냉동 8큐브)", ref: { name: "죽" } },
+    { id: uid(), at: atTime(1, 19, 40), by: DEMO_UID_2, action: "STOCK_ADD_BATCH", kind: "create", summary: "애호박 제조 기록 추가 (냉동 9큐브)", ref: { name: "애호박" } },
+    { id: uid(), at: atTime(1, 20, 0), by: DEMO_UID_2, action: "INTRO_UPSERT", kind: "create", summary: "새송이버섯 먹어본 재료 등록 (관찰중)", ref: { name: "새송이버섯" } },
+    { id: uid(), at: atTime(1, 20, 10), by: DEMO_UID_2, action: "PLAN_SAVE_MEAL", kind: "create", summary: `${t.slice(5)} 아침 식단 추가 (재료 4개)`, ref: { date: t, mealId: plans[t][0].id, label: "아침" } },
+    { id: uid(), at: atTime(1, 20, 12), by: "demo", action: "PLAN_SAVE_MEAL", kind: "create", summary: `${t.slice(5)} 점심 식단 추가 (재료 3개)`, ref: { date: t, mealId: todayLunchMealId, label: "점심" } },
+    { id: uid(), at: atTime(1, 20, 15), by: "demo", action: "PLAN_SAVE_MEAL", kind: "create", summary: `${t.slice(5)} 저녁 식단 추가 (재료 3개)`, ref: { date: t, mealId: todayDinnerMealId, label: "저녁" } },
+    { id: uid(), at: atTime(0, 7, 12), by: DEMO_UID_2, action: "LOG_SAVE", kind: "create", summary: `${t.slice(5)} 아침 급여 기록 저장 (재료 4개, 125g)`, ref: { date: t, logId: todayBreakfastLogId, label: "아침" } },
+    { id: uid(), at: atTime(0, 7, 45), by: "demo", action: "LOG_SAVE", kind: "update", summary: `${t.slice(5)} 아침 급여 기록 수정 (재료 4개, 125g)`, ref: { date: t, logId: todayBreakfastLogId, label: "아침" } },
+    { id: uid(), at: atTime(0, 8, 0), by: DEMO_UID_2, action: "STOCK_UPDATE_BATCH", kind: "update", summary: "소고기 제조 배치 수정", ref: { name: "소고기" } },
+    { id: uid(), at: atTime(0, 11, 5), by: DEMO_UID_2, action: "PLAN_SAVE_MEAL", kind: "update", summary: `${t.slice(5)} 저녁 식단 수정 (재료 3개)`, ref: { date: t, mealId: todayDinnerMealId, label: "저녁" } },
+  ];
   // 가상의 생일 (~생후 9개월) - 실제 개인 정보 아님
-  return { ...s, stock, plans, logs, intros, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: addDaysISO(t, -280) } };
+  return { ...s, stock, plans, logs, intros, memberProfiles, activity, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: addDaysISO(t, -280) } };
 }
 
 export function DemoProvider() {
-  const [state, dispatch] = useReducer(reducer, undefined, () => demoState());
+  const [state, rawDispatch] = useReducer(reducer, undefined, () => demoState());
+  const dispatch = useCallback(
+    (action) => rawDispatch({ ...action, _actor: "demo", _at: new Date().toISOString() }),
+    []
+  );
   // 실제 앱과 동일한 공용 토스트 (데모에서도 저장/삭제 피드백 확인 가능)
   const { toast, setToast, notify } = useToast();
   const cloud = {
     familyId: "demo",
     user: { uid: "demo", displayName: "데모", email: "demo@babycube.app" },
-    meta: { members: ["demo"], memberInfo: { demo: { name: "데모" } }, ownerUid: "demo" },
+    // 작성자 추적 데모: 가상의 두 번째 구성원("아빠")도 함께 노출해 구성원 필터·뱃지를 확인할 수 있게 함
+    meta: {
+      members: ["demo", DEMO_UID_2],
+      memberInfo: { demo: { name: "데모 사용자", email: "demo@babycube.app" }, [DEMO_UID_2]: { name: "아빠", email: "dad@babycube.app" } },
+      ownerUid: "demo",
+    },
     leaveFamily: () => {},
     logout: () => {},
   };

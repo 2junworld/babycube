@@ -67,10 +67,11 @@ export function urgentStockNames(state, frozenDaysThreshold = 3) {
 export function frozenAlerts(state) {
   return Object.keys(state.stock).map((name) => {
     const cubes = stockTotalCubes(state, name);
-    if (cubes <= 0) return null;
-    const dl = daysLeft(state, name);
+    // 재고가 완전히 소진된 재료는 예측(daysLeft) 없이 항상 0일로 취급해 알림에 포함
+    // (예전엔 cubes<=0이면 통째로 제외돼서, 정작 다 떨어진 순간 알림이 사라지는 문제가 있었음)
+    const dl = cubes > 0 ? daysLeft(state, name) : 0;
     return { name, cubes, g: stockTotalFrozenG(state, name), daysLeft: dl };
-  }).filter((x) => x && x.daysLeft != null && x.daysLeft <= 5).sort((a, b) => a.daysLeft - b.daysLeft);
+  }).filter((x) => x.daysLeft != null && x.daysLeft <= 5).sort((a, b) => a.daysLeft - b.daysLeft);
 }
 
 export function fridgeAlerts(state) {

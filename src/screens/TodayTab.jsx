@@ -134,7 +134,7 @@ export function TodayTab({ go }) {
                     <span style={{ fontSize: 12.5, color: C.inkSoft, width: 52 }}>{r.name}</span>
                     <CubeGrid filled={r.cubes} total={10} />
                   </div>
-                  <span style={{ fontSize: 11.5, color: C.apricot, fontWeight: 600 }}>~{r.daysLeft}일</span>
+                  <span style={{ fontSize: 11.5, color: C.apricot, fontWeight: 600 }}>{r.cubes <= 0 ? "소진" : `~${r.daysLeft}일`}</span>
                 </div>
               ))}
             </div>
