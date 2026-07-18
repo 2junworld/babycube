@@ -5,7 +5,7 @@ import { C, stepBtn } from "../theme";
 import { fmtTime, uid } from "../lib/dates";
 import { deductFridge, deductFrozen, isStaple, restoreFridge, restoreFrozen, sortByCategory, stockFridgeG, stockTotalCubes, unitGOf } from "../state/appState";
 import { useStore } from "../store";
-import { CatDot, ConfirmModal, NumInput, Segmented, SubHeader, TimePicker } from "../components/common";
+import { AuthorInfo, CatDot, ConfirmModal, NumInput, Segmented, SubHeader, TimePicker } from "../components/common";
 import { StockChangeHint } from "../components/hints";
 import { IngredientPicker } from "../components/pickers";
 import { primaryBtn } from "../theme";
@@ -266,6 +266,9 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
             </span>
           </span>
         </label>
+        {existingLog && (
+          <AuthorInfo createdBy={existingLog.createdBy} createdAt={existingLog.createdAt} updatedBy={existingLog.updatedBy} updatedAt={existingLog.updatedAt} />
+        )}
         <button onClick={() => items.length > 0 && setConfirmingSave(true)} disabled={items.length === 0}
           style={{ ...primaryBtn, opacity: items.length === 0 ? 0.5 : 1, cursor: items.length === 0 ? "default" : "pointer" }}>
           {items.length === 0 ? "재료를 추가해 주세요" : "기록 저장"}
