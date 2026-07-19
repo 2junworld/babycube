@@ -4,7 +4,7 @@ import { ChevronRight, AlertTriangle } from "lucide-react";
 import { C } from "../theme";
 import { ageMonths, todayISO } from "../lib/dates";
 import { GROWTH_STAGES, growthStageOf } from "../data/nutrition";
-import { sortByCategory, stockFridgeG, stockTotalCubes } from "../state/appState";
+import { productStockPacks, sortByCategory, stockFridgeG, stockTotalCubes } from "../state/appState";
 import { useStore } from "../store";
 import { CatDot } from "./common";
 import { pairingSuggestions, usedTodayMap } from "../lib/pairing";
@@ -172,14 +172,14 @@ export function mealTipsOf(state) {
 
 // 재고/궁합/오늘 사용 재료 힌트를 하나로 묶어 기본은 접어두고, 필요할 때만 펼쳐보는 패널.
 // 세 카드를 항상 펼쳐두면 화면을 너무 많이 차지한다는 피드백을 받아 접이식으로 변경함(2026-07-04).
-export function MealTipsPanel({ currentNames, onAdd, date = todayISO() }) {
+export function MealTipsPanel({ currentNames, pairingNames = currentNames, onAdd, date = todayISO() }) {
   const { state, dispatch } = useStore();
   const tips = mealTipsOf(state);
   const [expanded, setExpanded] = useState(false);
   const currentSet = new Set(currentNames);
 
   const urgentCount = tips.stock !== false ? urgentStockNames(state).filter((u) => !currentSet.has(u.name)).length : 0;
-  const { good, avoid } = tips.pairing !== false ? pairingSuggestions(state, currentNames) : { good: [], avoid: [] };
+  const { good, avoid } = tips.pairing !== false ? pairingSuggestions(state, pairingNames) : { good: [], avoid: [] };
   const usedTodayCount = tips.usedToday !== false ? Array.from(usedTodayMap(state, date).keys()).filter((n) => !currentSet.has(n)).length : 0;
   const totalCount = urgentCount + good.length + avoid.length + usedTodayCount;
 
@@ -207,7 +207,7 @@ export function MealTipsPanel({ currentNames, onAdd, date = todayISO() }) {
             })}
           </div>
           {tips.stock !== false && <UrgentStockHint currentNames={currentNames} onAdd={onAdd} />}
-          {tips.pairing !== false && <PairingHint currentNames={currentNames} onAdd={onAdd} />}
+          {tips.pairing !== false && <PairingHint currentNames={pairingNames} onAdd={onAdd} />}
           {tips.usedToday !== false && <TodayUsedHint currentNames={currentNames} date={date} />}
         </div>
       )}
@@ -227,6 +227,28 @@ export function StockChangeHint({ item, checked, onToggle }) {
   const used = item.source === "frozen" ? (item.qty || 0) : (item.fridgeG || 0);
   const after = Math.max(0, cur - used);
   const text = `재고 ${cur}${unit} → ${checked ? after : cur}${unit}`;
+  return (
+    <div className="flex items-center justify-end" style={{ gap: 7, marginTop: 4 }}>
+      <span style={{ fontSize: 10, color: C.muted }}>{text}</span>
+      <label className="flex items-center" style={{ gap: 4, cursor: "pointer" }}>
+        <input type="checkbox" checked={checked} onChange={onToggle}
+          style={{ width: 12, height: 12, cursor: "pointer", accentColor: C.sage }} />
+        <span style={{ fontSize: 10, color: checked ? C.sageDeep : C.muted, fontWeight: 700 }}>재고 반영</span>
+      </label>
+    </div>
+  );
+}
+
+// 시판 제품용 재고 반영 안내 - 전역 토글이 꺼져있으면 재고 반영 개념 자체가 없어 아무것도 표시하지 않음 (확정 정책)
+export function ProductStockChangeHint({ item, checked, onToggle }) {
+  const { state } = useStore();
+  if (!state.settings.productStockEnabled) return null;
+  const cur = productStockPacks(state, item.productId);
+  if (cur <= 0) {
+    return <div style={{ textAlign: "right", fontSize: 10, color: C.muted, marginTop: 4 }}>재고에 없는 제품이에요</div>;
+  }
+  const after = Math.max(0, cur - (item.qty || 0));
+  const text = `재고 ${cur}팩 → ${checked ? after : cur}팩`;
   return (
     <div className="flex items-center justify-end" style={{ gap: 7, marginTop: 4 }}>
       <span style={{ fontSize: 10, color: C.muted }}>{text}</span>

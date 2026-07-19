@@ -1,7 +1,7 @@
 /* 공용 UI 컴포넌트 - 배지·리스트·모달·시간 선택 등 화면들이 공유 (C-2 파일 분리) */
 import React, { useState, useEffect } from "react";
 import { ChevronLeft, X } from "lucide-react";
-import { C, CATEGORY, CATEGORIES, selectStyle } from "../theme";
+import { C, CATEGORY, CATEGORIES, selectStyle, PRODUCT_COLOR } from "../theme";
 import { fmtTime } from "../lib/dates";
 import { catOf, gOf, catTotals, sortByCategory } from "../state/appState";
 import { useStore } from "../store";
@@ -60,6 +60,12 @@ export function CatDot({ name, size = 7 }) {
     background: color, marginRight: 6, flexShrink: 0 }} />;
 }
 
+// 시판 이유식 항목 표시용 점 - 재료 카테고리 색과 구분되는 별도 색 (시판 이유식 기능)
+export function ProductDot({ size = 7 }) {
+  return <span style={{ display: "inline-block", width: size, height: size, borderRadius: "50%",
+    background: PRODUCT_COLOR, marginRight: 6, flexShrink: 0 }} />;
+}
+
 export function CategoryLegend() {
   return (
     <div className="flex items-center" style={{ gap: 13, flexWrap: "wrap" }}>
@@ -105,8 +111,9 @@ export function MealItemList({ items, fontSize = 11, wrap = false, empty = "-" }
   return (
     <div style={{ display: "flex", flexDirection: wrap ? "row" : "column", flexWrap: wrap ? "wrap" : "nowrap", gap: wrap ? "3px 12px" : 2 }}>
       {sorted.map((it) => (
-        <span key={it.name} className="flex items-center" style={{ fontSize, color: C.inkSoft, lineHeight: 1.3 }}>
-          <CatDot name={it.name} size={Math.max(5, fontSize - 4)} />{it.name}
+        <span key={it.productId || it.name} className="flex items-center" style={{ fontSize, color: C.inkSoft, lineHeight: 1.3 }}>
+          {it.source === "product" ? <ProductDot size={Math.max(5, fontSize - 4)} /> : <CatDot name={it.name} size={Math.max(5, fontSize - 4)} />}
+          {it.source === "product" ? `${it.productName} ${it.qty}팩` : it.name}
         </span>
       ))}
     </div>
@@ -124,9 +131,15 @@ export function IngredientTable({ items, total }) {
       </div>
       <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px" }}>
         {sorted.map((it, i) => (
-          <div key={it.name} className="flex items-center justify-between" style={{ padding: "7px 9px", borderTop: i === 0 ? "none" : `1px solid ${C.border}` }}>
-            <div className="flex items-center"><CatDot name={it.name} /><span style={{ fontSize: 12, color: C.inkSoft }}>{it.name}</span></div>
-            <span style={{ fontSize: 12, color: C.muted }}>{it.gramsOverride != null || it.source === "fridge" ? `${gOf(state, it)}g` : `${gOf(state, it)}g (${it.qty}큐브)`}</span>
+          <div key={it.productId || it.name} className="flex items-center justify-between" style={{ padding: "7px 9px", borderTop: i === 0 ? "none" : `1px solid ${C.border}` }}>
+            {it.source === "product" ? (
+              <div className="flex items-center"><ProductDot /><span style={{ fontSize: 12, color: C.inkSoft }}>{it.productName}</span></div>
+            ) : (
+              <div className="flex items-center"><CatDot name={it.name} /><span style={{ fontSize: 12, color: C.inkSoft }}>{it.name}</span></div>
+            )}
+            <span style={{ fontSize: 12, color: C.muted }}>
+              {it.source === "product" ? `${it.qty}팩 (약 ${gOf(state, it)}g)` : it.gramsOverride != null || it.source === "fridge" ? `${gOf(state, it)}g` : `${gOf(state, it)}g (${it.qty}큐브)`}
+            </span>
           </div>
         ))}
       </div>

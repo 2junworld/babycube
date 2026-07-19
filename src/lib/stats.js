@@ -2,6 +2,7 @@
 import React from "react";
 import { addDaysISO, todayISO } from "./dates";
 import { catOf, catTotals, logProvideG } from "../state/appState";
+import { CATEGORIES } from "../theme";
 
 export function weeklyRates(state) {
   const t = todayISO();
@@ -20,11 +21,13 @@ export function weeklyRates(state) {
   return out;
 }
 
-/* 월간 리포트: 급여 횟수 · 평균 섭취율 · 카테고리별/재료별 추정 섭취 비율(제공량 × 전체 섭취율) */
+/* 월간 리포트: 급여 횟수 · 평균 섭취율 · 카테고리별/재료별 추정 섭취 비율(제공량 × 전체 섭취율)
+   시판 제품 항목은 함량을 알 수 없어 카테고리·재료별 집계에서 제외하고(확정 정책),
+   대신 "제작 vs 시판" 비율(끼니 수 기준)로 별도 집계한다 */
 export function monthStats(state, year, month) {
-  const catTotals = { 탄수화물: 0, 단백질: 0, 채소: 0, 과일: 0 };
+  const catTotals = {}; CATEGORIES.forEach((c) => { catTotals[c] = 0; });
   const ingredientTotals = {}; // 재료명 -> 추정 섭취 g
-  let totalProv = 0, totalIntake = 0, count = 0;
+  let totalProv = 0, totalIntake = 0, count = 0, productMealCount = 0;
   Object.keys(state.logs).forEach((d) => {
     const dt = new Date(d + "T00:00:00");
     if (dt.getFullYear() !== year || dt.getMonth() !== month) return;
@@ -34,12 +37,15 @@ export function monthStats(state, year, month) {
       totalProv += prov;
       totalIntake += log.intakeG;
       count += 1;
+      let hasProduct = false;
       log.items.forEach((it) => {
+        if (it.source === "product") { hasProduct = true; return; }
         const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
         const cat = catOf(state, it.name);
         catTotals[cat] = (catTotals[cat] || 0) + g * rate;
         ingredientTotals[it.name] = (ingredientTotals[it.name] || 0) + g * rate;
       });
+      if (hasProduct) productMealCount += 1;
     });
   });
   const avgRate = totalProv ? Math.round((totalIntake / totalProv) * 100) : null;
@@ -48,7 +54,8 @@ export function monthStats(state, year, month) {
     .filter((x) => x.g > 0)
     .sort((a, b) => b.g - a.g)
     .slice(0, 5);
-  return { count, totalProv: Math.round(totalProv), totalIntake: Math.round(totalIntake), avgRate, catTotals, topIngredients };
+  const productMealRate = count > 0 ? Math.round((productMealCount / count) * 100) : null;
+  return { count, totalProv: Math.round(totalProv), totalIntake: Math.round(totalIntake), avgRate, catTotals, topIngredients, productMealCount, productMealRate };
 }
 
 /* 해당 월에 제조된 총량(g) — 재료별 배치의 제조 당시 기록(frozenOriginal/fridgeOriginal) 기준. 이 필드가 없는 옛 배치는 집계에서 제외됨 */

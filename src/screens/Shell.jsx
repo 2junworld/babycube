@@ -6,7 +6,7 @@ import { useStore } from "../store";
 import { TodayTab } from "./TodayTab";
 import { MealPlanTab } from "./PlanTab";
 import { FeedingLogScreen } from "./FeedingLogScreen";
-import { IngredientInfoScreen, ManufactureHistoryScreen, ShoppingScreen, StockDetailScreen, StockTab } from "./StockTab";
+import { IngredientInfoScreen, ManufactureHistoryScreen, ProductDetailScreen, ProductStockDetailScreen, ShoppingScreen, StockDetailScreen, StockTab } from "./StockTab";
 import { FeedingCompareScreen, RecordHistoryScreen, RecordTab } from "./RecordTab";
 import { ActivityScreen, MealSlotsScreen, MembersScreen, MoreTab, SettingsScreen, TravelScreen } from "./MoreTab";
 
@@ -42,8 +42,10 @@ export function Shell() {
   else if (route === "stockDetail") content = <StockDetailScreen name={params.name} onBack={back} />;
   else if (route === "recordHistory") content = <RecordHistoryScreen onBack={back} />;
   else if (route === "feedCompare") content = <FeedingCompareScreen date={params.date} logId={params.logId} label={params.label} onBack={back} />;
-  else if (route === "ingredientInfo") content = <IngredientInfoScreen name={params.name} onBack={back} />;
+  else if (route === "ingredientInfo") content = <IngredientInfoScreen name={params.name} onBack={back} go={go} />;
   else if (route === "manufactureHistory") content = <ManufactureHistoryScreen onBack={back} />;
+  else if (route === "productDetail") content = <ProductDetailScreen productId={params.productId} onBack={back} go={go} />;
+  else if (route === "productStockDetail") content = <ProductStockDetailScreen productId={params.productId} onBack={back} />;
   else if (tab === "today") content = <TodayTab go={go} />;
   else if (tab === "plan") content = <MealPlanTab />;
   else if (tab === "stock") content = <StockTab go={go} />;

@@ -1,12 +1,12 @@
 /* 선택기 모달 - 재료·끼니 종류·식단 복사 */
 import React, { useState, useEffect } from "react";
 import { Plus, X, Check, Search, Star } from "lucide-react";
-import { C, CATEGORIES } from "../theme";
-import { fmtTime, todayISO } from "../lib/dates";
+import { C, CATEGORIES, PRODUCT_COLOR } from "../theme";
+import { fmtTime, todayISO, uid } from "../lib/dates";
 import { DB_CATEGORY } from "../data/nutrition";
-import { catOf, normalizeIngredientName, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
+import { catOf, normalizeIngredientName, productStockPacks, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
 import { useStore } from "../store";
-import { BottomSheet, CatDot, MealItemList, useVisualViewport } from "./common";
+import { BottomSheet, CatDot, ConfirmModal, MealItemList, NumInput, ProductDot, useVisualViewport } from "./common";
 import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedTodayMap } from "../lib/pairing";
 import { primaryBtn } from "../theme";
 
@@ -17,7 +17,7 @@ import { primaryBtn } from "../theme";
 // 정렬은 여러 기준을 동시에 켤 수 있음(중복 선택) — 아래 고정된 우선순위(즐겨찾기 > 오늘 사용 재료 > 궁합 좋은 재료 >
 // 재고순 > 카테고리순) 순서로 앞 기준이 같을 때만 다음 기준으로 넘어가며, 마지막엔 항상 이름순으로 마무리함.
 // 재고순만 한 칩을 반복 클릭하면 꺼짐→적은순→많은순→꺼짐 순으로 도는 3단 토글.
-export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], date = todayISO() }) {
+export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], pairingNames = alreadyAdded, date = todayISO() }) {
   const { state, dispatch } = useStore();
   const vv = useVisualViewport();
   const [q, setQ] = useState("");
@@ -47,7 +47,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
   const sortChain = [];
   if (sortSel.fav) sortChain.push((a, b) => { const fa = isFavorite(a), fb = isFavorite(b); return fa !== fb ? (fa ? -1 : 1) : 0; });
   if (sortSel.pairing) sortChain.push((a, b) => {
-    const ra = pairingRankFor(state, alreadyAdded, a), rb = pairingRankFor(state, alreadyAdded, b);
+    const ra = pairingRankFor(state, pairingNames, a), rb = pairingRankFor(state, pairingNames, b);
     if (ra === rb) return 0;
     if (ra === null) return 1;
     if (rb === null) return -1;
@@ -158,7 +158,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
             const already = multi && addedSet.has(n);
             const checked = selected.includes(n);
             const fav = isFavorite(n);
-            const pairInfo = sortSel.pairing ? pairingInfoFor(state, alreadyAdded, n) : null;
+            const pairInfo = sortSel.pairing ? pairingInfoFor(state, pairingNames, n) : null;
             return (
               <button key={n} onClick={() => (multi ? (already ? null : toggle(n)) : pickOne(n))} disabled={already}
                 className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
@@ -205,6 +205,165 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
         )}
       </div>
     </div>
+  );
+}
+
+/* =====================================================================
+   시판 제품 등록/수정 시트 - 재료 정보 화면의 제품 관리 카테고리, 그리고 급여 기록·식단표에서
+   제품 선택 도중 "새 제품 등록"으로 바로 들어올 때(onSaved) 함께 사용하는 공용 컴포넌트
+   ===================================================================== */
+export function ProductEditSheet({ product, onClose, go, onSaved }) {
+  const { state, dispatch, notify } = useStore();
+  const isNew = product === "new";
+  const base = isNew ? {} : product;
+  const [name, setName] = useState(base.name || "");
+  const [brand, setBrand] = useState(base.brand || "");
+  const [packG, setPackG] = useState(base.packG || 100);
+  const [ingredients, setIngredients] = useState(base.ingredients || []);
+  const [memo, setMemo] = useState(base.memo || "");
+  const [picker, setPicker] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const canSave = name.trim() && ingredients.length > 0;
+
+  const save = () => {
+    if (!canSave) return;
+    // id를 미리 만들어 리듀서와 onSaved 콜백이 같은 제품을 가리키게 함(급여기록·식단표에서
+    // 등록 직후 바로 선택 처리할 때 필요)
+    const id = isNew ? uid() : base.id;
+    dispatch({ type: "PRODUCT_UPSERT", product: { id, name, brand, packG: Number(packG) || 0, ingredients, memo } });
+    if (onSaved) onSaved({ id, name: normalizeIngredientName(name) || name.trim(), brand: brand.trim(), packG: Number(packG) || 0, ingredients });
+    onClose();
+  };
+  const del = () => {
+    dispatch({ type: "PRODUCT_DELETE", id: base.id });
+    notify(`'${base.name}' 제품을 삭제했습니다`, () => dispatch({ type: "RESTORE_PRODUCT", product: base }));
+    onClose();
+  };
+
+  return (
+    <BottomSheet title={isNew ? "시판 제품 추가" : "시판 제품 수정"} onClose={onClose}>
+      <div style={{ padding: "0 18px calc(20px + env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제품명</div>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 소고기미역진밥"
+            style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontWeight: 700, color: C.ink, background: "transparent" }} />
+        </div>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>브랜드 (선택)</div>
+          <input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="예: 배○밀"
+            style={{ width: "100%", border: "none", outline: "none", fontSize: 13, color: C.ink, background: "transparent" }} />
+        </div>
+        <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+          <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>1팩 용량</span>
+          <NumInput value={Number(packG) || 0} onChange={setPackG} width={52} suffix="g" />
+        </div>
+        <div>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>포함 재료 ({ingredients.length})</span>
+            <button onClick={() => setPicker(true)} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>선택</button>
+          </div>
+          {ingredients.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.apricot }}>최소 1개 이상 선택해 주세요</div>
+          ) : (
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+              {ingredients.map((n) => (
+                <span key={n} className="flex items-center" style={{ gap: 4, fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "3px 5px 3px 9px" }}>
+                  {n}
+                  <button onClick={() => setIngredients(ingredients.filter((x) => x !== n))} style={{ background: "rgba(0,0,0,0.08)", border: "none", width: 14, height: 14, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}><X size={8} color={C.sageDeep} /></button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>
+            포함 재료의 궁합(상성) 정보는 혼합 큐브와 같은 방식으로 합쳐져서 제품 상세 화면에 표시돼요.
+          </div>
+        </div>
+        <textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="메모 (선택)" rows={2}
+          style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.ink, outline: "none", resize: "none", fontFamily: "inherit" }} />
+        <button onClick={save} disabled={!canSave} style={{ ...primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "default" }}>{isNew ? "추가" : "저장"}</button>
+        {!isNew && state.settings.productStockEnabled && (
+          <button onClick={() => { onClose(); go && go("productStockDetail", { productId: base.id }); }}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>재고 관리로 이동</button>
+        )}
+        {!isNew && <button onClick={() => setConfirmDel(true)} style={{ background: "none", border: "none", color: C.apricot, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "2px 0" }}>이 제품 삭제</button>}
+      </div>
+      {picker && <IngredientPicker multi alreadyAdded={ingredients} onPick={(names) => { setIngredients(Array.from(new Set([...ingredients, ...names]))); setPicker(false); }} onClose={() => setPicker(false)} />}
+      {confirmDel && (
+        <ConfirmModal
+          title={`'${name}' 제품을 삭제할까요?`}
+          message="과거 급여 기록의 제품 참조는 그대로 남아 이름으로 표시됩니다."
+          onConfirm={del}
+          onCancel={() => setConfirmDel(false)}
+        />
+      )}
+    </BottomSheet>
+  );
+}
+
+/* =====================================================================
+   시판 제품 선택 모달 - 급여 기록·식단표 편집 화면에서 "시판 제품 추가" 진입점 (시판 이유식 기능)
+   재료 선택기(IngredientPicker)와 별도 경량 컴포넌트로 분리 - 정렬·다중선택 등 복잡한
+   로직을 건드리지 않고 안전하게 추가하기 위한 구현 선택. "+ 새 제품 등록"으로 그 자리에서
+   바로 만들고 이어서 선택할 수 있음(ProductEditSheet의 onSaved로 연결)
+   ===================================================================== */
+export function ProductPicker({ onPick, onClose }) {
+  const { state } = useStore();
+  const [q, setQ] = useState("");
+  const [creating, setCreating] = useState(false);
+  const list = Object.values(state.products)
+    .filter((p) => !q || p.name.includes(q) || (p.brand || "").includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  const stockOn = state.settings.productStockEnabled;
+
+  return (
+    <BottomSheet title="시판 제품 선택" onClose={onClose}>
+      <div style={{ padding: "0 18px 10px" }}>
+        <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px", marginBottom: 9 }}>
+          <Search size={15} color={C.muted} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·브랜드로 검색"
+            style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+        </div>
+        <button onClick={() => setCreating(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sageLight, border: "none", borderRadius: 10, padding: "9px 0", fontSize: 12.5, fontWeight: 700, color: C.sageDeep, cursor: "pointer", width: "100%" }}>
+          <Plus size={14} /> 새 시판 제품 등록
+        </button>
+      </div>
+      <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
+        {list.length === 0 && (
+          <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
+            등록된 시판 제품이 없어요.<br />위 버튼으로 바로 등록할 수 있어요.
+          </div>
+        )}
+        {list.map((p) => {
+          const packs = stockOn ? productStockPacks(state, p.id) : null;
+          return (
+            <button key={p.id} onClick={() => onPick(p)} style={{ width: "100%", textAlign: "left", padding: "11px 12px",
+              borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center" style={{ gap: 7, minWidth: 0 }}>
+                  <ProductDot />
+                  <span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{p.name}</span>
+                  {p.brand && <span style={{ fontSize: 10.5, color: C.muted }}>{p.brand}</span>}
+                </div>
+                <span style={{ fontSize: 11, color: packs != null && packs <= 0 ? C.apricot : C.muted, flexShrink: 0 }}>
+                  {packs != null ? `${packs}팩` : `1팩 ${p.packG}g`}
+                </span>
+              </div>
+              {p.ingredients.length > 0 && (
+                <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+                  {p.ingredients.map((n) => (
+                    <span key={n} style={{ fontSize: 10, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{n}</span>
+                  ))}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {creating && (
+        <ProductEditSheet product="new" onClose={() => setCreating(false)}
+          onSaved={(p) => { setCreating(false); onPick(p); }} />
+      )}
+    </BottomSheet>
   );
 }
 

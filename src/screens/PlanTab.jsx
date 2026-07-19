@@ -8,9 +8,10 @@ import { useStore } from "../store";
 import { AuthorInfo, CategoryBar, CategoryLegend, FromRecordBadge, IngredientTable, MealItemList, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { useDetailView } from "./uiPrefs";
 import { weekMealLabels } from "../lib/mealLabels";
+import { pairingNamesOf } from "../lib/pairing";
 import { GrowthStageHint, MealTipsPanel } from "../components/hints";
 import { IngredientPicker, MealCopyPicker, MealSlotPicker } from "../components/pickers";
-import { PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
+import { AddProductButton, PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
 import { primaryBtn } from "../theme";
 
 /* =====================================================================
@@ -21,7 +22,7 @@ export function MealEditScreen({ date, meal, onBack }) {
   const timeFmt = state.settings.timeFmt;
   const [label, setLabel] = useState(meal.label || "");
   const [time, setTime] = useState(meal.time || "12:00");
-  const editor = usePlanItemsEditor(meal.items.map((it) => ({
+  const editor = usePlanItemsEditor(meal.items.map((it) => (it.source === "product" ? it : {
     ...it,
     unitG: it.unitG != null ? it.unitG : unitGOf(state, it.name),
     gramsOverride: it.gramsOverride != null ? it.gramsOverride : null,
@@ -44,7 +45,10 @@ export function MealEditScreen({ date, meal, onBack }) {
   const save = () => {
     if (!label) return; // 끼니 종류 미선택 - 아래 저장 버튼이 비활성화·안내 문구로 바뀌므로 여기까지 오지 않음
     // fromRecord: 바로기록으로 생긴 끼니를 편집해도 '바로기록' 구분 표시는 유지
-    dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: meal.id || uid(), label, time, items: items.map(({ name, qty, unitG, gramsOverride }) => ({ name, qty, unitG, gramsOverride: gramsOverride != null ? gramsOverride : null })), ...(meal.fromRecord ? { fromRecord: true } : {}) } });
+    const savedItems = items.map((it) => it.source === "product"
+      ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty }
+      : { name: it.name, qty: it.qty, unitG: it.unitG, gramsOverride: it.gramsOverride != null ? it.gramsOverride : null });
+    dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: meal.id || uid(), label, time, items: savedItems, ...(meal.fromRecord ? { fromRecord: true } : {}) } });
     onBack();
   };
 
@@ -78,13 +82,16 @@ export function MealEditScreen({ date, meal, onBack }) {
         <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer" }}>
           다른 날짜 식단 복사해오기
         </button>
-        <MealTipsPanel currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} date={date} />
+        <MealTipsPanel currentNames={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onAdd={(name) => addItems([name])} date={date} />
 
         <PlanItemsEditor editor={editor} />
 
-        <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-          <Plus size={14} /> 재료 추가
-        </button>
+        <div className="flex items-center" style={{ gap: 8 }}>
+          <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+            <Plus size={14} /> 재료 추가
+          </button>
+          <AddProductButton editor={editor} />
+        </div>
 
         {meal.id && (
           <AuthorInfo createdBy={meal.createdBy} createdAt={meal.createdAt} updatedBy={meal.updatedBy} updatedAt={meal.updatedAt} />
@@ -94,7 +101,7 @@ export function MealEditScreen({ date, meal, onBack }) {
           {label ? "저장" : "끼니 종류를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} date={date} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>
@@ -163,12 +170,15 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
 
   const save = () => {
     let applied = 0, skipped = 0;
+    const savedItems = items.map((it) => it.source === "product"
+      ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty }
+      : { name: it.name, qty: it.qty, unitG: it.unitG, gramsOverride: it.gramsOverride != null ? it.gramsOverride : null });
     selectedDates.forEach((iso) => {
       if (hasLabel(iso)) { skipped++; return; }
       dispatch({
         type: "PLAN_SAVE_MEAL",
         date: iso,
-        meal: { id: uid(), label, time, items: items.map(({ name, qty, unitG, gramsOverride }) => ({ name, qty, unitG, gramsOverride: gramsOverride != null ? gramsOverride : null })) },
+        meal: { id: uid(), label, time, items: savedItems },
       });
       applied++;
     });
@@ -206,15 +216,18 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
             다른 날짜 식단 복사해오기
           </button>
           <div style={{ marginTop: 8 }}>
-            <MealTipsPanel currentNames={items.map((it) => it.name)} onAdd={(name) => addItems([name])} date={tipsDate} />
+            <MealTipsPanel currentNames={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onAdd={(name) => addItems([name])} date={tipsDate} />
           </div>
         </div>
 
         <div>
           <PlanItemsEditor editor={editor} />
-          <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer", marginTop: 8, width: "100%" }}>
-            <Plus size={14} /> 재료 추가
-          </button>
+          <div className="flex items-center" style={{ gap: 8, marginTop: 8 }}>
+            <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+              <Plus size={14} /> 재료 추가
+            </button>
+            <AddProductButton editor={editor} />
+          </div>
         </div>
 
         <div>
@@ -284,7 +297,7 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
           {selectedDates.length > 0 ? `${selectedDates.length}개 날짜에 저장` : "날짜를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} date={tipsDate} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={tipsDate} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>

@@ -523,6 +523,28 @@ export function demoState() {
     demo: { name: "데모 사용자", color: MEMBER_COLOR_PALETTE[0], joinedAt: addDaysISO(t, -20) },
     [DEMO_UID_2]: { name: "아빠", color: MEMBER_COLOR_PALETTE[1], joinedAt: addDaysISO(t, -18) },
   };
+  // 시판 이유식 데모 예시: 제품 2개(하나는 재고 있음, 하나는 소진 상태) + 오늘 점심을
+  // "계획은 제작 이유식이었지만 실제로는 시판 제품으로 먹인" 시나리오로 구성해
+  // 계획 대비 비교 화면에서 재료/시판 항목이 함께 보이는 걸 바로 확인할 수 있게 함
+  const productId1 = uid(), productId2 = uid();
+  const products = {
+    [productId1]: { id: productId1, name: "소고기미역진밥", brand: "배즐거워", packG: 100, ingredients: ["소고기", "미역", "쌀"], memo: "",
+      createdBy: DEMO_UID_2, createdAt: atTime(2, 11, 0) },
+    [productId2]: { id: productId2, name: "단호박아기죽", brand: "아이배냇", packG: 120, ingredients: ["단호박", "쌀"], memo: "완식률이 좋아요",
+      createdBy: "demo", createdAt: atTime(3, 9, 30) },
+  };
+  const productStock = {
+    [productId1]: { lots: [{ id: uid(), buyDate: addDaysISO(t, -2), exp: addDaysISO(t, 180), packs: 3, createdBy: DEMO_UID_2, createdAt: atTime(2, 11, 5) }] },
+    [productId2]: { lots: [{ id: uid(), buyDate: addDaysISO(t, -10), exp: addDaysISO(t, 60), packs: 0, createdBy: "demo", createdAt: atTime(3, 9, 35) }] },
+  };
+  const todayLunchLogId = uid();
+  logs[t].push({
+    ...mk("점심", "12:05", [{ source: "product", productId: productId1, productName: "소고기미역진밥", packG: 100, qty: 1, deduct: true, deductedQty: 1, deductedLots: [{ lotId: productStock[productId1].lots[0].id, qty: 1 }] }], 95),
+    id: todayLunchLogId,
+    planSnapshot: { label: "점심", time: "12:00", items: plans[t][1].items },
+    createdBy: DEMO_UID_2, createdAt: atTime(0, 12, 5),
+  });
+  productStock[productId1].lots[0].packs = 2; // 위 기록으로 1팩 차감된 이후 상태(3 - 1)
   // 활동 내역 화면 미리보기용 예시 로그 - 위에서 만든 실제 배치·끼니·기록과 동일한 id를 참조해
   // 활동 내역에서 항목을 탭하면 해당 상세 화면으로 정상 이동한다
   const activity = [
@@ -537,9 +559,17 @@ export function demoState() {
     { id: uid(), at: atTime(0, 7, 45), by: "demo", action: "LOG_SAVE", kind: "update", summary: `${t.slice(5)} 아침 급여 기록 수정 (재료 4개, 125g)`, ref: { date: t, logId: todayBreakfastLogId, label: "아침" } },
     { id: uid(), at: atTime(0, 8, 0), by: DEMO_UID_2, action: "STOCK_UPDATE_BATCH", kind: "update", summary: "소고기 제조 배치 수정", ref: { name: "소고기" } },
     { id: uid(), at: atTime(0, 11, 5), by: DEMO_UID_2, action: "PLAN_SAVE_MEAL", kind: "update", summary: `${t.slice(5)} 저녁 식단 수정 (재료 3개)`, ref: { date: t, mealId: todayDinnerMealId, label: "저녁" } },
+    { id: uid(), at: atTime(3, 9, 30), by: "demo", action: "PRODUCT_UPSERT", kind: "create", summary: "단호박아기죽 시판 제품 등록", ref: { productId: productId2 } },
+    { id: uid(), at: atTime(2, 11, 0), by: DEMO_UID_2, action: "PRODUCT_UPSERT", kind: "create", summary: "소고기미역진밥 시판 제품 등록", ref: { productId: productId1 } },
+    { id: uid(), at: atTime(0, 12, 5), by: DEMO_UID_2, action: "LOG_SAVE", kind: "create", summary: `${t.slice(5)} 점심 급여 기록 저장 (항목 1개, 100g)`, ref: { date: t, logId: todayLunchLogId, label: "점심" } },
   ];
-  // 가상의 생일 (~생후 9개월) - 실제 개인 정보 아님
-  return { ...s, stock, plans, logs, intros, memberProfiles, activity, members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: addDaysISO(t, -280) } };
+  // 가상의 생일 (~생후 9개월) - 실제 개인 정보 아님. 시판 이유식 재고관리는 데모에서 기본 ON으로 시작해
+  // 구글 로그인 없이도 전체 기능(재고 섹션·비교 화면·활동 내역)을 바로 볼 수 있게 함
+  return {
+    ...s, stock, plans, logs, intros, memberProfiles, activity, products, productStock,
+    settings: { ...s.settings, productStockEnabled: true },
+    members: ["엄마", "아빠"], baby: { name: "", sex: "남아", birth: addDaysISO(t, -280) },
+  };
 }
 
 export function DemoProvider() {

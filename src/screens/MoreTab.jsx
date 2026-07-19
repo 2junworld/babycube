@@ -103,6 +103,21 @@ export function SettingsScreen({ onBack }) {
           </div>
         </div>
         <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>시판 이유식</div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px" }}>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>시판 이유식 재고관리</span>
+              <button onClick={() => set("productStockEnabled", !s.productStockEnabled)}
+                style={{ background: s.productStockEnabled ? C.sage : C.sageLight, border: "none", borderRadius: 999, padding: "4px 12px", fontSize: 11, fontWeight: 700, color: s.productStockEnabled ? "#fff" : C.sageDeep, cursor: "pointer" }}>
+                {s.productStockEnabled ? "켜짐" : "꺼짐"}
+              </button>
+            </div>
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>
+              켜면 재고 탭에서 보유 팩 수와 유통기한을 관리하고, 기록 저장 시 재고가 차감돼요. 꺼둬도 시판 이유식 기록·제품 등록은 그대로 할 수 있어요(재고 차감만 안 함).
+            </div>
+          </div>
+        </div>
+        <div>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>아기 정보</div>
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 11 }}>
             <div className="flex items-center justify-between">

@@ -105,11 +105,11 @@ export function pairingInfoFor(state, currentNames, name) {
   return { goodWith: Array.from(goodWith), avoidWith: Array.from(avoidWith) };
 }
 
-// 특정 재료 하나를 기준으로, 등록된 모든 재료 중 궁합 좋은 재료 / 주의 조합 재료 목록 계산
-// (재료 정보 화면에서 사용 - 재고 유무와 무관하게 전체를 보여주되 재고 있는 재료를 앞에 배치)
-export function ingredientPairsFor(state, name) {
-  const myTags = tagsOf(state, name);
-  const others = Object.keys(state.ingredients).filter((n) => n !== name);
+// 주어진 태그 집합 기준으로 등록된 모든 재료 중 궁합 좋은 재료 / 주의 조합 재료 목록 계산
+// (excludeNames는 결과에서 제외할 이름들 - 자기 자신, 혹은 시판 제품의 포함 재료 전체)
+function pairsForTagSet(state, myTags, excludeNames) {
+  const excl = new Set(excludeNames);
+  const others = Object.keys(state.ingredients).filter((n) => !excl.has(n));
   const good = [];
   const avoid = [];
   others.forEach((other) => {
@@ -127,4 +127,33 @@ export function ingredientPairsFor(state, name) {
     return [...byCat.filter((x) => x.inStock), ...byCat.filter((x) => !x.inStock)];
   };
   return { good: sortList(good), avoid: sortList(avoid) };
+}
+
+// 특정 재료 하나를 기준으로, 등록된 모든 재료 중 궁합 좋은 재료 / 주의 조합 재료 목록 계산
+// (재료 정보 화면에서 사용 - 재고 유무와 무관하게 전체를 보여주되 재고 있는 재료를 앞에 배치)
+export function ingredientPairsFor(state, name) {
+  return pairsForTagSet(state, tagsOf(state, name), [name]);
+}
+
+// 시판 제품의 궁합 좋은 재료 / 주의 조합 계산 - 혼합 큐브와 동일한 방식으로, 포함 재료들의
+// 태그를 합쳐서(합집합) 계산한다(제품 전용 계산 정책 - 제품을 재료 마스터에 등록하지 않음)
+export function productPairsFor(state, ingredientNames) {
+  const tags = new Set();
+  ingredientNames.forEach((n) => tagsOf(state, n).forEach((t) => tags.add(t)));
+  return pairsForTagSet(state, Array.from(tags), ingredientNames);
+}
+
+// 재료·시판 제품이 섞인 급여 항목 목록에서 궁합 계산용 재료 이름 목록을 뽑는다. 시판 제품 항목은
+// 포함 재료 이름으로 펼쳐서(제품 전용 계산 정책) 궁합 추천/주의 조합 계산에 함께 반영되게 한다
+export function pairingNamesOf(state, items) {
+  const names = [];
+  items.forEach((it) => {
+    if (it.source === "product") {
+      const prod = state.products[it.productId];
+      if (prod) names.push(...prod.ingredients);
+    } else if (it.name) {
+      names.push(it.name);
+    }
+  });
+  return names;
 }

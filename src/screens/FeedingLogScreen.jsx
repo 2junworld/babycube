@@ -1,14 +1,18 @@
 /* 급여 기록 화면 - 제공 재료·재고 반영·섭취량·식단표 동기화 */
 import React, { useState } from "react";
 import { Plus, Minus, Trash2, Refrigerator, Snowflake } from "lucide-react";
-import { C, stepBtn } from "../theme";
+import { C, stepBtn, PRODUCT_COLOR } from "../theme";
 import { fmtTime, uid } from "../lib/dates";
-import { deductFridge, deductFrozen, isStaple, restoreFridge, restoreFrozen, sortByCategory, stockFridgeG, stockTotalCubes, unitGOf } from "../state/appState";
+import { deductFridge, deductFrozen, deductProductPacks, isStaple, restoreFridge, restoreFrozen, restoreProductPacks, sortByCategory, stockFridgeG, stockTotalCubes, unitGOf } from "../state/appState";
+import { pairingNamesOf } from "../lib/pairing";
 import { useStore } from "../store";
-import { AuthorInfo, CatDot, ConfirmModal, NumInput, Segmented, SubHeader, TimePicker } from "../components/common";
-import { StockChangeHint } from "../components/hints";
-import { IngredientPicker } from "../components/pickers";
+import { AuthorInfo, CatDot, ConfirmModal, NumInput, ProductDot, Segmented, SubHeader, TimePicker } from "../components/common";
+import { StockChangeHint, ProductStockChangeHint } from "../components/hints";
+import { IngredientPicker, ProductPicker } from "../components/pickers";
 import { primaryBtn } from "../theme";
+
+// 재료·시판 제품 항목을 함께 다루기 위한 공통 식별키 (제품은 name이 없고 productId로 식별)
+const keyOf = (it) => it.productId || it.name;
 
 /* =====================================================================
    급여 기록 화면 (실제 먹인 끼니 → 재고 차감 + 섭취율)
@@ -37,6 +41,12 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   // 실제 중량을 그대로 이어받도록 냉장(계량) 방식으로 옮겨온다 (기본 15g으로 뭉개지는 문제 방지)
   const [items, setItems] = useState(
     base.items.map((it) => {
+      // 시판 제품 항목: 재료와 달리 unitG 개념이 없고 팩 단위로만 다룸. gramsOverride가 있으면
+      // 한 팩을 다 먹이지 않은 경우로, 재고 차감 단위(qty=팩)와 별개로 표시용 제공량을 override함
+      if (it.source === "product") {
+        return { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty || 1,
+          gramsOverride: it.gramsOverride != null ? it.gramsOverride : null, deduct: it.deduct !== false };
+      }
       const effectiveUnitG = it.unitG != null ? it.unitG : unitGOf(state, it.name);
       // 기존 급여기록을 다시 불러오는 경우: 저장 당시의 source(냉동/냉장)를 그대로 존중해야
       // 냉장(중량) 입력값이 냉동(큐브) 개수로 잘못 바뀌는 문제가 없음
@@ -68,18 +78,30 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     })
   );
   const [picker, setPicker] = useState(false);
+  const [productPicker, setProductPicker] = useState(false);
   const [intake, setIntake] = useState(existingLog ? existingLog.intakeG : null);
   const [confirmingSave, setConfirmingSave] = useState(false);
 
-  const provideG = (it) => it.source === "fridge" ? it.fridgeG : it.qty * it.unitG;
+  const provideG = (it) => it.source === "product" ? (it.gramsOverride != null ? it.gramsOverride : it.qty * it.packG) : it.source === "fridge" ? it.fridgeG : it.qty * it.unitG;
   const totalProvide = items.reduce((s, it) => s + provideG(it), 0);
 
-  const setSource = (name, src) => setItems((p) => p.map((it) => it.name === name ? { ...it, source: src } : it));
-  const upQty = (name, d) => setItems((p) => p.map((it) => it.name === name ? { ...it, qty: Math.max(1, it.qty + d) } : it));
-  const upUnit = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, unitG: v } : it));
-  const upFridge = (name, v) => setItems((p) => p.map((it) => it.name === name ? { ...it, fridgeG: v } : it));
-  const toggleDeduct = (name) => setItems((p) => p.map((it) => it.name === name ? { ...it, deduct: !it.deduct } : it));
-  const rm = (name) => setItems((p) => p.filter((it) => it.name !== name));
+  const setSource = (key, src) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, source: src } : it));
+  const upQty = (key, d) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, qty: Math.max(1, it.qty + d) } : it));
+  const upUnit = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, unitG: v } : it));
+  const upFridge = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, fridgeG: v } : it));
+  // 시판 제품의 제공량(g) 직접 입력 - 재고 차감 단위(팩)가 함께 필요하므로, 입력한 g을 담는 데
+  // 필요한 최소 팩 수를 자동으로 계산해 qty에 반영함(팩 수 입력칸은 중량 모드에서 숨김)
+  const upProductGrams = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, gramsOverride: v, qty: Math.max(1, Math.ceil(v / it.packG)) } : it));
+  // 시판 제품의 "팩"/"중량" 입력 방식 전환 - 냉동/냉장 토글과 완전히 동일한 방식으로, 전환 시점의
+  // g을 그대로 이어받고(반대 방향은 팩 수로 반올림) 팩 수는 항상 그에 맞춰 재계산됨
+  const setProductMode = (key, mode) => setItems((p) => p.map((it) => {
+    if (keyOf(it) !== key) return it;
+    const curG = it.gramsOverride != null ? it.gramsOverride : it.qty * it.packG;
+    if (mode === "gram") return { ...it, gramsOverride: curG, qty: Math.max(1, Math.ceil(curG / it.packG)) };
+    return { ...it, gramsOverride: null, qty: Math.max(1, Math.round(curG / it.packG)) };
+  }));
+  const toggleDeduct = (key) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, deduct: !it.deduct } : it));
+  const rm = (key) => setItems((p) => p.filter((it) => keyOf(it) !== key));
   const addItems = (names) => {
     setPicker(false);
     setItems((p) => {
@@ -88,11 +110,20 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
       return [...p, ...toAdd];
     });
   };
+  const addProduct = (product) => {
+    setProductPicker(false);
+    setItems((p) => {
+      if (p.some((it) => it.productId === product.id)) return p; // 이미 담긴 제품
+      return [...p, { source: "product", productId: product.id, productName: product.name, packG: product.packG, qty: 1, gramsOverride: null, deduct: state.settings.productStockEnabled }];
+    });
+  };
 
   const quick = [["완식", 1], ["3/4", 0.75], ["절반", 0.5], ["조금", 0.25], ["거부", 0]];
 
   const save = () => {
-    const logItems = items.map((it) => it.source === "fridge"
+    const logItems = items.map((it) => it.source === "product"
+      ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty, gramsOverride: it.gramsOverride != null ? it.gramsOverride : null, deduct: it.deduct !== false }
+      : it.source === "fridge"
       ? { name: it.name, source: "fridge", qty: it.fridgeG, unitG: 1, deduct: it.deduct !== false }
       : { name: it.name, source: "frozen", qty: it.qty, unitG: it.unitG, deduct: it.deduct !== false });
     // 저장 시점의 식단표(계획)를 스냅샷으로 함께 저장 - 이후 식단표가 수정·삭제돼도
@@ -111,7 +142,9 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     // 교체(계획 시간은 유지)하고, 없으면 새 끼니로 추가. 모두 fromRecord(바로기록) 표시가 붙음.
     // 급여표의 '계획 대비 비교'는 저장 시점 스냅샷(planSnapshot) 기준이라 원래 계획과의 비교는 유지됨
     if (addToPlan) {
-      const planItems = items.map((it) => it.source === "fridge"
+      const planItems = items.map((it) => it.source === "product"
+        ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty, gramsOverride: it.gramsOverride != null ? it.gramsOverride : null }
+        : it.source === "fridge"
         ? { name: it.name, qty: 1, unitG: it.unitG, gramsOverride: it.fridgeG }
         : { name: it.name, qty: it.qty, unitG: it.unitG, gramsOverride: null });
       const target = (planMeal && planMeal.id) ? planMeal : (state.plans[date] || []).find((m) => m.label === label);
@@ -124,22 +157,30 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     // 재고보다 많이 기록하면 있는 만큼만 차감되므로, 요청량이 아니라 실제 차감량 기준으로
     // 계산해야 함 (LOG_SAVE와 동일한 로직을 복제 재고에 시뮬레이션해서 미리 구함)
     const stockSim = JSON.parse(JSON.stringify(state.stock));
+    const productStockSim = JSON.parse(JSON.stringify(state.productStock));
     if (existingLog && existingLog.stockAffected !== false) {
       existingLog.items.forEach((it) => {
         if (it.deduct === false) return;
         const amt = it.deductedQty != null ? it.deductedQty : it.qty;
-        if (it.source === "fridge") restoreFridge(stockSim, it.name, amt);
+        if (it.source === "product") restoreProductPacks(productStockSim, it.productId, amt);
+        else if (it.source === "fridge") restoreFridge(stockSim, it.name, amt);
         else restoreFrozen(stockSim, it.name, amt);
       });
     }
+    const productStockEnabled = state.settings.productStockEnabled;
     const dedInfo = logItems
       .filter((it) => it.deduct !== false)
-      .map((it) => ({
-        name: it.name,
-        unit: it.source === "fridge" ? "g" : "큐브",
-        requested: it.qty,
-        actual: it.source === "fridge" ? deductFridge(stockSim, it.name, it.qty) : deductFrozen(stockSim, it.name, it.qty),
-      }));
+      .map((it) => {
+        if (it.source === "product") {
+          return { name: it.productName, unit: "팩", requested: it.qty, actual: productStockEnabled ? deductProductPacks(productStockSim, it.productId, it.qty) : 0 };
+        }
+        return {
+          name: it.name,
+          unit: it.source === "fridge" ? "g" : "큐브",
+          requested: it.qty,
+          actual: it.source === "fridge" ? deductFridge(stockSim, it.name, it.qty) : deductFrozen(stockSim, it.name, it.qty),
+        };
+      });
     const parts = dedInfo.filter((d) => d.actual > 0).map((d) => `${d.name} ${d.actual}${d.unit}`);
     const shortNames = dedInfo.filter((d) => d.actual < d.requested).map((d) => d.name);
     let msg = parts.length > 0 ? `기록 저장 · 재고 차감: ${parts.join(", ")}` : "기록 저장됨 (재고 차감 없음)";
@@ -184,46 +225,93 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
         <div>
           <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 700, marginBottom: 6, padding: "0 2px" }}>제공한 재료</div>
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-            {sortByCategory(state, items).map((it, i) => (
-              <div key={it.name} style={{ padding: "11px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: C.surface }}>
-                <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-                  <div className="flex items-center"><CatDot name={it.name} size={8} /><span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{it.name}</span></div>
-                  <button onClick={() => rm(it.name)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
-                </div>
-                <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-                  <Segmented value={it.source} onChange={(v) => setSource(it.name, v)} options={[
-                    { value: "frozen", label: <span className="flex items-center justify-center" style={{ gap: 4 }}><Snowflake size={12} /> 냉동</span> },
-                    { value: "fridge", label: <span className="flex items-center justify-center" style={{ gap: 4 }}><Refrigerator size={12} /> 냉장</span> },
-                  ]} />
-                </div>
-                {it.source === "frozen" ? (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center" style={{ gap: 6 }}>
-                      <span style={{ fontSize: 10.5, color: C.muted }}>큐브당</span>
-                      <NumInput value={it.unitG} onChange={(v) => upUnit(it.name, v)} width={38} suffix="g" />
+            {sortByCategory(state, items).map((it, i) => {
+              const key = keyOf(it);
+              return (
+                <div key={key} style={{ padding: "11px 12px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: C.surface }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                    <div className="flex items-center">
+                      {it.source === "product" ? <ProductDot size={8} /> : <CatDot name={it.name} size={8} />}
+                      <span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{it.source === "product" ? it.productName : it.name}</span>
                     </div>
-                    <div className="flex items-center" style={{ gap: 8 }}>
-                      <button onClick={() => upQty(it.name, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}큐브</span>
-                      <button onClick={() => upQty(it.name, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
-                    </div>
+                    <button onClick={() => rm(key)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
                   </div>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <span style={{ fontSize: 10.5, color: C.muted }}>냉장 보관분 (계량)</span>
-                    <NumInput value={it.fridgeG} onChange={(v) => upFridge(it.name, v)} width={52} suffix="g" />
+                  {it.source === "product" ? (
+                    <>
+                      {(state.products[it.productId] || {}).ingredients && (state.products[it.productId] || {}).ingredients.length > 0 && (
+                        <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+                          {state.products[it.productId].ingredients.map((n) => (
+                            <span key={n} style={{ fontSize: 10, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{n}</span>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ marginBottom: 8 }}>
+                        <Segmented value={it.gramsOverride != null ? "gram" : "pack"} onChange={(v) => setProductMode(key, v)} options={[{ value: "pack", label: "팩으로 입력" }, { value: "gram", label: "중량으로 입력" }]} />
+                      </div>
+                      {it.gramsOverride != null ? (
+                        <div className="flex items-center justify-between">
+                          <span style={{ fontSize: 10.5, color: C.muted }}>실제 제공량</span>
+                          <NumInput value={it.gramsOverride} onChange={(v) => upProductGrams(key, v)} width={52} suffix="g" />
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <span style={{ fontSize: 10.5, color: C.muted }}>1팩 {it.packG}g</span>
+                          <div className="flex items-center" style={{ gap: 8 }}>
+                            <button onClick={() => upQty(key, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}팩</span>
+                            <button onClick={() => upQty(key, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                        <Segmented value={it.source} onChange={(v) => setSource(key, v)} options={[
+                          { value: "frozen", label: <span className="flex items-center justify-center" style={{ gap: 4 }}><Snowflake size={12} /> 냉동</span> },
+                          { value: "fridge", label: <span className="flex items-center justify-center" style={{ gap: 4 }}><Refrigerator size={12} /> 냉장</span> },
+                        ]} />
+                      </div>
+                      {it.source === "frozen" ? (
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center" style={{ gap: 6 }}>
+                            <span style={{ fontSize: 10.5, color: C.muted }}>큐브당</span>
+                            <NumInput value={it.unitG} onChange={(v) => upUnit(key, v)} width={38} suffix="g" />
+                          </div>
+                          <div className="flex items-center" style={{ gap: 8 }}>
+                            <button onClick={() => upQty(key, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}큐브</span>
+                            <button onClick={() => upQty(key, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <span style={{ fontSize: 10.5, color: C.muted }}>냉장 보관분 (계량)</span>
+                          <NumInput value={it.fridgeG} onChange={(v) => upFridge(key, v)} width={52} suffix="g" />
+                        </div>
+                      )}
+                    </>
+                  )}
+                  <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 5 }}>
+                    제공 {provideG(it)}g{it.source === "product" && it.gramsOverride != null ? ` (재고 차감 ${it.qty}팩)` : ""}
                   </div>
-                )}
-                <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 5 }}>제공 {provideG(it)}g</div>
-                <StockChangeHint item={it} checked={it.deduct !== false} onToggle={() => toggleDeduct(it.name)} />
-              </div>
-            ))}
+                  {it.source === "product"
+                    ? <ProductStockChangeHint item={it} checked={it.deduct !== false} onToggle={() => toggleDeduct(key)} />
+                    : <StockChangeHint item={it} checked={it.deduct !== false} onToggle={() => toggleDeduct(key)} />}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-          <Plus size={14} /> 재료 추가
-        </button>
+        <div className="flex items-center" style={{ gap: 8 }}>
+          <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+            <Plus size={14} /> 재료 추가
+          </button>
+          <button onClick={() => setProductPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${PRODUCT_COLOR}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: PRODUCT_COLOR, background: "transparent", cursor: "pointer" }}>
+            <Plus size={14} /> 시판 제품 추가
+          </button>
+        </div>
 
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
@@ -274,7 +362,8 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
           {items.length === 0 ? "재료를 추가해 주세요" : "기록 저장"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.map((it) => it.name)} onClose={() => setPicker(false)} date={date} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} />}
+      {productPicker && <ProductPicker onPick={addProduct} onClose={() => setProductPicker(false)} />}
       {confirmingSave && (
         <ConfirmModal
           title={`${label} 급여 기록을 저장할까요?`}
