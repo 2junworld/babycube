@@ -33,3 +33,7 @@ export const primaryBtn = { background: C.sage, border: "none", borderRadius: 14
 
 // 구성원별 뱃지·타임라인 색상 - 가족 참여 순서대로 자동 배정 (작성자 추적 기능)
 export const MEMBER_COLOR_PALETTE = ["#5B8DEF", "#E07A3F", "#6B8F71", "#BB6BD9", "#EB5757", "#4F9DA6"];
+
+// 시판 이유식 항목 강조색 - 냉동(파랑 계열 CatDot)·냉장과 구분되는 별도 색점 (시판 이유식 기능)
+export const PRODUCT_COLOR = "#8E6FCB";
+export const PRODUCT_COLOR_LIGHT = "#EEE7F7";

@@ -2,12 +2,12 @@
 import React, { useState } from "react";
 import { ChevronRight, Plus, Trash2, X, Check, Refrigerator, Snowflake, ShoppingCart, AlertTriangle, Search } from "lucide-react";
 import { db } from "../firebase";
-import { C, CATEGORIES, primaryBtn, selectStyle } from "../theme";
+import { C, CATEGORIES, primaryBtn, selectStyle, PRODUCT_COLOR, PRODUCT_COLOR_LIGHT } from "../theme";
 import { addDaysISO, todayISO } from "../lib/dates";
 import { NUTRIENT_TAGS, TAG_KEYS, TAG_LABELS } from "../data/nutrition";
-import { catOf, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
+import { catOf, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
-import { AuthorInfo, CatDot, ConfirmModal, CubeGrid, NumInput, ScreenHeader, Segmented, SubHeader } from "../components/common";
+import { AuthorInfo, BottomSheet, CatDot, ConfirmModal, CubeGrid, NumInput, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE, readStockPref, writeStockPref } from "./uiPrefs";
 import { ingredientPairsFor, suggestBaseFor, tagsOf } from "../lib/pairing";
 import { frozenAlerts, urgentStockNames } from "../lib/stockAlerts";
@@ -162,6 +162,42 @@ export function StockItem({ name, onClick, urgent, deadlineText, layout }) {
   );
 }
 
+// 재고 탭의 "시판" 섹션 - 전역 토글 ON일 때만 노출. 제품별 보유 팩 수 카드, 탭하면 lot 상세로 이동
+function ProductStockSection({ go, setSubTab }) {
+  const { state } = useStore();
+  const products = Object.values(state.products);
+  return (
+    <div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 7, padding: "0 2px" }}>
+        <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>시판</span>
+        <button onClick={() => { writeStockPref("bc_wiki_mode", "product"); setSubTab("wiki"); }}
+          style={{ fontSize: 10.5, fontWeight: 700, color: C.sageDeep, background: "none", border: "none", cursor: "pointer" }}>제품 추가·관리</button>
+      </div>
+      {products.length === 0 ? (
+        <div style={{ background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 12, padding: "14px", textAlign: "center", fontSize: 11.5, color: C.muted }}>
+          등록된 시판 제품이 없어요. '제품 추가·관리'에서 먼저 등록해 주세요.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {products.map((p) => {
+            const packs = productStockPacks(state, p.id);
+            return (
+              <button key={p.id} onClick={() => go("productStockDetail", { productId: p.id })} className="flex items-center justify-between"
+                style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${packs <= 0 ? C.apricot : C.border}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
+                <div className="flex items-center" style={{ gap: 8, minWidth: 0 }}>
+                  <ProductDot />
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, color: packs > 0 ? C.muted : C.apricot, flexShrink: 0 }}>{packs}팩</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function StockTab({ go }) {
   const { state } = useStore();
   const [batchModal, setBatchModal] = useState(false);
@@ -220,6 +256,11 @@ export function StockTab({ go }) {
               <Plus size={15} /> 제조 기록 추가
             </button>
           </div>
+          {state.settings.productStockEnabled && (
+            <div style={{ padding: "0 18px 12px" }}>
+              <ProductStockSection go={go} setSubTab={setSubTab} />
+            </div>
+          )}
           <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 6 }}>
               <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
@@ -430,7 +471,7 @@ export function ShoppingScreen({ onBack }) {
    재료 정보 화면 - 영양 태그(편집 가능) · 궁합 좋은 재료/주의 조합 · 재고 · 최근 급여 이력
    (기록 탭 '지금까지 먹어본 재료'에서 재료를 탭하면 진입)
    ===================================================================== */
-export function IngredientInfoScreen({ name, onBack }) {
+export function IngredientInfoScreen({ name, onBack, go }) {
   const { state, dispatch } = useStore();
   const [editIntro, setEditIntro] = useState(false);
   const [basePicker, setBasePicker] = useState(false);
@@ -456,17 +497,27 @@ export function IngredientInfoScreen({ name, onBack }) {
     dispatch({ type: "INGREDIENT_TAGS_SET", name, tags: next });
   };
 
-  // 최근 급여 이력 (최신순 5회)
+  // 최근 급여 이력 (최신순 5회) - 재료 직접 급여 + 이 재료를 포함한 시판 제품 노출 이력을 함께 표시
+  // (시판 제품은 함량을 몰라 g 집계에는 안 넣지만, "노출된 적 있다"는 사실은 알레르기 관찰에 중요해서 이력엔 남김)
   const history = [];
   Object.keys(state.logs).sort((a, b) => b.localeCompare(a)).forEach((d) => {
     (state.logs[d] || []).forEach((log) => {
       log.items.forEach((it) => {
+        if (it.source === "product") {
+          const prod = state.products[it.productId];
+          if (prod && prod.ingredients.includes(name)) {
+            history.push({ date: d, label: log.label, product: prod.name });
+          }
+          return;
+        }
         if (it.name !== name) return;
         history.push({ date: d, label: log.label, g: it.source === "fridge" ? it.qty : it.qty * it.unitG });
       });
     });
   });
   const recent = history.slice(0, 5);
+  // 이 재료가 포함된 시판 제품 (역링크)
+  const containingProducts = Object.values(state.products).filter((p) => p.ingredients.includes(name));
 
   const gradeBadge = (g) => (
     <span style={{ fontSize: 8.5, fontWeight: 800, color: g === "A" ? C.sageDeep : "#9A7416", background: g === "A" ? C.sageLight : C.butterLight, borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>근거 {g}</span>
@@ -618,12 +669,31 @@ export function IngredientInfoScreen({ name, onBack }) {
               {recent.map((h, i) => (
                 <div key={i} className="flex items-center justify-between">
                   <span style={{ fontSize: 12, color: C.inkSoft }}>{h.date.slice(5)} · {h.label}</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{h.g}g</span>
+                  {h.product ? (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: PRODUCT_COLOR }}>시판 '{h.product}'으로 노출됨</span>
+                  ) : (
+                    <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{h.g}g</span>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </div>
+
+        {/* 이 재료가 포함된 시판 제품 (역링크) */}
+        {containingProducts.length > 0 && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>이 재료가 포함된 시판 제품</div>
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+              {containingProducts.map((p) => (
+                <button key={p.id} onClick={() => go && go("productDetail", { productId: p.id })}
+                  className="flex items-center" style={{ gap: 5, background: PRODUCT_COLOR_LIGHT, border: "none", borderRadius: 999, padding: "5px 11px", cursor: "pointer" }}>
+                  <ProductDot size={7} /><span style={{ fontSize: 11.5, fontWeight: 700, color: PRODUCT_COLOR }}>{p.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 반응 기록·메모 */}
         {intro ? (
@@ -652,9 +722,25 @@ export function IngredientInfoScreen({ name, onBack }) {
    재료 정보(위키) - 영양 DB 전체 + 앱에 등록된 재료를 카테고리별로 나열.
    먹어본 재료는 진하게(활성) 표시, 탭하면 재료 정보 화면으로 이동
    ===================================================================== */
+const WIKI_EATEN_FILTERS = ["전체", "이상없음", "관찰중", "안 먹어봄"];
+
+// 재료 정보(위키) - 상단 "재료 | 시판 제품" 세그먼트로 재료 목록과 시판 제품 관리를 함께 담음 (시판 이유식 기능)
 export function IngredientWikiPanel({ go }) {
+  const [mode, setModeRaw] = useState(() => readStockPref("bc_wiki_mode", "ingredient", ["ingredient", "product"]));
+  const setMode = (v) => { setModeRaw(v); writeStockPref("bc_wiki_mode", v); };
+  return (
+    <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <Segmented value={mode} onChange={setMode} options={[{ value: "ingredient", label: "재료" }, { value: "product", label: "시판 제품" }]} />
+      {mode === "ingredient" ? <IngredientListPanel go={go} /> : <ProductWikiPanel go={go} />}
+    </div>
+  );
+}
+
+function IngredientListPanel({ go }) {
   const { state } = useStore();
   const [q, setQ] = useState("");
+  const [catFilter, setCatFilter] = useState([]); // 다중 선택, 빈 배열 = 전체
+  const [eatenFilter, setEatenFilter] = useState("전체");
   // 먹어본 재료: intros 등록분 + 변형 재료를 먹었다면 그 기본 재료도 먹은 것으로 간주 (예: 사과퓨레 → 사과)
   const eaten = new Set();
   state.intros.forEach((it) => {
@@ -663,8 +749,21 @@ export function IngredientWikiPanel({ go }) {
     if (b) eaten.add(b);
   });
   const warned = new Set(state.intros.filter((it) => it.status === "주의" || it.status === "중단").map((it) => it.name));
+  const introOf = (n) => state.intros.find((it) => it.name === n);
   const allNames = Array.from(new Set([...Object.keys(NUTRIENT_TAGS), ...Object.keys(state.ingredients)]));
-  const filtered = allNames.filter((n) => !q || n.includes(q));
+  const toggleCat = (c) => setCatFilter((p) => (p.includes(c) ? p.filter((x) => x !== c) : [...p, c]));
+  const filtersActive = catFilter.length > 0 || eatenFilter !== "전체";
+  const resetFilters = () => { setCatFilter([]); setEatenFilter("전체"); };
+  const filtered = allNames.filter((n) => {
+    if (q && !n.includes(q)) return false;
+    if (catFilter.length > 0 && !catFilter.includes(catOf(state, n))) return false;
+    if (eatenFilter !== "전체") {
+      const it = introOf(n);
+      if (eatenFilter === "안 먹어봄") { if (it) return false; }
+      else if (!it || it.status !== eatenFilter) return false;
+    }
+    return true;
+  });
   const byCat = {};
   CATEGORIES.forEach((c) => { byCat[c] = []; });
   filtered.forEach((n) => { (byCat[catOf(state, n)] || byCat["채소"]).push(n); });
@@ -678,16 +777,34 @@ export function IngredientWikiPanel({ go }) {
   const eatenCount = filtered.filter((n) => eaten.has(n)).length;
 
   return (
-    <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+    <>
       <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
         <Search size={15} color={C.muted} />
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료 검색"
           style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
       </div>
+      <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>카테고리</span>
+        {CATEGORIES.map((c) => (
+          <button key={c} onClick={() => toggleCat(c)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+            border: `1px solid ${catFilter.includes(c) ? C.sage : C.border}`, background: catFilter.includes(c) ? C.sageLight : "transparent", color: catFilter.includes(c) ? C.sageDeep : C.muted }}>{c}</button>
+        ))}
+      </div>
+      <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>먹어본 여부</span>
+        {WIKI_EATEN_FILTERS.map((f) => (
+          <button key={f} onClick={() => setEatenFilter(f)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+            border: `1px solid ${eatenFilter === f ? C.sage : C.border}`, background: eatenFilter === f ? C.sageLight : "transparent", color: eatenFilter === f ? C.sageDeep : C.muted }}>{f}</button>
+        ))}
+        {filtersActive && <button onClick={resetFilters} style={{ fontSize: 10.5, fontWeight: 700, color: C.apricot, background: "none", border: "none", cursor: "pointer", padding: "3px 4px" }}>초기화</button>}
+      </div>
       <div className="flex items-center justify-between">
         <span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>먹어본 재료는 진하게 표시돼요 · 탭하면 상세 정보</span>
         <span style={{ fontSize: 10.5, color: C.sageDeep, fontWeight: 700 }}>{eatenCount}/{filtered.length} 먹어봄</span>
       </div>
+      {filtered.length === 0 && (
+        <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>조건에 맞는 재료가 없어요</div>
+      )}
       {CATEGORIES.map((cat) => byCat[cat].length > 0 && (
         <div key={cat}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 6px", padding: "0 2px" }}>{cat} ({byCat[cat].length})</div>
@@ -720,6 +837,297 @@ export function IngredientWikiPanel({ go }) {
       ))}
       <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.5, padding: "0 2px 4px" }}>
         영양 DB {Object.keys(NUTRIENT_TAGS).length}개 재료 + 직접 등록한 재료가 함께 표시돼요. 새 재료는 식단표·제조 기록·기록 탭에서 추가하면 여기에 나타나요.
+      </div>
+    </>
+  );
+}
+
+/* =====================================================================
+   시판 제품 목록 - 재료 정보 화면의 "시판 제품" 세그먼트 (시판 이유식 기능)
+   ===================================================================== */
+function ProductWikiPanel({ go }) {
+  const { state } = useStore();
+  const [q, setQ] = useState("");
+  const [editing, setEditing] = useState(null); // null | "new" | productObj
+  const list = Object.values(state.products)
+    .filter((p) => !q || p.name.includes(q) || (p.brand || "").includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  const stockOn = state.settings.productStockEnabled;
+
+  return (
+    <>
+      <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
+        <Search size={15} color={C.muted} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·브랜드로 검색"
+          style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+      </div>
+      <button onClick={() => setEditing("new")} className="flex items-center justify-center" style={{ gap: 6, background: C.sage, border: "none", borderRadius: 14, padding: "11px 0", fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+        <Plus size={15} /> 제품 추가
+      </button>
+      {list.length === 0 && (
+        <div style={{ textAlign: "center", padding: "26px 0", fontSize: 12.5, color: C.muted }}>
+          등록된 시판 제품이 없습니다. 위 버튼으로 추가해 보세요.
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {list.map((p) => {
+          const packs = stockOn ? productStockPacks(state, p.id) : null;
+          return (
+            <button key={p.id} onClick={() => setEditing(p)} className="flex items-center justify-between"
+              style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 13px", cursor: "pointer" }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="flex items-center" style={{ gap: 6, marginBottom: 4 }}>
+                  <ProductDot />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                  {p.brand && <span style={{ fontSize: 10.5, color: C.muted, whiteSpace: "nowrap" }}>{p.brand}</span>}
+                </div>
+                <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
+                  {p.ingredients.slice(0, 3).map((n) => (
+                    <span key={n} style={{ fontSize: 10, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{n}</span>
+                  ))}
+                  {p.ingredients.length > 3 && <span style={{ fontSize: 10, color: C.muted }}>+{p.ingredients.length - 3}</span>}
+                </div>
+              </div>
+              {packs != null && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: packs > 0 ? PRODUCT_COLOR : C.apricot, flexShrink: 0, marginLeft: 8, whiteSpace: "nowrap" }}>{packs}팩</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {editing && <ProductEditSheet product={editing} onClose={() => setEditing(null)} go={go} />}
+    </>
+  );
+}
+
+function ProductEditSheet({ product, onClose, go }) {
+  const { state, dispatch, notify } = useStore();
+  const isNew = product === "new";
+  const base = isNew ? {} : product;
+  const [name, setName] = useState(base.name || "");
+  const [brand, setBrand] = useState(base.brand || "");
+  const [packG, setPackG] = useState(base.packG || 100);
+  const [ingredients, setIngredients] = useState(base.ingredients || []);
+  const [memo, setMemo] = useState(base.memo || "");
+  const [picker, setPicker] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const canSave = name.trim() && ingredients.length > 0;
+
+  const save = () => {
+    if (!canSave) return;
+    dispatch({ type: "PRODUCT_UPSERT", product: { id: isNew ? undefined : base.id, name, brand, packG: Number(packG) || 0, ingredients, memo } });
+    onClose();
+  };
+  const del = () => {
+    dispatch({ type: "PRODUCT_DELETE", id: base.id });
+    notify(`'${base.name}' 제품을 삭제했습니다`, () => dispatch({ type: "RESTORE_PRODUCT", product: base }));
+    onClose();
+  };
+
+  return (
+    <BottomSheet title={isNew ? "시판 제품 추가" : "시판 제품 수정"} onClose={onClose}>
+      <div style={{ padding: "0 18px calc(20px + env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제품명</div>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 소고기미역진밥"
+            style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontWeight: 700, color: C.ink, background: "transparent" }} />
+        </div>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>브랜드 (선택)</div>
+          <input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="예: 배○밀"
+            style={{ width: "100%", border: "none", outline: "none", fontSize: 13, color: C.ink, background: "transparent" }} />
+        </div>
+        <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+          <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>1팩 용량</span>
+          <NumInput value={Number(packG) || 0} onChange={setPackG} width={52} suffix="g" />
+        </div>
+        <div>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>포함 재료 ({ingredients.length})</span>
+            <button onClick={() => setPicker(true)} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>선택</button>
+          </div>
+          {ingredients.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.apricot }}>최소 1개 이상 선택해 주세요</div>
+          ) : (
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+              {ingredients.map((n) => (
+                <span key={n} className="flex items-center" style={{ gap: 4, fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "3px 5px 3px 9px" }}>
+                  {n}
+                  <button onClick={() => setIngredients(ingredients.filter((x) => x !== n))} style={{ background: "rgba(0,0,0,0.08)", border: "none", width: 14, height: 14, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}><X size={8} color={C.sageDeep} /></button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="메모 (선택)" rows={2}
+          style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.ink, outline: "none", resize: "none", fontFamily: "inherit" }} />
+        <button onClick={save} disabled={!canSave} style={{ ...primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "default" }}>{isNew ? "추가" : "저장"}</button>
+        {!isNew && state.settings.productStockEnabled && (
+          <button onClick={() => { onClose(); go && go("productStockDetail", { productId: base.id }); }}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>재고 관리로 이동</button>
+        )}
+        {!isNew && <button onClick={() => setConfirmDel(true)} style={{ background: "none", border: "none", color: C.apricot, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "2px 0" }}>이 제품 삭제</button>}
+      </div>
+      {picker && <IngredientPicker multi alreadyAdded={ingredients} onPick={(names) => { setIngredients(Array.from(new Set([...ingredients, ...names]))); setPicker(false); }} onClose={() => setPicker(false)} />}
+      {confirmDel && (
+        <ConfirmModal
+          title={`'${name}' 제품을 삭제할까요?`}
+          message="과거 급여 기록의 제품 참조는 그대로 남아 이름으로 표시됩니다."
+          onConfirm={del}
+          onCancel={() => setConfirmDel(false)}
+        />
+      )}
+    </BottomSheet>
+  );
+}
+
+/* =====================================================================
+   시판 제품 상세 (재료 상세 역링크·활동 내역에서 진입) - 정보 수정·재고 바로가기
+   ===================================================================== */
+export function ProductDetailScreen({ productId, onBack, go }) {
+  const { state } = useStore();
+  const [editing, setEditing] = useState(false);
+  const p = state.products[productId];
+  if (!p) {
+    return (
+      <div style={{ paddingBottom: 90 }}>
+        <SubHeader title="제품 정보" onBack={onBack} />
+        <div style={{ textAlign: "center", padding: "40px 18px", fontSize: 12.5, color: C.muted }}>삭제된 제품이에요</div>
+      </div>
+    );
+  }
+  const packs = state.settings.productStockEnabled ? productStockPacks(state, productId) : null;
+  return (
+    <div style={{ paddingBottom: 90, position: "relative" }}>
+      <SubHeader title={p.name} onBack={onBack} />
+      <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ background: C.sageLight, borderRadius: 14, padding: "12px 14px" }}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center" style={{ gap: 8 }}><ProductDot size={9} /><span style={{ fontSize: 14, fontWeight: 800, color: C.sageDeep }}>{p.name}</span></div>
+            {packs != null && <span style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep }}>{packs}팩 보유</span>}
+          </div>
+          {(p.brand || p.packG) && <div style={{ fontSize: 11, color: C.sageDeep, marginTop: 4 }}>{p.brand ? `${p.brand} · ` : ""}1팩 {p.packG}g</div>}
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>포함 재료</div>
+          <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+            {p.ingredients.map((n) => <span key={n} style={{ fontSize: 11, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "3px 9px" }}>{n}</span>)}
+          </div>
+        </div>
+        {p.memo && <div style={{ fontSize: 12, color: C.inkSoft, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>{p.memo}</div>}
+        <button onClick={() => setEditing(true)} style={primaryBtn}>정보 수정</button>
+        {state.settings.productStockEnabled && (
+          <button onClick={() => go && go("productStockDetail", { productId })}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>재고 관리로 이동</button>
+        )}
+      </div>
+      {editing && <ProductEditSheet product={p} onClose={() => setEditing(false)} go={go} />}
+    </div>
+  );
+}
+
+/* =====================================================================
+   시판 제품 재고 (팩 단위) - 전역 토글 ON일 때만 진입. 구매 lot 목록·수량 수정·유통기한 관리
+   (냉동/냉장 재고의 StockDetailScreen과 동일 패턴, 단위만 "팩")
+   ===================================================================== */
+export function ProductStockDetailScreen({ productId, onBack }) {
+  const { state, dispatch, notify } = useStore();
+  const [addOpen, setAddOpen] = useState(false);
+  const [delTarget, setDelTarget] = useState(null);
+  const p = state.products[productId];
+  const lots = productStockLots(state, productId).slice().sort((a, b) => (a.buyDate || "").localeCompare(b.buyDate || ""));
+  const packs = productStockPacks(state, productId);
+
+  const patch = (lotId, p2) => dispatch({ type: "PRODUCTSTOCK_UPDATE_LOT", productId, lotId, patch: p2 });
+  const confirmDel = () => {
+    const lot = lots.find((l) => l.id === delTarget);
+    dispatch({ type: "PRODUCTSTOCK_DELETE_LOT", productId, lotId: delTarget });
+    setDelTarget(null);
+    if (lot) notify("구매 기록을 삭제했습니다", () => dispatch({ type: "RESTORE_PRODUCTSTOCK_LOT", productId, lot }));
+  };
+  if (!p) {
+    return (
+      <div style={{ paddingBottom: 90 }}>
+        <SubHeader title="시판 재고" onBack={onBack} />
+        <div style={{ textAlign: "center", padding: "40px 18px", fontSize: 12.5, color: C.muted }}>삭제된 제품이에요</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ paddingBottom: 90, position: "relative" }}>
+      <SubHeader title={`${p.name} 재고`} onBack={onBack} />
+      <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="flex items-center justify-between" style={{ background: PRODUCT_COLOR_LIGHT, borderRadius: 14, padding: "12px 14px" }}>
+          <div className="flex items-center" style={{ gap: 8 }}><ProductDot size={9} /><span style={{ fontSize: 14, fontWeight: 800, color: PRODUCT_COLOR }}>{p.name}</span></div>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: PRODUCT_COLOR }}>{packs}팩 보유</span>
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, padding: "0 2px" }}>구매 기록 ({lots.length})</div>
+        {lots.length === 0 && <div style={{ textAlign: "center", padding: "20px 0", fontSize: 12.5, color: C.muted }}>구매 기록이 없습니다.</div>}
+        {lots.map((l) => (
+          <div key={l.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 13, display: "flex", flexDirection: "column", gap: 9 }}>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{l.buyDate || "-"} 구매</span>
+              <button onClick={() => setDelTarget(l.id)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
+            </div>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 11.5, color: C.inkSoft }}>보유 팩 수</span>
+              <NumInput value={l.packs || 0} onChange={(v) => patch(l.id, { packs: v })} width={44} suffix="팩" />
+            </div>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 11.5, color: C.inkSoft }}>유통기한</span>
+              <input type="date" value={l.exp || ""} onChange={(e) => patch(l.id, { exp: e.target.value })}
+                style={{ border: "none", background: "transparent", fontSize: 12.5, color: C.ink, fontWeight: 700, outline: "none" }} />
+            </div>
+            <AuthorInfo createdBy={l.createdBy} createdAt={l.createdAt} updatedBy={l.updatedBy} updatedAt={l.updatedAt} size={10} />
+          </div>
+        ))}
+        <button onClick={() => setAddOpen(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 14, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+          <Plus size={14} /> 구매 기록 추가
+        </button>
+      </div>
+      {addOpen && <ProductLotModal productId={productId} onClose={() => setAddOpen(false)} />}
+      {delTarget && (
+        <ConfirmModal title="이 구매 기록을 삭제할까요?" message="되돌릴 수 없습니다." onConfirm={confirmDel} onCancel={() => setDelTarget(null)} />
+      )}
+    </div>
+  );
+}
+
+function ProductLotModal({ productId, onClose }) {
+  const { dispatch } = useStore();
+  const t = todayISO();
+  const [buyDate, setBuyDate] = useState(t);
+  const [exp, setExp] = useState(addDaysISO(t, 180));
+  const [packs, setPacks] = useState(5);
+
+  const save = () => {
+    dispatch({ type: "PRODUCTSTOCK_ADD_LOT", productId, lot: { buyDate, exp, packs: Number(packs) || 0 } });
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px 26px" }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>구매 기록 추가</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>구매일</span>
+            <input type="date" value={buyDate} onChange={(e) => setBuyDate(e.target.value)} style={{ border: "none", background: "transparent", fontSize: 12.5, color: C.ink, fontWeight: 700, outline: "none" }} />
+          </div>
+          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>유통기한</span>
+            <input type="date" value={exp} onChange={(e) => setExp(e.target.value)} style={{ border: "none", background: "transparent", fontSize: 12.5, color: C.ink, fontWeight: 700, outline: "none" }} />
+          </div>
+          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>보유 팩 수</span>
+            <NumInput value={Number(packs) || 0} onChange={setPacks} width={46} suffix="팩" />
+          </div>
+          <button onClick={save} style={primaryBtn}>저장</button>
+        </div>
       </div>
     </div>
   );
