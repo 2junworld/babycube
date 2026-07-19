@@ -89,14 +89,16 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   const upQty = (key, d) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, qty: Math.max(1, it.qty + d) } : it));
   const upUnit = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, unitG: v } : it));
   const upFridge = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, fridgeG: v } : it));
-  const upGrams = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, gramsOverride: v } : it));
-  // 시판 제품의 제공량 직접 입력 켜기/끄기 - qty(팩 수, 재고 차감 단위)는 그대로 두고 표시용 제공량만 override
-  // 시판 제품의 "팩"/"중량" 입력 방식 전환 - 냉동/냉장 토글과 동일한 방식.
-  // qty(팩 수, 재고 차감 단위)는 그대로 두고 표시용 제공량(gramsOverride)만 켜고 끔
+  // 시판 제품의 제공량(g) 직접 입력 - 재고 차감 단위(팩)가 함께 필요하므로, 입력한 g을 담는 데
+  // 필요한 최소 팩 수를 자동으로 계산해 qty에 반영함(팩 수 입력칸은 중량 모드에서 숨김)
+  const upProductGrams = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, gramsOverride: v, qty: Math.max(1, Math.ceil(v / it.packG)) } : it));
+  // 시판 제품의 "팩"/"중량" 입력 방식 전환 - 냉동/냉장 토글과 완전히 동일한 방식으로, 전환 시점의
+  // g을 그대로 이어받고(반대 방향은 팩 수로 반올림) 팩 수는 항상 그에 맞춰 재계산됨
   const setProductMode = (key, mode) => setItems((p) => p.map((it) => {
     if (keyOf(it) !== key) return it;
-    if (mode === "gram") return { ...it, gramsOverride: it.gramsOverride != null ? it.gramsOverride : it.qty * it.packG };
-    return { ...it, gramsOverride: null };
+    const curG = it.gramsOverride != null ? it.gramsOverride : it.qty * it.packG;
+    if (mode === "gram") return { ...it, gramsOverride: curG, qty: Math.max(1, Math.ceil(curG / it.packG)) };
+    return { ...it, gramsOverride: null, qty: Math.max(1, Math.round(curG / it.packG)) };
   }));
   const toggleDeduct = (key) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, deduct: !it.deduct } : it));
   const rm = (key) => setItems((p) => p.filter((it) => keyOf(it) !== key));
@@ -246,18 +248,19 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
                       <div style={{ marginBottom: 8 }}>
                         <Segmented value={it.gramsOverride != null ? "gram" : "pack"} onChange={(v) => setProductMode(key, v)} options={[{ value: "pack", label: "팩으로 입력" }, { value: "gram", label: "중량으로 입력" }]} />
                       </div>
-                      <div className="flex items-center justify-between">
-                        <span style={{ fontSize: 10.5, color: C.muted }}>1팩 {it.packG}g · 재고 차감 단위</span>
-                        <div className="flex items-center" style={{ gap: 8 }}>
-                          <button onClick={() => upQty(key, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}팩</span>
-                          <button onClick={() => upQty(key, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
-                        </div>
-                      </div>
-                      {it.gramsOverride != null && (
-                        <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
+                      {it.gramsOverride != null ? (
+                        <div className="flex items-center justify-between">
                           <span style={{ fontSize: 10.5, color: C.muted }}>실제 제공량</span>
-                          <NumInput value={it.gramsOverride} onChange={(v) => upGrams(key, v)} width={52} suffix="g" />
+                          <NumInput value={it.gramsOverride} onChange={(v) => upProductGrams(key, v)} width={52} suffix="g" />
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <span style={{ fontSize: 10.5, color: C.muted }}>1팩 {it.packG}g</span>
+                          <div className="flex items-center" style={{ gap: 8 }}>
+                            <button onClick={() => upQty(key, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}팩</span>
+                            <button onClick={() => upQty(key, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
+                          </div>
                         </div>
                       )}
                     </>
@@ -289,7 +292,9 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
                       )}
                     </>
                   )}
-                  <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 5 }}>제공 {provideG(it)}g</div>
+                  <div style={{ textAlign: "right", fontSize: 10.5, color: C.muted, marginTop: 5 }}>
+                    제공 {provideG(it)}g{it.source === "product" && it.gramsOverride != null ? ` (재고 차감 ${it.qty}팩)` : ""}
+                  </div>
                   {it.source === "product"
                     ? <ProductStockChangeHint item={it} checked={it.deduct !== false} onToggle={() => toggleDeduct(key)} />
                     : <StockChangeHint item={it} checked={it.deduct !== false} onToggle={() => toggleDeduct(key)} />}
