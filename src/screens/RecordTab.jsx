@@ -6,7 +6,7 @@ import { C, CATEGORIES, primaryBtn } from "../theme";
 import { WD, addDaysISO, fmtTime, pad2, todayISO } from "../lib/dates";
 import { catOf, gOf, logProvideG, sortByCategory, totalG, unrestorableStockNames } from "../state/appState";
 import { useStore } from "../store";
-import { AuthorInfo, BottomSheet, CatDot, CategoryLegend, CategoryTotalsBar, Chip, ConfirmModal, ScreenHeader, Segmented, SubHeader } from "../components/common";
+import { AuthorInfo, BottomSheet, CatDot, CategoryLegend, CategoryTotalsBar, Chip, ConfirmModal, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE } from "./uiPrefs";
 import { monthProducedG, monthStats, weeklyRates } from "../lib/stats";
 import { weekLogLabels } from "../lib/mealLabels";
@@ -569,12 +569,26 @@ export function FeedingCompareScreen({ date, logId, label: labelProp, onBack }) 
   const provTotal = log ? logProvideG(log) : 0;
   const pct = log && provTotal ? Math.round((log.intakeG / provTotal) * 100) : 0;
 
-  // 항목별 계획 g / 실제 제공 g 비교 데이터
+  // 항목별 계획 g / 실제 제공 g 비교 데이터 - 시판 제품은 name이 없으므로 productId 기반 키 사용
+  const keyOf = (it) => (it.source === "product" ? `product:${it.productId}` : it.name);
+  const rowLabel = {}; // key → 표시용 { text, isProduct }
   const planG = {};
-  (plan ? plan.items : []).forEach((it) => { planG[it.name] = (planG[it.name] || 0) + gOf(state, it); });
+  (plan ? plan.items : []).forEach((it) => {
+    const k = keyOf(it);
+    planG[k] = (planG[k] || 0) + gOf(state, it);
+    rowLabel[k] = it.source === "product" ? { text: it.productName, isProduct: true } : { text: it.name, isProduct: false };
+  });
   const actualG = {};
-  (log ? log.items : []).forEach((it) => { actualG[it.name] = (actualG[it.name] || 0) + (it.source === "fridge" ? it.qty : it.qty * it.unitG); });
-  const allNames = sortByCategory(state, Array.from(new Set([...Object.keys(planG), ...Object.keys(actualG)])), (n) => n);
+  (log ? log.items : []).forEach((it) => {
+    const k = keyOf(it);
+    actualG[k] = (actualG[k] || 0) + (it.source === "product" ? it.qty * it.packG : it.source === "fridge" ? it.qty : it.qty * it.unitG);
+    rowLabel[k] = it.source === "product" ? { text: it.productName, isProduct: true } : { text: it.name, isProduct: false };
+  });
+  const allNames = sortByCategory(
+    state,
+    Array.from(new Set([...Object.keys(planG), ...Object.keys(actualG)])).map((k) => ({ key: k, source: rowLabel[k].isProduct ? "product" : undefined, name: rowLabel[k].text })),
+    (x) => x.name
+  );
   const totalDiff = provTotal - planTotal;
 
   const diffText = (d) => (d > 0 ? `+${d}g` : d < 0 ? `${d}g` : "—");
@@ -621,16 +635,16 @@ export function FeedingCompareScreen({ date, logId, label: labelProp, onBack }) 
                 <span style={{ fontSize: 10, fontWeight: 700, color: C.sageDeep, textAlign: "right" }}>증감</span>
               </div>
               <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px" }}>
-                {allNames.map((name, i) => {
-                  const p = planG[name]; const a = actualG[name];
+                {allNames.map((row, i) => {
+                  const p = planG[row.key]; const a = actualG[row.key];
                   const added = p == null;   // 계획엔 없고 기록에만 있음
                   const removed = a == null; // 계획에 있었지만 기록에서 빠짐
                   const d = (a || 0) - (p || 0);
                   return (
-                    <div key={name} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 4, alignItems: "center", padding: "7px 8px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, opacity: removed ? 0.75 : 1 }}>
+                    <div key={row.key} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 4, alignItems: "center", padding: "7px 8px", borderTop: i === 0 ? "none" : `1px solid ${C.border}`, opacity: removed ? 0.75 : 1 }}>
                       <div className="flex items-center" style={{ minWidth: 0, gap: 2 }}>
-                        <CatDot name={name} />
-                        <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                        {row.source === "product" ? <ProductDot /> : <CatDot name={row.name} />}
+                        <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.name}</span>
                       </div>
                       <span style={cellStyle}>{p != null ? `${p}g` : "—"}</span>
                       <span style={{ ...cellStyle, fontWeight: 700, color: C.ink }}>{a != null ? `${a}g` : "—"}</span>

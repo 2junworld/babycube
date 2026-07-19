@@ -4,7 +4,7 @@ import { ChevronRight, AlertTriangle } from "lucide-react";
 import { C } from "../theme";
 import { ageMonths, todayISO } from "../lib/dates";
 import { GROWTH_STAGES, growthStageOf } from "../data/nutrition";
-import { sortByCategory, stockFridgeG, stockTotalCubes } from "../state/appState";
+import { productStockPacks, sortByCategory, stockFridgeG, stockTotalCubes } from "../state/appState";
 import { useStore } from "../store";
 import { CatDot } from "./common";
 import { pairingSuggestions, usedTodayMap } from "../lib/pairing";
@@ -227,6 +227,28 @@ export function StockChangeHint({ item, checked, onToggle }) {
   const used = item.source === "frozen" ? (item.qty || 0) : (item.fridgeG || 0);
   const after = Math.max(0, cur - used);
   const text = `재고 ${cur}${unit} → ${checked ? after : cur}${unit}`;
+  return (
+    <div className="flex items-center justify-end" style={{ gap: 7, marginTop: 4 }}>
+      <span style={{ fontSize: 10, color: C.muted }}>{text}</span>
+      <label className="flex items-center" style={{ gap: 4, cursor: "pointer" }}>
+        <input type="checkbox" checked={checked} onChange={onToggle}
+          style={{ width: 12, height: 12, cursor: "pointer", accentColor: C.sage }} />
+        <span style={{ fontSize: 10, color: checked ? C.sageDeep : C.muted, fontWeight: 700 }}>재고 반영</span>
+      </label>
+    </div>
+  );
+}
+
+// 시판 제품용 재고 반영 안내 - 전역 토글이 꺼져있으면 재고 반영 개념 자체가 없어 아무것도 표시하지 않음 (확정 정책)
+export function ProductStockChangeHint({ item, checked, onToggle }) {
+  const { state } = useStore();
+  if (!state.settings.productStockEnabled) return null;
+  const cur = productStockPacks(state, item.productId);
+  if (cur <= 0) {
+    return <div style={{ textAlign: "right", fontSize: 10, color: C.muted, marginTop: 4 }}>재고에 없는 제품이에요</div>;
+  }
+  const after = Math.max(0, cur - (item.qty || 0));
+  const text = `재고 ${cur}팩 → ${checked ? after : cur}팩`;
   return (
     <div className="flex items-center justify-end" style={{ gap: 7, marginTop: 4 }}>
       <span style={{ fontSize: 10, color: C.muted }}>{text}</span>

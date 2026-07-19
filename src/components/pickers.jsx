@@ -1,12 +1,12 @@
 /* 선택기 모달 - 재료·끼니 종류·식단 복사 */
 import React, { useState, useEffect } from "react";
 import { Plus, X, Check, Search, Star } from "lucide-react";
-import { C, CATEGORIES } from "../theme";
+import { C, CATEGORIES, PRODUCT_COLOR } from "../theme";
 import { fmtTime, todayISO } from "../lib/dates";
 import { DB_CATEGORY } from "../data/nutrition";
-import { catOf, normalizeIngredientName, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
+import { catOf, normalizeIngredientName, productStockPacks, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
 import { useStore } from "../store";
-import { BottomSheet, CatDot, MealItemList, useVisualViewport } from "./common";
+import { BottomSheet, CatDot, MealItemList, ProductDot, useVisualViewport } from "./common";
 import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedTodayMap } from "../lib/pairing";
 import { primaryBtn } from "../theme";
 
@@ -205,6 +205,55 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
         )}
       </div>
     </div>
+  );
+}
+
+/* =====================================================================
+   시판 제품 선택 모달 - 급여 기록·식단표 편집 화면에서 "시판 제품 추가" 진입점 (시판 이유식 기능)
+   재료 선택기(IngredientPicker)와 별도 경량 컴포넌트로 분리 - 정렬·다중선택 등 복잡한
+   로직을 건드리지 않고 안전하게 추가하기 위한 구현 선택
+   ===================================================================== */
+export function ProductPicker({ onPick, onClose }) {
+  const { state } = useStore();
+  const [q, setQ] = useState("");
+  const list = Object.values(state.products)
+    .filter((p) => !q || p.name.includes(q) || (p.brand || "").includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  const stockOn = state.settings.productStockEnabled;
+
+  return (
+    <BottomSheet title="시판 제품 선택" onClose={onClose}>
+      <div style={{ padding: "0 18px 10px" }}>
+        <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
+          <Search size={15} color={C.muted} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·브랜드로 검색"
+            style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+        </div>
+      </div>
+      <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
+        {list.length === 0 && (
+          <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
+            등록된 시판 제품이 없어요.<br />재료 정보 &gt; 시판 제품에서 등록할 수 있어요.
+          </div>
+        )}
+        {list.map((p) => {
+          const packs = stockOn ? productStockPacks(state, p.id) : null;
+          return (
+            <button key={p.id} onClick={() => onPick(p)} className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
+              borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
+              <div className="flex items-center" style={{ gap: 7, minWidth: 0 }}>
+                <ProductDot />
+                <span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{p.name}</span>
+                {p.brand && <span style={{ fontSize: 10.5, color: C.muted }}>{p.brand}</span>}
+              </div>
+              <span style={{ fontSize: 11, color: packs != null && packs <= 0 ? C.apricot : C.muted, flexShrink: 0 }}>
+                {packs != null ? `${packs}팩` : `1팩 ${p.packG}g`}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </BottomSheet>
   );
 }
 

@@ -632,7 +632,7 @@ const ACTIVITY_BUILDERS = {
     const g = Math.round(logProvideG(log));
     return {
       kind: prevLog ? "update" : "create",
-      summary: `${ds(date)} ${log.label} 급여 기록 ${prevLog ? "수정" : "저장"} (재료 ${log.items.length}개, ${g}g)`,
+      summary: `${ds(date)} ${log.label} 급여 기록 ${prevLog ? "수정" : "저장"} (항목 ${log.items.length}개, ${g}g)`,
       ref: { date, logId: log.id, label: log.label },
     };
   },
@@ -665,7 +665,7 @@ const ACTIVITY_BUILDERS = {
     }
     return {
       kind: prevMeal ? "update" : "create",
-      summary: `${ds(date)} ${meal.label} 식단 ${prevMeal ? "수정" : "추가"} (재료 ${meal.items.length}개)`,
+      summary: `${ds(date)} ${meal.label} 식단 ${prevMeal ? "수정" : "추가"} (항목 ${meal.items.length}개)`,
       ref: { date, mealId: meal.id, label: meal.label },
     };
   },
