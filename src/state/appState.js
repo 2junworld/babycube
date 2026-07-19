@@ -37,7 +37,9 @@ export function seedState() {
     ingredientTags: {},
     stock, plans, logs, intros,
     shopping: [],
-    settings: { timeFmt: "24h", frozenAlertDays: 3, fridgeAlertDays: 1, fridgeKeepDays: 2, fontScale: 1, mealTips: { stock: true, pairing: true, usedToday: true } },
+    products: {}, // 시판 이유식 제품 사전 (productId → {name, brand, packG, ingredients, memo, ...})
+    productStock: {}, // 시판 재고 (productId → {lots: [{id, buyDate, exp, packs}]}) - productStockEnabled가 꺼져도 유지(숨김만)
+    settings: { timeFmt: "24h", frozenAlertDays: 3, fridgeAlertDays: 1, fridgeKeepDays: 2, fontScale: 1, mealTips: { stock: true, pairing: true, usedToday: true }, productStockEnabled: false },
     travel: { active: false, start: "", end: "", mealsPerDay: 2, checklist: [] },
     members: ["엄마", "아빠"],
     memberProfiles: {}, // uid → { name, color, joinedAt } - 작성자 표시명·뱃지 색상 (로그인 시 자동 등록)
@@ -112,6 +114,12 @@ export function migrateState(s) {
   // 작성자 추적 기능 도입 - 구버전 데이터는 빈 값으로 시작 (기존 기록에 소급 기입하지 않음)
   if (!out.memberProfiles) out.memberProfiles = {};
   if (!out.activity) out.activity = [];
+  // 시판 이유식 기능 도입 - 구버전 데이터는 빈 값/기본 OFF로 시작
+  if (!out.products) out.products = {};
+  if (!out.productStock) out.productStock = {};
+  if (out.settings && out.settings.productStockEnabled == null) {
+    out.settings = { ...out.settings, productStockEnabled: false };
+  }
 
   /* ---- 데이터 위생 치유 (멱등 - 매 로드마다 실행해도 안전) ---- */
   // 음수 배치 정규화(과거 입력 오류) + 빈 재고 키 제거 + 재료명 공백 키 병합
@@ -240,14 +248,16 @@ function rawReducer(state, action) {
       const dayLogs = state.logs[date] ? [...state.logs[date], log] : [log];
       dayLogs.sort((a, b) => a.time.localeCompare(b.time));
       const stock = JSON.parse(JSON.stringify(state.stock));
-      redeductLogDeductions(stock, log);
-      return { ...state, stock, logs: { ...state.logs, [date]: dayLogs } };
+      const productStock = JSON.parse(JSON.stringify(state.productStock));
+      redeductLogDeductions(stock, productStock, log);
+      return { ...state, stock, productStock, logs: { ...state.logs, [date]: dayLogs } };
     }
     case "RESTORE_LOG_DAY": {
       const { date, logs } = action;
       const stock = JSON.parse(JSON.stringify(state.stock));
-      (logs || []).forEach((l) => redeductLogDeductions(stock, l));
-      return { ...state, stock, logs: { ...state.logs, [date]: logs } };
+      const productStock = JSON.parse(JSON.stringify(state.productStock));
+      (logs || []).forEach((l) => redeductLogDeductions(stock, productStock, l));
+      return { ...state, stock, productStock, logs: { ...state.logs, [date]: logs } };
     }
     case "RESTORE_INTRO": {
       const { intro } = action;
@@ -335,19 +345,28 @@ function rawReducer(state, action) {
       // 재고 차감: 선입선출, 재료별 deduct 플래그로 반영 여부 결정.
       // 기존 기록을 수정하는 경우, 예전에 반영했던 재료의 차감분을 먼저 복원한 뒤 새로 차감 (이중차감 방지)
       let stock = JSON.parse(JSON.stringify(state.stock));
+      let productStock = JSON.parse(JSON.stringify(state.productStock));
       const dayLogs = state.logs[date] ? [...state.logs[date]] : [];
       const idx = dayLogs.findIndex((l) => l.id === log.id);
       if (idx >= 0) {
         // 기존 기록의 차감분 복원 - deductedBatches(C-3)가 있으면 원 배치로 정확히,
         // 없으면 deductedQty(→qty) 폴백. 재고 부풀림·배치 어긋남 방지
-        restoreLogDeductions(stock, dayLogs[idx]);
+        restoreLogDeductions(stock, productStock, dayLogs[idx]);
       }
-      // 실제 차감된 양(deductedQty)과 배치별 내역(deductedBatches)을 기록에 남김
+      // 실제 차감된 양(deductedQty)과 배치별 내역(deductedBatches/deductedLots)을 기록에 남김
       // (재고 부족 시 요청량보다 적을 수 있음 - 이후 수정·삭제 시 원 배치로 정확히 복원).
       // action의 log 객체를 직접 변형하지 않고 새 객체로 만들어 저장 (리듀서 순수성 유지)
+      const productStockEnabled = state.settings.productStockEnabled;
       const builtLog = {
         ...log,
         items: log.items.map((it) => {
+          if (it.source === "product") {
+            // 전역 토글이 꺼져있으면 재고를 건드리지 않고 기록만 저장 (확정 정책)
+            if (it.deduct === false || !productStockEnabled) return { ...it, deductedQty: 0, deductedLots: [] };
+            const trace = [];
+            const actual = deductProductPacks(productStock, it.productId, it.qty, trace); // qty=팩
+            return { ...it, deductedQty: actual, deductedLots: trace };
+          }
           if (it.deduct === false) return { ...it, deductedQty: 0, deductedBatches: [] };
           const trace = [];
           const actual = it.source === "fridge"
@@ -362,15 +381,28 @@ function rawReducer(state, action) {
       dayLogs.sort((a, b) => a.time.localeCompare(b.time));
       // 급여한 재료가 재료 마스터·먹어본 재료에 없으면 자동 등록 (UX-4 확정: "관찰중" 상태)
       // - 실제로 먹였으므로 반응을 관찰하는 상태가 정확한 표현. 이상 없으면 사용자가 직접 변경
+      // 시판 제품 항목은 제품의 포함 재료를 대신 등록(함량 불명이라 재료별 통계에는 포함하지 않음)하고,
+      // 메모에 "시판 '제품명'으로 첫 노출"을 남겨 알레르기 관찰 시 출처를 알 수 있게 함
       let ingredients = state.ingredients;
       let intros = state.intros;
       savedLog.items.forEach((it) => {
+        if (it.source === "product") {
+          const prod = state.products[it.productId];
+          const prodName = prod ? prod.name : it.productName;
+          (prod ? prod.ingredients : []).forEach((ingName) => {
+            ingredients = ensureIngredientEntry(ingredients, ingName);
+            if (!intros.some((x) => x.name === ingName)) {
+              intros = [{ id: uid(), name: ingName, cat: (ingredients[ingName] || {}).cat || "채소", status: "관찰중", memo: `시판 '${prodName}'으로 첫 노출`, date }, ...intros];
+            }
+          });
+          return;
+        }
         ingredients = ensureIngredientEntry(ingredients, it.name);
         if (!intros.some((x) => x.name === it.name)) {
           intros = [{ id: uid(), name: it.name, cat: (ingredients[it.name] || {}).cat || "채소", status: "관찰중", memo: "", date }, ...intros];
         }
       });
-      return { ...state, stock, ingredients, intros, logs: { ...state.logs, [date]: dayLogs } };
+      return { ...state, stock, productStock, ingredients, intros, logs: { ...state.logs, [date]: dayLogs } };
     }
     // 급여 기록 삭제: 그 기록이 차감했던 재고(deductedQty)를 함께 복원
     case "LOG_DELETE_ENTRY": {
@@ -379,12 +411,13 @@ function rawReducer(state, action) {
       const remaining = (state.logs[date] || []).filter((l) => l.id !== logId);
       const logs = { ...state.logs };
       if (remaining.length > 0) logs[date] = remaining; else delete logs[date];
-      let stock = state.stock;
+      let stock = state.stock, productStock = state.productStock;
       if (target) {
         stock = JSON.parse(JSON.stringify(state.stock));
-        restoreLogDeductions(stock, target);
+        productStock = JSON.parse(JSON.stringify(state.productStock));
+        restoreLogDeductions(stock, productStock, target);
       }
-      return { ...state, stock, logs };
+      return { ...state, stock, productStock, logs };
     }
     case "LOG_DELETE_DAY": {
       const { date } = action;
@@ -392,8 +425,9 @@ function rawReducer(state, action) {
       const logs = { ...state.logs };
       delete logs[date];
       const stock = JSON.parse(JSON.stringify(state.stock));
-      dayLogs.forEach((l) => restoreLogDeductions(stock, l));
-      return { ...state, stock, logs };
+      const productStock = JSON.parse(JSON.stringify(state.productStock));
+      dayLogs.forEach((l) => restoreLogDeductions(stock, productStock, l));
+      return { ...state, stock, productStock, logs };
     }
 
     /* ---- 장보기 목록 ---- */
@@ -512,6 +546,65 @@ function rawReducer(state, action) {
         ...state,
         memberProfiles: { ...state.memberProfiles, [profileUid]: { name, color, joinedAt: action._at || new Date().toISOString() } },
       };
+    }
+
+    /* ---- 시판 이유식 제품 사전 ---- */
+    case "PRODUCT_UPSERT": {
+      const { product } = action;
+      const name = normalizeIngredientName(product.name);
+      if (!name) return state;
+      const ingredientsList = (product.ingredients || []).map(normalizeIngredientName).filter(Boolean);
+      if (ingredientsList.length === 0) return state; // 포함 재료 최소 1개 요구
+      const id = product.id || uid();
+      const prev = state.products[id] || null;
+      const nextRaw = { id, name, brand: (product.brand || "").trim(), packG: Number(product.packG) || 0, ingredients: ingredientsList, memo: product.memo || "" };
+      const saved = withAuthorMeta(prev, nextRaw, action._actor, action._at);
+      // 포함 재료가 재료 마스터에 없으면 등록 (UX-4 공통 규칙)
+      let ingredients = state.ingredients;
+      ingredientsList.forEach((n) => { ingredients = ensureIngredientEntry(ingredients, n); });
+      return { ...state, ingredients, products: { ...state.products, [id]: saved } };
+    }
+    case "PRODUCT_DELETE": {
+      const { id } = action;
+      if (!state.products[id]) return state;
+      const products = { ...state.products };
+      delete products[id];
+      return { ...state, products };
+    }
+    case "RESTORE_PRODUCT": {
+      const { product } = action;
+      return { ...state, products: { ...state.products, [product.id]: product } };
+    }
+
+    /* ---- 시판 재고 (팩 단위 + 유통기한 lot) - 전역 토글 OFF여도 데이터는 유지(숨김만) ---- */
+    case "PRODUCTSTOCK_ADD_LOT": {
+      const { productId, lot } = action;
+      if (!state.products[productId]) return state;
+      const cur = state.productStock[productId] || { lots: [] };
+      const newLot = withAuthorMeta(null, { id: uid(), ...lot }, action._actor, action._at);
+      return { ...state, productStock: { ...state.productStock, [productId]: { lots: [...cur.lots, newLot] } } };
+    }
+    case "PRODUCTSTOCK_UPDATE_LOT": {
+      const { productId, lotId, patch } = action;
+      const cur = state.productStock[productId];
+      if (!cur) return state;
+      const lots = cur.lots.map((l) => (l.id === lotId ? withAuthorMeta(l, { ...l, ...patch }, action._actor, action._at) : l));
+      return { ...state, productStock: { ...state.productStock, [productId]: { lots } } };
+    }
+    case "PRODUCTSTOCK_DELETE_LOT": {
+      const { productId, lotId } = action;
+      const cur = state.productStock[productId];
+      if (!cur) return state;
+      const lots = cur.lots.filter((l) => l.id !== lotId);
+      const productStock = { ...state.productStock };
+      // lot이 모두 삭제된 제품은 빈 껍데기 대신 키 제거 (제품 사전은 그대로 유지)
+      if (lots.length > 0) productStock[productId] = { lots }; else delete productStock[productId];
+      return { ...state, productStock };
+    }
+    case "RESTORE_PRODUCTSTOCK_LOT": {
+      const { productId, lot } = action;
+      const cur = state.productStock[productId] || { lots: [] };
+      return { ...state, productStock: { ...state.productStock, [productId]: { lots: [...cur.lots, lot] } } };
     }
 
     default:
@@ -657,6 +750,30 @@ const ACTIVITY_BUILDERS = {
     if (!target) return null;
     return { kind: "delete", summary: `끼니 종류 삭제: ${target.label}` };
   },
+  /* ---- 시판 이유식: 제품 등록·수정·삭제, 전역 토글 전환만 기록 (작성자 뱃지는 미노출) ---- */
+  PRODUCT_UPSERT: (prev, next, action) => {
+    const prevIds = new Set(Object.keys(prev.products));
+    const newId = Object.keys(next.products).find((id) => !prevIds.has(id));
+    if (newId) {
+      const p = next.products[newId];
+      return { kind: "create", summary: `${p.name} 시판 제품 등록`, ref: { productId: newId } };
+    }
+    const id = action.product.id;
+    if (!id) return null;
+    const p = next.products[id];
+    if (!p || p.updatedAt !== action._at) return null; // 실질적 변경 없는 재저장
+    return { kind: "update", summary: `${p.name} 시판 제품 수정`, ref: { productId: id } };
+  },
+  PRODUCT_DELETE: (prev, next, action) => {
+    const p = prev.products[action.id];
+    if (!p) return null;
+    return { kind: "delete", summary: `${p.name} 시판 제품 삭제` };
+  },
+  SET_SETTING: (prev, next, action) => {
+    if (action.key !== "productStockEnabled") return null; // 다른 설정 변경은 활동 로그 대상 아님
+    if (prev.settings.productStockEnabled === next.settings.productStockEnabled) return null;
+    return { kind: "update", summary: `시판 이유식 재고관리 ${next.settings.productStockEnabled ? "켜짐" : "꺼짐"}` };
+  },
 };
 
 function withActivity(prevState, nextState, action) {
@@ -753,6 +870,78 @@ function findBatch(stock, name, batchId) {
   return cur.batches.find((b) => b.id === batchId) || null;
 }
 
+/* ----------------------------- 시판 이유식 재고 헬퍼 (팩 단위) -----------------------------
+   냉동/냉장 재고(stock.batches)와 같은 패턴이지만 단위가 "팩"이고 배치 대신 lot(구매 단위)을 씀 */
+export function productStockLots(state, productId) {
+  return (state.productStock[productId] || { lots: [] }).lots;
+}
+
+export function productStockPacks(state, productId) {
+  return productStockLots(state, productId).reduce((s, l) => s + Math.max(0, l.packs || 0), 0);
+}
+
+// 유통기한(exp) 오름차순 → 구매일 오래된 순으로 FIFO 차감, 부족하면 있는 만큼만(0 클램프)
+export function deductProductPacks(productStock, productId, packs, trace) {
+  const lots = (productStock[productId] || { lots: [] }).lots;
+  let remaining = packs;
+  const sorted = [...lots].sort((a, b) => (a.exp || "9999-99-99").localeCompare(b.exp || "9999-99-99") || (a.buyDate || "").localeCompare(b.buyDate || ""));
+  for (const l of sorted) {
+    if (remaining <= 0) break;
+    const take = Math.min(Math.max(0, l.packs || 0), remaining);
+    l.packs = (l.packs || 0) - take;
+    remaining -= take;
+    if (trace && take > 0) trace.push({ lotId: l.id, qty: take });
+  }
+  return packs - remaining;
+}
+
+// 급여 기록 수정 시 기존에 차감했던 만큼 되돌리기 위한 복원 헬퍼 (가장 최근 구매 lot에 복원)
+export function restoreProductPacks(productStock, productId, packs) {
+  const cur = productStock[productId];
+  if (!cur || !cur.lots || cur.lots.length === 0 || !packs) return;
+  const target = [...cur.lots].sort((a, b) => (b.buyDate || "0").localeCompare(a.buyDate || "0"))[0];
+  target.packs = (target.packs || 0) + packs;
+}
+
+function findLot(productStock, productId, lotId) {
+  const cur = productStock[productId];
+  if (!cur || !cur.lots) return null;
+  return cur.lots.find((l) => l.id === lotId) || null;
+}
+
+// deductedLots(원 lot 차감 내역)가 있으면 그 lot으로 정확히 복원, 없으면(구버전) 최근 lot 폴백
+function restoreProductItemDeduction(productStock, it) {
+  const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+  if (Array.isArray(it.deductedLots) && it.deductedLots.length > 0) {
+    it.deductedLots.forEach(({ lotId, qty }) => {
+      const l = findLot(productStock, it.productId, lotId);
+      if (l) l.packs = (l.packs || 0) + qty;
+      else restoreProductPacks(productStock, it.productId, qty);
+    });
+    return;
+  }
+  restoreProductPacks(productStock, it.productId, amt);
+}
+
+// 재차감도 가능하면 원 lot에서(잔량 한도 내), 부족분·lot 없음은 FIFO 차감으로 폴백
+function redeductProductItemDeduction(productStock, it) {
+  const amt = it.deductedQty != null ? it.deductedQty : it.qty;
+  if (Array.isArray(it.deductedLots) && it.deductedLots.length > 0) {
+    let leftover = 0;
+    it.deductedLots.forEach(({ lotId, qty }) => {
+      const l = findLot(productStock, it.productId, lotId);
+      if (!l) { leftover += qty; return; }
+      const avail = Math.max(0, l.packs || 0);
+      const take = Math.min(avail, qty);
+      l.packs = (l.packs || 0) - take;
+      leftover += qty - take;
+    });
+    if (leftover > 0) deductProductPacks(productStock, it.productId, leftover);
+    return;
+  }
+  deductProductPacks(productStock, it.productId, amt);
+}
+
 // (C-3) 배치별 차감 내역(deductedBatches)이 있으면 "차감됐던 바로 그 배치"로 복원.
 // 배치가 삭제돼 없으면 해당 몫만 기존 방식(최근 배치)으로 폴백
 function restoreItemDeduction(stock, it) {
@@ -799,21 +988,23 @@ function redeductItemDeduction(stock, it) {
 }
 
 // 급여 기록 한 건이 재고에 반영했던 차감분을 복원 (기록 삭제·수정 시 사용)
-// deductedBatches가 있으면 원 배치로 정확히, 없으면 deductedQty(→qty) 폴백
-export function restoreLogDeductions(stock, log) {
+// deductedBatches/deductedLots가 있으면 원 배치·lot으로 정확히, 없으면 deductedQty(→qty) 폴백
+export function restoreLogDeductions(stock, productStock, log) {
   if (log.stockAffected === false) return;
   (log.items || []).forEach((it) => {
     if (it.deduct === false) return;
-    restoreItemDeduction(stock, it);
+    if (it.source === "product") restoreProductItemDeduction(productStock, it);
+    else restoreItemDeduction(stock, it);
   });
 }
 
 // 삭제 실행취소 시 복원했던 차감분을 다시 차감 (삭제 ↔ 실행취소 대칭 유지)
-export function redeductLogDeductions(stock, log) {
+export function redeductLogDeductions(stock, productStock, log) {
   if (log.stockAffected === false) return;
   (log.items || []).forEach((it) => {
     if (it.deduct === false) return;
-    redeductItemDeduction(stock, it);
+    if (it.source === "product") redeductProductItemDeduction(productStock, it);
+    else redeductItemDeduction(stock, it);
   });
 }
 
@@ -858,7 +1049,12 @@ export function unrestorableStockNames(state, logsArr) {
     (log.items || []).forEach((it) => {
       if (it.deduct === false) return;
       const amt = it.deductedQty != null ? it.deductedQty : it.qty;
-      if (amt > 0 && stockBatches(state, it.name).length === 0) names.add(it.name);
+      if (amt <= 0) return;
+      if (it.source === "product") {
+        if (productStockLots(state, it.productId).length === 0) names.add(it.productName || "시판 제품");
+        return;
+      }
+      if (stockBatches(state, it.name).length === 0) names.add(it.name);
     });
   });
   return [...names];
@@ -876,6 +1072,8 @@ export function unitGOf(state, name) {
 }
 
 export function gOf(state, item) {
+  // 시판 제품 항목은 팩 수 × 1팩 용량(g) - 재료처럼 unitG/gramsOverride 개념이 없음
+  if (item.source === "product") return item.qty * (item.packG || 0);
   if (item.gramsOverride != null) return item.gramsOverride;
   const u = item.unitG != null ? item.unitG : unitGOf(state, item.name);
   return item.qty * u;
@@ -885,22 +1083,32 @@ export function totalG(state, items) {
   return items.reduce((s, it) => s + gOf(state, it), 0);
 }
 
-// 급여기록(log) 항목들의 총 제공량(g) - 냉장 항목은 qty가 이미 그램, 냉동 항목은 qty(큐브)*unitG
-// (급여기록 여러 곳에서 "제공량 중 섭취량 %"를 계산할 때 공통으로 씀)
+// 급여기록(log) 항목들의 총 제공량(g) - 냉장 항목은 qty가 이미 그램, 냉동 항목은 qty(큐브)*unitG,
+// 시판 항목은 qty(팩)*packG
 export function logProvideG(log) {
-  return log.items.reduce((s, it) => s + (it.source === "fridge" ? it.qty : it.qty * it.unitG), 0);
+  return log.items.reduce((s, it) => {
+    if (it.source === "product") return s + it.qty * (it.packG || 0);
+    return s + (it.source === "fridge" ? it.qty : it.qty * it.unitG);
+  }, 0);
 }
 
+// 시판 제품은 재료 함량을 알 수 없으므로 카테고리별 재료 섭취 통계에서 제외 (확정 정책)
 export function catTotals(state, items) {
   const t = {}; CATEGORIES.forEach((c) => { t[c] = 0; });
-  items.forEach((it) => { t[catOf(state, it.name)] += gOf(state, it); });
+  items.forEach((it) => {
+    if (it.source === "product") return;
+    t[catOf(state, it.name)] += gOf(state, it);
+  });
   return t;
 }
 
-// 재료 목록 정렬: 죽 → 단백질 → 채소 → 과일 순, 동일 카테고리 내에서는 가나다순
+// 재료 목록 정렬: 죽 → 단백질 → 채소 → 과일 순, 동일 카테고리 내에서는 가나다순, 시판 제품은 항상 맨 뒤
 // (끼니 재료 나열, 재료 선택, 먹어본 재료 등 재료가 리스트업되는 모든 곳에서 공통 사용)
 export function sortByCategory(state, list, nameOf = (x) => x.name) {
   return [...list].sort((a, b) => {
+    const ap = a.source === "product", bp = b.source === "product";
+    if (ap !== bp) return ap ? 1 : -1;
+    if (ap && bp) return (a.productName || "").localeCompare(b.productName || "", "ko");
     const oa = CATEGORIES.indexOf(catOf(state, nameOf(a)));
     const ob = CATEGORIES.indexOf(catOf(state, nameOf(b)));
     if (oa !== ob) return oa - ob;
