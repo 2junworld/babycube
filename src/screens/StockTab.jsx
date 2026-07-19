@@ -869,17 +869,27 @@ export function IngredientWikiPanel({ go }) {
               {productList.map((p, i) => {
                 const packs = stockOn ? productStockPacks(state, p.id) : null;
                 return (
-                  <button key={p.id} onClick={() => go("productDetail", { productId: p.id })} className="flex items-center justify-between"
+                  <button key={p.id} onClick={() => go("productDetail", { productId: p.id })}
                     style={{ width: "100%", textAlign: "left", padding: "10px 12px", background: C.surface, border: "none",
                       borderTop: i === 0 ? "none" : `1px solid ${C.border}`, cursor: "pointer" }}>
-                    <div className="flex items-center" style={{ gap: 7, minWidth: 0, flex: 1 }}>
-                      <ProductDot size={7} />
-                      <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
-                      {p.brand && <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.brand}</span>}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center" style={{ gap: 7, minWidth: 0, flex: 1 }}>
+                        <ProductDot size={7} />
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                        {p.brand && <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.brand}</span>}
+                      </div>
+                      {packs != null ? (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: packs > 0 ? PRODUCT_COLOR : C.apricot, flexShrink: 0 }}>{packs}팩</span>
+                      ) : <ChevronRight size={13} color={C.muted} style={{ flexShrink: 0 }} />}
                     </div>
-                    {packs != null ? (
-                      <span style={{ fontSize: 11, fontWeight: 700, color: packs > 0 ? PRODUCT_COLOR : C.apricot, flexShrink: 0 }}>{packs}팩</span>
-                    ) : <ChevronRight size={13} color={C.muted} style={{ flexShrink: 0 }} />}
+                    {p.ingredients.length > 0 && (
+                      <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+                        {p.ingredients.slice(0, 4).map((n) => (
+                          <span key={n} style={{ fontSize: 10, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{n}</span>
+                        ))}
+                        {p.ingredients.length > 4 && <span style={{ fontSize: 10, color: C.muted }}>+{p.ingredients.length - 4}</span>}
+                      </div>
+                    )}
                   </button>
                 );
               })}

@@ -1072,8 +1072,9 @@ export function unitGOf(state, name) {
 }
 
 export function gOf(state, item) {
-  // 시판 제품 항목은 팩 수 × 1팩 용량(g) - 재료처럼 unitG/gramsOverride 개념이 없음
-  if (item.source === "product") return item.qty * (item.packG || 0);
+  // 시판 제품 항목은 기본적으로 팩 수 × 1팩 용량(g)이지만, 한 팩을 다 먹이지 않은 경우를 위해
+  // gramsOverride로 실제 제공량을 직접 지정할 수 있음(재고 차감은 여전히 qty=팩 수 기준)
+  if (item.source === "product") return item.gramsOverride != null ? item.gramsOverride : item.qty * (item.packG || 0);
   if (item.gramsOverride != null) return item.gramsOverride;
   const u = item.unitG != null ? item.unitG : unitGOf(state, item.name);
   return item.qty * u;
@@ -1084,10 +1085,10 @@ export function totalG(state, items) {
 }
 
 // 급여기록(log) 항목들의 총 제공량(g) - 냉장 항목은 qty가 이미 그램, 냉동 항목은 qty(큐브)*unitG,
-// 시판 항목은 qty(팩)*packG
+// 시판 항목은 qty(팩)*packG(단, gramsOverride가 있으면 그 값 우선)
 export function logProvideG(log) {
   return log.items.reduce((s, it) => {
-    if (it.source === "product") return s + it.qty * (it.packG || 0);
+    if (it.source === "product") return s + (it.gramsOverride != null ? it.gramsOverride : it.qty * (it.packG || 0));
     return s + (it.source === "fridge" ? it.qty : it.qty * it.unitG);
   }, 0);
 }

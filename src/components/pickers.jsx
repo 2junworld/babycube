@@ -336,16 +336,25 @@ export function ProductPicker({ onPick, onClose }) {
         {list.map((p) => {
           const packs = stockOn ? productStockPacks(state, p.id) : null;
           return (
-            <button key={p.id} onClick={() => onPick(p)} className="flex items-center justify-between" style={{ width: "100%", padding: "11px 12px",
+            <button key={p.id} onClick={() => onPick(p)} style={{ width: "100%", textAlign: "left", padding: "11px 12px",
               borderBottom: `1px solid ${C.border}`, background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
-              <div className="flex items-center" style={{ gap: 7, minWidth: 0 }}>
-                <ProductDot />
-                <span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{p.name}</span>
-                {p.brand && <span style={{ fontSize: 10.5, color: C.muted }}>{p.brand}</span>}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center" style={{ gap: 7, minWidth: 0 }}>
+                  <ProductDot />
+                  <span style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{p.name}</span>
+                  {p.brand && <span style={{ fontSize: 10.5, color: C.muted }}>{p.brand}</span>}
+                </div>
+                <span style={{ fontSize: 11, color: packs != null && packs <= 0 ? C.apricot : C.muted, flexShrink: 0 }}>
+                  {packs != null ? `${packs}팩` : `1팩 ${p.packG}g`}
+                </span>
               </div>
-              <span style={{ fontSize: 11, color: packs != null && packs <= 0 ? C.apricot : C.muted, flexShrink: 0 }}>
-                {packs != null ? `${packs}팩` : `1팩 ${p.packG}g`}
-              </span>
+              {p.ingredients.length > 0 && (
+                <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+                  {p.ingredients.map((n) => (
+                    <span key={n} style={{ fontSize: 10, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{n}</span>
+                  ))}
+                </div>
+              )}
             </button>
           );
         })}

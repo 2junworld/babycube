@@ -590,7 +590,7 @@ export function FeedingCompareScreen({ date, logId, label: labelProp, onBack }) 
   const actualG = {};
   (log ? log.items : []).forEach((it) => {
     const k = keyOf(it);
-    actualG[k] = (actualG[k] || 0) + (it.source === "product" ? it.qty * it.packG : it.source === "fridge" ? it.qty : it.qty * it.unitG);
+    actualG[k] = (actualG[k] || 0) + gOf(state, it);
     rowLabel[k] = it.source === "product" ? { text: it.productName, isProduct: true } : { text: it.name, isProduct: false };
   });
   const allNames = sortByCategory(

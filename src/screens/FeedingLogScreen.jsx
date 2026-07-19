@@ -41,9 +41,11 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   // 실제 중량을 그대로 이어받도록 냉장(계량) 방식으로 옮겨온다 (기본 15g으로 뭉개지는 문제 방지)
   const [items, setItems] = useState(
     base.items.map((it) => {
-      // 시판 제품 항목: 재료와 달리 unitG 개념이 없고 팩 단위로만 다룸
+      // 시판 제품 항목: 재료와 달리 unitG 개념이 없고 팩 단위로만 다룸. gramsOverride가 있으면
+      // 한 팩을 다 먹이지 않은 경우로, 재고 차감 단위(qty=팩)와 별개로 표시용 제공량을 override함
       if (it.source === "product") {
-        return { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty || 1, deduct: it.deduct !== false };
+        return { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty || 1,
+          gramsOverride: it.gramsOverride != null ? it.gramsOverride : null, deduct: it.deduct !== false };
       }
       const effectiveUnitG = it.unitG != null ? it.unitG : unitGOf(state, it.name);
       // 기존 급여기록을 다시 불러오는 경우: 저장 당시의 source(냉동/냉장)를 그대로 존중해야
@@ -80,13 +82,16 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   const [intake, setIntake] = useState(existingLog ? existingLog.intakeG : null);
   const [confirmingSave, setConfirmingSave] = useState(false);
 
-  const provideG = (it) => it.source === "product" ? it.qty * it.packG : it.source === "fridge" ? it.fridgeG : it.qty * it.unitG;
+  const provideG = (it) => it.source === "product" ? (it.gramsOverride != null ? it.gramsOverride : it.qty * it.packG) : it.source === "fridge" ? it.fridgeG : it.qty * it.unitG;
   const totalProvide = items.reduce((s, it) => s + provideG(it), 0);
 
   const setSource = (key, src) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, source: src } : it));
   const upQty = (key, d) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, qty: Math.max(1, it.qty + d) } : it));
   const upUnit = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, unitG: v } : it));
   const upFridge = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, fridgeG: v } : it));
+  const upGrams = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, gramsOverride: v } : it));
+  // 시판 제품의 제공량 직접 입력 켜기/끄기 - qty(팩 수, 재고 차감 단위)는 그대로 두고 표시용 제공량만 override
+  const toggleProductGramMode = (key) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, gramsOverride: it.gramsOverride != null ? null : it.qty * it.packG } : it));
   const toggleDeduct = (key) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, deduct: !it.deduct } : it));
   const rm = (key) => setItems((p) => p.filter((it) => keyOf(it) !== key));
   const addItems = (names) => {
@@ -101,7 +106,7 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     setProductPicker(false);
     setItems((p) => {
       if (p.some((it) => it.productId === product.id)) return p; // 이미 담긴 제품
-      return [...p, { source: "product", productId: product.id, productName: product.name, packG: product.packG, qty: 1, deduct: state.settings.productStockEnabled }];
+      return [...p, { source: "product", productId: product.id, productName: product.name, packG: product.packG, qty: 1, gramsOverride: null, deduct: state.settings.productStockEnabled }];
     });
   };
 
@@ -109,7 +114,7 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
 
   const save = () => {
     const logItems = items.map((it) => it.source === "product"
-      ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty, deduct: it.deduct !== false }
+      ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty, gramsOverride: it.gramsOverride != null ? it.gramsOverride : null, deduct: it.deduct !== false }
       : it.source === "fridge"
       ? { name: it.name, source: "fridge", qty: it.fridgeG, unitG: 1, deduct: it.deduct !== false }
       : { name: it.name, source: "frozen", qty: it.qty, unitG: it.unitG, deduct: it.deduct !== false });
@@ -130,7 +135,7 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
     // 급여표의 '계획 대비 비교'는 저장 시점 스냅샷(planSnapshot) 기준이라 원래 계획과의 비교는 유지됨
     if (addToPlan) {
       const planItems = items.map((it) => it.source === "product"
-        ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty }
+        ? { source: "product", productId: it.productId, productName: it.productName, packG: it.packG, qty: it.qty, gramsOverride: it.gramsOverride != null ? it.gramsOverride : null }
         : it.source === "fridge"
         ? { name: it.name, qty: 1, unitG: it.unitG, gramsOverride: it.fridgeG }
         : { name: it.name, qty: it.qty, unitG: it.unitG, gramsOverride: null });
@@ -224,14 +229,32 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
                     <button onClick={() => rm(key)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
                   </div>
                   {it.source === "product" ? (
-                    <div className="flex items-center justify-between">
-                      <span style={{ fontSize: 10.5, color: C.muted }}>1팩 {it.packG}g</span>
-                      <div className="flex items-center" style={{ gap: 8 }}>
-                        <button onClick={() => upQty(key, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}팩</span>
-                        <button onClick={() => upQty(key, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
+                    <>
+                      {(state.products[it.productId] || {}).ingredients && (state.products[it.productId] || {}).ingredients.length > 0 && (
+                        <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+                          {state.products[it.productId].ingredients.map((n) => (
+                            <span key={n} style={{ fontSize: 10, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{n}</span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <span style={{ fontSize: 10.5, color: C.muted }}>1팩 {it.packG}g</span>
+                        <div className="flex items-center" style={{ gap: 8 }}>
+                          <button onClick={() => upQty(key, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}팩</span>
+                          <button onClick={() => upQty(key, 1)} style={stepBtn}><Plus size={12} color={C.inkSoft} /></button>
+                        </div>
                       </div>
-                    </div>
+                      {it.gramsOverride != null && (
+                        <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
+                          <span style={{ fontSize: 10.5, color: C.muted }}>실제 제공량 (한 팩을 다 안 먹인 경우)</span>
+                          <NumInput value={it.gramsOverride} onChange={(v) => upGrams(key, v)} width={52} suffix="g" />
+                        </div>
+                      )}
+                      <button onClick={() => toggleProductGramMode(key)} style={{ marginTop: 7, background: "none", border: "none", fontSize: 10, fontWeight: 700, color: C.sageDeep, cursor: "pointer", padding: 0, textDecoration: "underline" }}>
+                        {it.gramsOverride != null ? "팩 용량 기준으로 되돌리기" : "제공량 직접 입력"}
+                      </button>
+                    </>
                   ) : (
                     <>
                       <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>

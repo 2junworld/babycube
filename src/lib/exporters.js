@@ -24,7 +24,7 @@ export function feedingLogsToCSV(state) {
       const productItems = log.items.filter((it) => it.source === "product");
       const productNames = productItems.map((it) => it.productName).join(" · ");
       const productPacks = productItems.reduce((s, it) => s + it.qty, 0);
-      const productG = productItems.reduce((s, it) => s + it.qty * it.packG, 0);
+      const productG = productItems.reduce((s, it) => s + (it.gramsOverride != null ? it.gramsOverride : it.qty * it.packG), 0);
       rows.push([date, log.label, log.time, prov, log.intakeG, pct, productNames, productPacks || "", productG || ""]);
     });
   });
