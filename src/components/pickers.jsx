@@ -93,7 +93,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
 
   return (
     <div style={{ position: "fixed", top: vv.offsetTop, left: 0, right: 0, height: vv.height, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{multi ? `재료 선택${selected.length ? ` (${selected.length})` : ""}` : "재료 선택"}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
@@ -242,7 +242,7 @@ export function ProductEditSheet({ product, onClose, go, onSaved }) {
 
   return (
     <BottomSheet title={isNew ? "시판 제품 추가" : "시판 제품 수정"} onClose={onClose}>
-      <div style={{ padding: "0 18px calc(20px + env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+      <div style={{ padding: "0 18px 20px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제품명</div>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 소고기미역진밥"

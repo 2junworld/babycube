@@ -93,7 +93,7 @@ export function FeedingWeekPanel({ go }) {
       {wide && <div style={{ fontSize: 9.5, color: C.muted, textAlign: "center" }}>← 옆으로 밀어서 더 보기 →</div>}
       {multiPick && (
         <BottomSheet title={`${multiPick.date.slice(5)} · '${multiPick.label}' 기록 ${multiPick.logs.length}건`} onClose={() => setMultiPick(null)}>
-          <div style={{ padding: "0 18px calc(20px + env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ padding: "0 18px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ fontSize: 11.5, color: C.muted }}>볼 기록을 선택하세요</div>
             {multiPick.logs.map((l) => (
               <button key={l.id} onClick={() => { setMultiPick(null); go("feedCompare", { date: multiPick.date, logId: l.id }); }}
@@ -432,7 +432,7 @@ export function IntroEditModal({ intro, onClose }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px 26px", position: "relative" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px calc(26px + env(safe-area-inset-bottom))", position: "relative" }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{isNew ? "재료 추가" : "재료 정보 수정"}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>

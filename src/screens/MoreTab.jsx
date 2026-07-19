@@ -9,6 +9,7 @@ import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, avgPlannedMealsPerDay, isSta
 import { useStore } from "../store";
 import { authorTime, CatDot, ConfirmModal, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { downloadFile, feedingLogsToCSV } from "../lib/exporters";
+import { usePwaUpdate } from "../pwa";
 
 /* =====================================================================
    더보기 하위 화면들
@@ -487,7 +488,7 @@ export function MealSlotEditModal({ slot, timeFmt, onClose }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px 26px", position: "relative" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px calc(26px + env(safe-area-inset-bottom))", position: "relative" }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{isNew ? "끼니 종류 추가" : "끼니 종류 수정"}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
@@ -516,6 +517,8 @@ export function MealSlotEditModal({ slot, timeFmt, onClose }) {
 }
 
 export function MoreTab({ go }) {
+  const { notify } = useStore();
+  const { needRefresh, checkForUpdate } = usePwaUpdate();
   const items = [
     { key: "mealSlots", icon: Clock, label: "끼니 설정", sub: "끼니 이름·시간 관리" },
     { key: "manufactureHistory", icon: History, label: "제조 이력", sub: "재료별 제조 배치 기록 조회" },
@@ -537,7 +540,15 @@ export function MoreTab({ go }) {
         ))}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
-        베이비큐브 · v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?"} — 업데이트 후 앱을 완전히 종료했다 열면 적용돼요
+        <div>베이비큐브 · v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?"}</div>
+        {needRefresh ? (
+          <div style={{ marginTop: 4, color: C.sageDeep, fontWeight: 700 }}>새 버전이 있어요 — 화면 상단 배너에서 업데이트해 주세요</div>
+        ) : (
+          <button onClick={() => { checkForUpdate(); notify("최신 버전인지 확인했어요"); }}
+            style={{ marginTop: 4, background: "none", border: "none", color: C.sageDeep, fontWeight: 700, fontSize: 10, textDecoration: "underline", cursor: "pointer", padding: 0 }}>
+            업데이트 확인
+          </button>
+        )}
       </div>
     </div>
   );

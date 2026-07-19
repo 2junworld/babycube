@@ -41,7 +41,7 @@ export function BatchModal({ presetName, onClose }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px 26px", position: "relative" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px calc(26px + env(safe-area-inset-bottom))", position: "relative" }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>제조 기록 추가</span>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
@@ -1034,7 +1034,7 @@ function ProductLotModal({ productId, onClose }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px 26px" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px calc(26px + env(safe-area-inset-bottom))" }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>구매 기록 추가</span>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>

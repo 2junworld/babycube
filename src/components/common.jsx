@@ -341,7 +341,8 @@ export function TimePicker({ time, setTime, timeFmt, bare = false, labelColor, l
 export function BottomSheet({ title, onClose, maxHeight = "78%", children }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight, borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column" }}>
+      {/* iOS PWA(standalone) 홈 인디케이터와 겹치지 않도록 하단 safe-area 여백 확보 */}
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxHeight, borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{title}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
