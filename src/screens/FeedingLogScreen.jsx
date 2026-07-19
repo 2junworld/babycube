@@ -91,7 +91,13 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   const upFridge = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, fridgeG: v } : it));
   const upGrams = (key, v) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, gramsOverride: v } : it));
   // 시판 제품의 제공량 직접 입력 켜기/끄기 - qty(팩 수, 재고 차감 단위)는 그대로 두고 표시용 제공량만 override
-  const toggleProductGramMode = (key) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, gramsOverride: it.gramsOverride != null ? null : it.qty * it.packG } : it));
+  // 시판 제품의 "팩"/"중량" 입력 방식 전환 - 냉동/냉장 토글과 동일한 방식.
+  // qty(팩 수, 재고 차감 단위)는 그대로 두고 표시용 제공량(gramsOverride)만 켜고 끔
+  const setProductMode = (key, mode) => setItems((p) => p.map((it) => {
+    if (keyOf(it) !== key) return it;
+    if (mode === "gram") return { ...it, gramsOverride: it.gramsOverride != null ? it.gramsOverride : it.qty * it.packG };
+    return { ...it, gramsOverride: null };
+  }));
   const toggleDeduct = (key) => setItems((p) => p.map((it) => keyOf(it) === key ? { ...it, deduct: !it.deduct } : it));
   const rm = (key) => setItems((p) => p.filter((it) => keyOf(it) !== key));
   const addItems = (names) => {
@@ -237,8 +243,11 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
                           ))}
                         </div>
                       )}
+                      <div style={{ marginBottom: 8 }}>
+                        <Segmented value={it.gramsOverride != null ? "gram" : "pack"} onChange={(v) => setProductMode(key, v)} options={[{ value: "pack", label: "팩으로 입력" }, { value: "gram", label: "중량으로 입력" }]} />
+                      </div>
                       <div className="flex items-center justify-between">
-                        <span style={{ fontSize: 10.5, color: C.muted }}>1팩 {it.packG}g</span>
+                        <span style={{ fontSize: 10.5, color: C.muted }}>1팩 {it.packG}g · 재고 차감 단위</span>
                         <div className="flex items-center" style={{ gap: 8 }}>
                           <button onClick={() => upQty(key, -1)} style={stepBtn}><Minus size={12} color={C.inkSoft} /></button>
                           <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, minWidth: 40, textAlign: "center", whiteSpace: "nowrap" }}>{it.qty}팩</span>
@@ -247,13 +256,10 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
                       </div>
                       {it.gramsOverride != null && (
                         <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
-                          <span style={{ fontSize: 10.5, color: C.muted }}>실제 제공량 (한 팩을 다 안 먹인 경우)</span>
+                          <span style={{ fontSize: 10.5, color: C.muted }}>실제 제공량</span>
                           <NumInput value={it.gramsOverride} onChange={(v) => upGrams(key, v)} width={52} suffix="g" />
                         </div>
                       )}
-                      <button onClick={() => toggleProductGramMode(key)} style={{ marginTop: 7, background: "none", border: "none", fontSize: 10, fontWeight: 700, color: C.sageDeep, cursor: "pointer", padding: 0, textDecoration: "underline" }}>
-                        {it.gramsOverride != null ? "팩 용량 기준으로 되돌리기" : "제공량 직접 입력"}
-                      </button>
                     </>
                   ) : (
                     <>
