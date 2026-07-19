@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, Trash2, X } from "lucide-react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
-import { C, CATEGORIES, primaryBtn } from "../theme";
+import { C, CATEGORIES, primaryBtn, PRODUCT_COLOR } from "../theme";
 import { WD, addDaysISO, fmtTime, pad2, todayISO } from "../lib/dates";
 import { catOf, gOf, logProvideG, sortByCategory, totalG, unrestorableStockNames } from "../state/appState";
 import { useStore } from "../store";
@@ -305,6 +305,15 @@ export function RecordTab({ go }) {
                 </div>
               )}
 
+              {report.productMealRate != null && (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${C.border}` }}>
+                  <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제작 vs 시판 (끼니 수 기준)</div>
+                  <div className="flex items-center justify-between">
+                    <span style={{ fontSize: 12, color: C.inkSoft }}>전체 {report.count}끼 중 시판 포함 {report.productMealCount}끼</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: PRODUCT_COLOR }}>{report.productMealRate}%</span>
+                  </div>
+                </div>
+              )}
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${C.border}` }}>
                 <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제조량 대비 소비량</div>
                 {producedG > 0 ? (
