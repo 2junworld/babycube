@@ -2,6 +2,7 @@
 import React from "react";
 import { addDaysISO, todayISO } from "./dates";
 import { catOf, catTotals, logProvideG } from "../state/appState";
+import { CATEGORIES } from "../theme";
 
 export function weeklyRates(state) {
   const t = todayISO();
@@ -24,7 +25,7 @@ export function weeklyRates(state) {
    시판 제품 항목은 함량을 알 수 없어 카테고리·재료별 집계에서 제외하고(확정 정책),
    대신 "제작 vs 시판" 비율(끼니 수 기준)로 별도 집계한다 */
 export function monthStats(state, year, month) {
-  const catTotals = { 탄수화물: 0, 단백질: 0, 채소: 0, 과일: 0 };
+  const catTotals = {}; CATEGORIES.forEach((c) => { catTotals[c] = 0; });
   const ingredientTotals = {}; // 재료명 -> 추정 섭취 g
   let totalProv = 0, totalIntake = 0, count = 0, productMealCount = 0;
   Object.keys(state.logs).forEach((d) => {

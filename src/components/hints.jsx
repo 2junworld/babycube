@@ -172,14 +172,14 @@ export function mealTipsOf(state) {
 
 // 재고/궁합/오늘 사용 재료 힌트를 하나로 묶어 기본은 접어두고, 필요할 때만 펼쳐보는 패널.
 // 세 카드를 항상 펼쳐두면 화면을 너무 많이 차지한다는 피드백을 받아 접이식으로 변경함(2026-07-04).
-export function MealTipsPanel({ currentNames, onAdd, date = todayISO() }) {
+export function MealTipsPanel({ currentNames, pairingNames = currentNames, onAdd, date = todayISO() }) {
   const { state, dispatch } = useStore();
   const tips = mealTipsOf(state);
   const [expanded, setExpanded] = useState(false);
   const currentSet = new Set(currentNames);
 
   const urgentCount = tips.stock !== false ? urgentStockNames(state).filter((u) => !currentSet.has(u.name)).length : 0;
-  const { good, avoid } = tips.pairing !== false ? pairingSuggestions(state, currentNames) : { good: [], avoid: [] };
+  const { good, avoid } = tips.pairing !== false ? pairingSuggestions(state, pairingNames) : { good: [], avoid: [] };
   const usedTodayCount = tips.usedToday !== false ? Array.from(usedTodayMap(state, date).keys()).filter((n) => !currentSet.has(n)).length : 0;
   const totalCount = urgentCount + good.length + avoid.length + usedTodayCount;
 
@@ -207,7 +207,7 @@ export function MealTipsPanel({ currentNames, onAdd, date = todayISO() }) {
             })}
           </div>
           {tips.stock !== false && <UrgentStockHint currentNames={currentNames} onAdd={onAdd} />}
-          {tips.pairing !== false && <PairingHint currentNames={currentNames} onAdd={onAdd} />}
+          {tips.pairing !== false && <PairingHint currentNames={pairingNames} onAdd={onAdd} />}
           {tips.usedToday !== false && <TodayUsedHint currentNames={currentNames} date={date} />}
         </div>
       )}

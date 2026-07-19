@@ -8,6 +8,7 @@ import { useStore } from "../store";
 import { AuthorInfo, CategoryBar, CategoryLegend, FromRecordBadge, IngredientTable, MealItemList, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { useDetailView } from "./uiPrefs";
 import { weekMealLabels } from "../lib/mealLabels";
+import { pairingNamesOf } from "../lib/pairing";
 import { GrowthStageHint, MealTipsPanel } from "../components/hints";
 import { IngredientPicker, MealCopyPicker, MealSlotPicker } from "../components/pickers";
 import { AddProductButton, PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
@@ -81,7 +82,7 @@ export function MealEditScreen({ date, meal, onBack }) {
         <button onClick={() => setCopyPicker(true)} className="flex items-center justify-center" style={{ gap: 6, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, background: C.sageLight, cursor: "pointer" }}>
           다른 날짜 식단 복사해오기
         </button>
-        <MealTipsPanel currentNames={items.filter((it) => it.source !== "product").map((it) => it.name)} onAdd={(name) => addItems([name])} date={date} />
+        <MealTipsPanel currentNames={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onAdd={(name) => addItems([name])} date={date} />
 
         <PlanItemsEditor editor={editor} />
 
@@ -100,7 +101,7 @@ export function MealEditScreen({ date, meal, onBack }) {
           {label ? "저장" : "끼니 종류를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} onClose={() => setPicker(false)} date={date} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>
@@ -215,7 +216,7 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
             다른 날짜 식단 복사해오기
           </button>
           <div style={{ marginTop: 8 }}>
-            <MealTipsPanel currentNames={items.filter((it) => it.source !== "product").map((it) => it.name)} onAdd={(name) => addItems([name])} date={tipsDate} />
+            <MealTipsPanel currentNames={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onAdd={(name) => addItems([name])} date={tipsDate} />
           </div>
         </div>
 
@@ -296,7 +297,7 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
           {selectedDates.length > 0 ? `${selectedDates.length}개 날짜에 저장` : "날짜를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} onClose={() => setPicker(false)} date={tipsDate} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={tipsDate} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>

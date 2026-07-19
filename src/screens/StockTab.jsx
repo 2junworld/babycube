@@ -9,9 +9,9 @@ import { catOf, productStockLots, productStockPacks, sortByCategory, stockBatche
 import { useStore } from "../store";
 import { AuthorInfo, BottomSheet, CatDot, ConfirmModal, CubeGrid, NumInput, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE, readStockPref, writeStockPref } from "./uiPrefs";
-import { ingredientPairsFor, suggestBaseFor, tagsOf } from "../lib/pairing";
+import { ingredientPairsFor, productPairsFor, suggestBaseFor, tagsOf } from "../lib/pairing";
 import { frozenAlerts, urgentStockNames } from "../lib/stockAlerts";
-import { IngredientPicker } from "../components/pickers";
+import { IngredientPicker, ProductEditSheet } from "../components/pickers";
 import { IntroEditModal } from "./RecordTab";
 
 /* =====================================================================
@@ -162,39 +162,35 @@ export function StockItem({ name, onClick, urgent, deadlineText, layout }) {
   );
 }
 
-// 재고 탭의 "시판" 섹션 - 전역 토글 ON일 때만 노출. 제품별 보유 팩 수 카드, 탭하면 lot 상세로 이동
-function ProductStockSection({ go, setSubTab }) {
+// 재고 탭의 시판 제품 카드 - StockItem과 동일한 3가지 레이아웃을 지원해 재료와 같은 리스트/그리드 안에서
+// 자연스럽게 섞여 보이게 함(전역 토글 ON일 때만 렌더링됨). 큐브·g 대신 보유 팩 수를 표시
+function ProductStockItem({ product, onClick, layout }) {
   const { state } = useStore();
-  const products = Object.values(state.products);
+  const packs = productStockPacks(state, product.id);
+  const border = `1px solid ${packs <= 0 ? C.apricot : C.border}`;
+
+  if (layout === "row") {
+    return (
+      <button onClick={onClick} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
+        <div className="flex items-center" style={{ gap: 8, minWidth: 0, flex: 1 }}>
+          <ProductDot size={7} />
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product.name}</span>
+        </div>
+        <div className="flex items-center" style={{ gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: packs > 0 ? C.muted : C.apricot, fontWeight: 600 }}>{packs}팩</span>
+          <ChevronRight size={13} color={C.muted} />
+        </div>
+      </button>
+    );
+  }
   return (
-    <div>
-      <div className="flex items-center justify-between" style={{ marginBottom: 7, padding: "0 2px" }}>
-        <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>시판</span>
-        <button onClick={() => { writeStockPref("bc_wiki_mode", "product"); setSubTab("wiki"); }}
-          style={{ fontSize: 10.5, fontWeight: 700, color: C.sageDeep, background: "none", border: "none", cursor: "pointer" }}>제품 추가·관리</button>
+    <button onClick={onClick} style={{ textAlign: "left", background: C.surface, border, borderRadius: 12, padding: layout === "grid3" ? "9px 8px" : "10px 10px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
+      <div className="flex items-center" style={{ gap: 5, minWidth: 0 }}>
+        <ProductDot size={6} />
+        <span style={{ fontSize: layout === "grid3" ? 11.5 : 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>{product.name}</span>
       </div>
-      {products.length === 0 ? (
-        <div style={{ background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 12, padding: "14px", textAlign: "center", fontSize: 11.5, color: C.muted }}>
-          등록된 시판 제품이 없어요. '제품 추가·관리'에서 먼저 등록해 주세요.
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {products.map((p) => {
-            const packs = productStockPacks(state, p.id);
-            return (
-              <button key={p.id} onClick={() => go("productStockDetail", { productId: p.id })} className="flex items-center justify-between"
-                style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${packs <= 0 ? C.apricot : C.border}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
-                <div className="flex items-center" style={{ gap: 8, minWidth: 0 }}>
-                  <ProductDot />
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
-                </div>
-                <span style={{ fontSize: 11, fontWeight: 700, color: packs > 0 ? C.muted : C.apricot, flexShrink: 0 }}>{packs}팩</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+      <span style={{ fontSize: 10, color: packs > 0 ? C.muted : C.apricot, fontWeight: 600 }}>{packs}팩</span>
+    </button>
   );
 }
 
@@ -210,28 +206,44 @@ export function StockTab({ go }) {
   const setSortMode = (v) => { setSortModeRaw(v); writeStockPref("bc_stock_sort", v); };
   const setLayout = (v) => { setLayoutRaw(v); writeStockPref("bc_stock_layout", v); };
 
+  const productStockOn = state.settings.productStockEnabled;
   const allNames = Object.keys(state.stock).filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
   const urgent = urgentStockNames(state); // 이미 긴급도순으로 정렬돼 있음(냉장 보관중 > 냉동 보관기한 임박순)
   const urgentMap = new Map(urgent.map((u) => [u.name, u]));
+  // 재료(문자열 이름)와 시판 제품을 한 목록으로 합쳐서 카테고리별로 함께 묶어 보여줌 - "시판"도 다른
+  // 카테고리와 동일하게 필터 칩으로 선택해 따로 볼 수 있음(상단 고정 섹션 없이 통합)
+  const filters = [...STOCK_FILTERS, ...(productStockOn ? ["시판"] : [])];
+  const entries = [
+    ...allNames.map((name) => ({ type: "ingredient", name })),
+    ...(productStockOn ? Object.values(state.products).map((product) => ({ type: "product", product })) : []),
+  ];
 
-  const matchesFilter = (n) => {
+  const matchesFilter = (e) => {
+    if (filter === "시판") return e.type === "product";
+    if (e.type === "product") return filter === "전체";
+    const n = e.name;
     if (filter === "전체") return true;
     if (filter === "소진임박") return urgentMap.has(n);
     if (filter === "냉동") return stockTotalCubes(state, n) > 0;
     if (filter === "냉장") return stockFridgeG(state, n) > 0;
     return catOf(state, n) === filter; // 카테고리 필터
   };
-  const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
-  const sortNames = (list) => {
-    if (sortMode === "cat") return sortByCategory(state, list, (n) => n);
-    if (sortMode === "name") return [...list].sort((a, b) => a.localeCompare(b, "ko"));
+  const stockAmt = (e) => e.type === "product" ? productStockPacks(state, e.product.id) : stockTotalFrozenG(state, e.name) + stockFridgeG(state, e.name);
+  const labelOf = (e) => e.type === "product" ? e.product.name : e.name;
+  const catRank = (e) => e.type === "product" ? CATEGORIES.length : CATEGORIES.indexOf(catOf(state, e.name));
+  const sortEntries = (list) => {
+    if (sortMode === "cat") return [...list].sort((a, b) => {
+      const ra = catRank(a), rb = catRank(b);
+      return ra !== rb ? ra - rb : labelOf(a).localeCompare(labelOf(b), "ko");
+    });
+    if (sortMode === "name") return [...list].sort((a, b) => labelOf(a).localeCompare(labelOf(b), "ko"));
     return [...list].sort((a, b) => sortMode === "stockAsc" ? stockAmt(a) - stockAmt(b) : stockAmt(b) - stockAmt(a));
   };
 
-  // 필터를 통과한 재료를 정렬해서 하나의 리스트로 표시. 소진임박 재료도 별도 섹션으로 분리하지 않고
-  // 같은 리스트 안에서 테두리 강조 + 데드라인 텍스트로만 구분 (필터를 냉동/냉장/카테고리로 바꿔도 계속 보임)
-  const names = sortNames(allNames.filter(matchesFilter));
-  const isEmpty = names.length === 0;
+  // 필터를 통과한 항목을 정렬해서 하나의 리스트로 표시. 소진임박 재료도, 시판 제품도 별도 섹션으로
+  // 분리하지 않고 같은 리스트 안에서 테두리 강조/카테고리 정렬로만 구분됨
+  const sorted = sortEntries(entries.filter(matchesFilter));
+  const isEmpty = sorted.length === 0;
   const gridStyle = layout === "row"
     ? { display: "flex", flexDirection: "column", gap: 8 }
     : { display: "grid", gridTemplateColumns: layout === "grid2" ? "1fr 1fr" : "1fr 1fr 1fr", gap: 8 };
@@ -247,7 +259,7 @@ export function StockTab({ go }) {
         <>
           <div style={{ position: "sticky", top: 0, zIndex: 15, background: C.bg, padding: "0 18px 10px" }}>
             <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 9 }}>
-              {STOCK_FILTERS.map((f) => (
+              {filters.map((f) => (
                 <button key={f} onClick={() => setFilter(f)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
                   border: "none", background: filter === f ? C.sage : C.sageLight, color: filter === f ? "#fff" : C.sageDeep }}>{f}</button>
               ))}
@@ -256,11 +268,6 @@ export function StockTab({ go }) {
               <Plus size={15} /> 제조 기록 추가
             </button>
           </div>
-          {state.settings.productStockEnabled && (
-            <div style={{ padding: "0 18px 12px" }}>
-              <ProductStockSection go={go} setSubTab={setSubTab} />
-            </div>
-          )}
           <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 6 }}>
               <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
@@ -279,22 +286,26 @@ export function StockTab({ go }) {
             </div>
             {!isEmpty && (
               <div style={gridStyle}>
-                {names.map((name) => {
-                  const u = urgentMap.get(name);
-                  return (
-                    <StockItem
-                      key={name}
-                      name={name}
-                      layout={layout}
-                      urgent={!!u}
-                      deadlineText={u ? urgentDeadlineText(u) : null}
-                      onClick={() => go("stockDetail", { name })}
-                    />
-                  );
-                })}
+                {sorted.map((e) => e.type === "product" ? (
+                  <ProductStockItem
+                    key={"p:" + e.product.id}
+                    product={e.product}
+                    layout={layout}
+                    onClick={() => go("productStockDetail", { productId: e.product.id })}
+                  />
+                ) : (
+                  <StockItem
+                    key={e.name}
+                    name={e.name}
+                    layout={layout}
+                    urgent={urgentMap.has(e.name)}
+                    deadlineText={urgentMap.has(e.name) ? urgentDeadlineText(urgentMap.get(e.name)) : null}
+                    onClick={() => go("stockDetail", { name: e.name })}
+                  />
+                ))}
               </div>
             )}
-            {isEmpty && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>{filter === "전체" ? "재고가 없습니다. 제조 기록을 추가해 보세요." : "해당하는 재료가 없습니다."}</div>}
+            {isEmpty && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>{filter === "전체" ? "재고가 없습니다. 제조 기록을 추가해 보세요." : "해당하는 항목이 없습니다."}</div>}
           </div>
         </>
       )}
@@ -468,6 +479,61 @@ export function ShoppingScreen({ onBack }) {
 }
 
 /* =====================================================================
+   궁합 좋은 재료 / 주의 조합 섹션 - 재료 정보 화면과 시판 제품 상세 화면이 공용으로 사용
+   (제품은 포함 재료 태그를 합쳐서 혼합 큐브와 동일한 방식으로 계산된 good/avoid를 그대로 넘겨받음)
+   ===================================================================== */
+function PairingSection({ good, avoid, emptyText }) {
+  const gradeBadge = (g) => (
+    <span style={{ fontSize: 8.5, fontWeight: 800, color: g === "A" ? C.sageDeep : "#9A7416", background: g === "A" ? C.sageLight : C.butterLight, borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>근거 {g}</span>
+  );
+  const stockBadge = (inStock) => (
+    <span style={{ fontSize: 9.5, fontWeight: 700, color: inStock ? C.sageDeep : C.muted, border: `1px solid ${inStock ? C.sage : C.border}`, borderRadius: 8, padding: "2px 8px", flexShrink: 0, whiteSpace: "nowrap" }}>{inStock ? "재고 있음" : "재고 없음"}</span>
+  );
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>궁합 좋은 재료 ({good.length})</div>
+      {good.length === 0 && <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>{emptyText || "등록된 재료 중 궁합 정보가 있는 재료가 없어요"}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {good.map((g) => (
+          <div key={g.name} className="flex items-center justify-between" style={{ gap: 8 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="flex items-center" style={{ gap: 5 }}>
+                <CatDot name={g.name} size={7} />
+                <span style={{ fontSize: 12, color: C.ink, fontWeight: 700 }}>{g.name}</span>
+                {gradeBadge(g.grade)}
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4, marginTop: 1 }}>{g.text}</div>
+            </div>
+            {stockBadge(g.inStock)}
+          </div>
+        ))}
+      </div>
+      {avoid.length > 0 && (
+        <>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.apricot, margin: "12px 0 6px" }}>주의 조합 ({avoid.length})</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {avoid.map((a) => (
+              <div key={a.name} style={{ background: C.apricotLight, borderRadius: 8, padding: "7px 9px" }}>
+                <div className="flex items-center justify-between" style={{ gap: 8 }}>
+                  <div className="flex items-center" style={{ gap: 5 }}>
+                    <AlertTriangle size={11} color={C.apricot} />
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: "#9A4A1E" }}>{a.name}</span>
+                    {gradeBadge(a.grade)}
+                  </div>
+                  {stockBadge(a.inStock)}
+                </div>
+                <div style={{ fontSize: 10, color: "#A85B30", lineHeight: 1.4, marginTop: 2 }}>{a.text}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>* 확립된 영양소 상호작용만 안내하는 참고 정보예요. 흡수율에 관한 내용으로, 함께 먹여도 위험한 조합은 아니에요.</div>
+    </div>
+  );
+}
+
+/* =====================================================================
    재료 정보 화면 - 영양 태그(편집 가능) · 궁합 좋은 재료/주의 조합 · 재고 · 최근 급여 이력
    (기록 탭 '지금까지 먹어본 재료'에서 재료를 탭하면 진입)
    ===================================================================== */
@@ -518,13 +584,6 @@ export function IngredientInfoScreen({ name, onBack, go }) {
   const recent = history.slice(0, 5);
   // 이 재료가 포함된 시판 제품 (역링크)
   const containingProducts = Object.values(state.products).filter((p) => p.ingredients.includes(name));
-
-  const gradeBadge = (g) => (
-    <span style={{ fontSize: 8.5, fontWeight: 800, color: g === "A" ? C.sageDeep : "#9A7416", background: g === "A" ? C.sageLight : C.butterLight, borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>근거 {g}</span>
-  );
-  const stockBadge = (inStock) => (
-    <span style={{ fontSize: 9.5, fontWeight: 700, color: inStock ? C.sageDeep : C.muted, border: `1px solid ${inStock ? C.sage : C.border}`, borderRadius: 8, padding: "2px 8px", flexShrink: 0, whiteSpace: "nowrap" }}>{inStock ? "재고 있음" : "재고 없음"}</span>
-  );
 
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
@@ -618,46 +677,7 @@ export function IngredientInfoScreen({ name, onBack, go }) {
         </div>
 
         {/* 궁합 좋은 재료 / 주의 조합 */}
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>궁합 좋은 재료 ({good.length})</div>
-          {good.length === 0 && <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 4 }}>등록된 재료 중 궁합 정보가 있는 재료가 없어요</div>}
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {good.map((g) => (
-              <div key={g.name} className="flex items-center justify-between" style={{ gap: 8 }}>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div className="flex items-center" style={{ gap: 5 }}>
-                    <CatDot name={g.name} size={7} />
-                    <span style={{ fontSize: 12, color: C.ink, fontWeight: 700 }}>{g.name}</span>
-                    {gradeBadge(g.grade)}
-                  </div>
-                  <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4, marginTop: 1 }}>{g.text}</div>
-                </div>
-                {stockBadge(g.inStock)}
-              </div>
-            ))}
-          </div>
-          {avoid.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.apricot, margin: "12px 0 6px" }}>주의 조합 ({avoid.length})</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                {avoid.map((a) => (
-                  <div key={a.name} style={{ background: C.apricotLight, borderRadius: 8, padding: "7px 9px" }}>
-                    <div className="flex items-center justify-between" style={{ gap: 8 }}>
-                      <div className="flex items-center" style={{ gap: 5 }}>
-                        <AlertTriangle size={11} color={C.apricot} />
-                        <span style={{ fontSize: 11.5, fontWeight: 700, color: "#9A4A1E" }}>{a.name}</span>
-                        {gradeBadge(a.grade)}
-                      </div>
-                      {stockBadge(a.inStock)}
-                    </div>
-                    <div style={{ fontSize: 10, color: "#A85B30", lineHeight: 1.4, marginTop: 2 }}>{a.text}</div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-          <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, lineHeight: 1.4 }}>* 확립된 영양소 상호작용만 안내하는 참고 정보예요. 흡수율에 관한 내용으로, 함께 먹여도 위험한 조합은 아니에요.</div>
-        </div>
+        <PairingSection good={good} avoid={avoid} />
 
         {/* 최근 급여 이력 */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
@@ -719,28 +739,20 @@ export function IngredientInfoScreen({ name, onBack, go }) {
 }
 
 /* =====================================================================
-   재료 정보(위키) - 영양 DB 전체 + 앱에 등록된 재료를 카테고리별로 나열.
-   먹어본 재료는 진하게(활성) 표시, 탭하면 재료 정보 화면으로 이동
+   재료 정보(위키) - 영양 DB 전체 + 앱에 등록된 재료 + 시판 제품을 카테고리별로 함께 나열.
+   "시판"도 다른 카테고리(탄수화물/단백질/채소/과일/유제품)와 동일하게 다중 선택 필터 칩 중 하나로
+   다뤄져서, 별도 탭 없이 카테고리 필터로 재료/제품을 섞어 보거나 따로 볼 수 있음(시판 이유식 기능).
+   먹어본 재료는 진하게(활성) 표시, 탭하면 재료/제품 상세 화면으로 이동
    ===================================================================== */
 const WIKI_EATEN_FILTERS = ["전체", "이상없음", "관찰중", "안 먹어봄"];
+const WIKI_CATEGORIES = [...CATEGORIES, "시판"];
 
-// 재료 정보(위키) - 상단 "재료 | 시판 제품" 세그먼트로 재료 목록과 시판 제품 관리를 함께 담음 (시판 이유식 기능)
 export function IngredientWikiPanel({ go }) {
-  const [mode, setModeRaw] = useState(() => readStockPref("bc_wiki_mode", "ingredient", ["ingredient", "product"]));
-  const setMode = (v) => { setModeRaw(v); writeStockPref("bc_wiki_mode", v); };
-  return (
-    <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-      <Segmented value={mode} onChange={setMode} options={[{ value: "ingredient", label: "재료" }, { value: "product", label: "시판 제품" }]} />
-      {mode === "ingredient" ? <IngredientListPanel go={go} /> : <ProductWikiPanel go={go} />}
-    </div>
-  );
-}
-
-function IngredientListPanel({ go }) {
   const { state } = useStore();
   const [q, setQ] = useState("");
-  const [catFilter, setCatFilter] = useState([]); // 다중 선택, 빈 배열 = 전체
-  const [eatenFilter, setEatenFilter] = useState("전체");
+  const [catFilter, setCatFilter] = useState([]); // 다중 선택, 빈 배열 = 전체. CATEGORIES + "시판"
+  const [eatenFilter, setEatenFilter] = useState("전체"); // 시판 제품에는 적용 안 됨(정책)
+  const [editingProduct, setEditingProduct] = useState(null); // null | "new" | productObj
   // 먹어본 재료: intros 등록분 + 변형 재료를 먹었다면 그 기본 재료도 먹은 것으로 간주 (예: 사과퓨레 → 사과)
   const eaten = new Set();
   state.intros.forEach((it) => {
@@ -754,9 +766,12 @@ function IngredientListPanel({ go }) {
   const toggleCat = (c) => setCatFilter((p) => (p.includes(c) ? p.filter((x) => x !== c) : [...p, c]));
   const filtersActive = catFilter.length > 0 || eatenFilter !== "전체";
   const resetFilters = () => { setCatFilter([]); setEatenFilter("전체"); };
-  const filtered = allNames.filter((n) => {
+  const catFilterReal = catFilter.filter((c) => c !== "시판"); // 실제 재료 카테고리만(다중 선택 중 "시판" 제외)
+  const showProducts = catFilter.length === 0 || catFilter.includes("시판");
+  // 카테고리 필터에 "시판"만 선택돼 있으면(실제 재료 카테고리가 하나도 없으면) 재료는 표시하지 않음
+  const filtered = (catFilter.length > 0 && catFilterReal.length === 0) ? [] : allNames.filter((n) => {
     if (q && !n.includes(q)) return false;
-    if (catFilter.length > 0 && !catFilter.includes(catOf(state, n))) return false;
+    if (catFilterReal.length > 0 && !catFilterReal.includes(catOf(state, n))) return false;
     if (eatenFilter !== "전체") {
       const it = introOf(n);
       if (eatenFilter === "안 먹어봄") { if (it) return false; }
@@ -775,17 +790,21 @@ function IngredientListPanel({ go }) {
     });
   });
   const eatenCount = filtered.filter((n) => eaten.has(n)).length;
+  const stockOn = state.settings.productStockEnabled;
+  const productList = showProducts ? Object.values(state.products)
+    .filter((p) => !q || p.name.includes(q) || (p.brand || "").includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name, "ko")) : [];
 
   return (
-    <>
+    <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
       <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
         <Search size={15} color={C.muted} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료 검색"
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료·시판 제품 검색"
           style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
       </div>
       <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
         <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>카테고리</span>
-        {CATEGORIES.map((c) => (
+        {WIKI_CATEGORIES.map((c) => (
           <button key={c} onClick={() => toggleCat(c)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
             border: `1px solid ${catFilter.includes(c) ? C.sage : C.border}`, background: catFilter.includes(c) ? C.sageLight : "transparent", color: catFilter.includes(c) ? C.sageDeep : C.muted }}>{c}</button>
         ))}
@@ -802,8 +821,8 @@ function IngredientListPanel({ go }) {
         <span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>먹어본 재료는 진하게 표시돼요 · 탭하면 상세 정보</span>
         <span style={{ fontSize: 10.5, color: C.sageDeep, fontWeight: 700 }}>{eatenCount}/{filtered.length} 먹어봄</span>
       </div>
-      {filtered.length === 0 && (
-        <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>조건에 맞는 재료가 없어요</div>
+      {filtered.length === 0 && productList.length === 0 && (
+        <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>조건에 맞는 항목이 없어요</div>
       )}
       {CATEGORIES.map((cat) => byCat[cat].length > 0 && (
         <div key={cat}>
@@ -835,149 +854,44 @@ function IngredientListPanel({ go }) {
           </div>
         </div>
       ))}
-      <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.5, padding: "0 2px 4px" }}>
-        영양 DB {Object.keys(NUTRIENT_TAGS).length}개 재료 + 직접 등록한 재료가 함께 표시돼요. 새 재료는 식단표·제조 기록·기록 탭에서 추가하면 여기에 나타나요.
-      </div>
-    </>
-  );
-}
-
-/* =====================================================================
-   시판 제품 목록 - 재료 정보 화면의 "시판 제품" 세그먼트 (시판 이유식 기능)
-   ===================================================================== */
-function ProductWikiPanel({ go }) {
-  const { state } = useStore();
-  const [q, setQ] = useState("");
-  const [editing, setEditing] = useState(null); // null | "new" | productObj
-  const list = Object.values(state.products)
-    .filter((p) => !q || p.name.includes(q) || (p.brand || "").includes(q))
-    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
-  const stockOn = state.settings.productStockEnabled;
-
-  return (
-    <>
-      <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px" }}>
-        <Search size={15} color={C.muted} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·브랜드로 검색"
-          style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
-      </div>
-      <button onClick={() => setEditing("new")} className="flex items-center justify-center" style={{ gap: 6, background: C.sage, border: "none", borderRadius: 14, padding: "11px 0", fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
-        <Plus size={15} /> 제품 추가
-      </button>
-      {list.length === 0 && (
-        <div style={{ textAlign: "center", padding: "26px 0", fontSize: 12.5, color: C.muted }}>
-          등록된 시판 제품이 없습니다. 위 버튼으로 추가해 보세요.
-        </div>
-      )}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {list.map((p) => {
-          const packs = stockOn ? productStockPacks(state, p.id) : null;
-          return (
-            <button key={p.id} onClick={() => setEditing(p)} className="flex items-center justify-between"
-              style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "12px 13px", cursor: "pointer" }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="flex items-center" style={{ gap: 6, marginBottom: 4 }}>
-                  <ProductDot />
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
-                  {p.brand && <span style={{ fontSize: 10.5, color: C.muted, whiteSpace: "nowrap" }}>{p.brand}</span>}
-                </div>
-                <div className="flex items-center" style={{ gap: 5, flexWrap: "wrap" }}>
-                  {p.ingredients.slice(0, 3).map((n) => (
-                    <span key={n} style={{ fontSize: 10, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 7px" }}>{n}</span>
-                  ))}
-                  {p.ingredients.length > 3 && <span style={{ fontSize: 10, color: C.muted }}>+{p.ingredients.length - 3}</span>}
-                </div>
-              </div>
-              {packs != null && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: packs > 0 ? PRODUCT_COLOR : C.apricot, flexShrink: 0, marginLeft: 8, whiteSpace: "nowrap" }}>{packs}팩</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      {editing && <ProductEditSheet product={editing} onClose={() => setEditing(null)} go={go} />}
-    </>
-  );
-}
-
-function ProductEditSheet({ product, onClose, go }) {
-  const { state, dispatch, notify } = useStore();
-  const isNew = product === "new";
-  const base = isNew ? {} : product;
-  const [name, setName] = useState(base.name || "");
-  const [brand, setBrand] = useState(base.brand || "");
-  const [packG, setPackG] = useState(base.packG || 100);
-  const [ingredients, setIngredients] = useState(base.ingredients || []);
-  const [memo, setMemo] = useState(base.memo || "");
-  const [picker, setPicker] = useState(false);
-  const [confirmDel, setConfirmDel] = useState(false);
-  const canSave = name.trim() && ingredients.length > 0;
-
-  const save = () => {
-    if (!canSave) return;
-    dispatch({ type: "PRODUCT_UPSERT", product: { id: isNew ? undefined : base.id, name, brand, packG: Number(packG) || 0, ingredients, memo } });
-    onClose();
-  };
-  const del = () => {
-    dispatch({ type: "PRODUCT_DELETE", id: base.id });
-    notify(`'${base.name}' 제품을 삭제했습니다`, () => dispatch({ type: "RESTORE_PRODUCT", product: base }));
-    onClose();
-  };
-
-  return (
-    <BottomSheet title={isNew ? "시판 제품 추가" : "시판 제품 수정"} onClose={onClose}>
-      <div style={{ padding: "0 18px calc(20px + env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제품명</div>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 소고기미역진밥"
-            style={{ width: "100%", border: "none", outline: "none", fontSize: 13, fontWeight: 700, color: C.ink, background: "transparent" }} />
-        </div>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>브랜드 (선택)</div>
-          <input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="예: 배○밀"
-            style={{ width: "100%", border: "none", outline: "none", fontSize: 13, color: C.ink, background: "transparent" }} />
-        </div>
-        <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
-          <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>1팩 용량</span>
-          <NumInput value={Number(packG) || 0} onChange={setPackG} width={52} suffix="g" />
-        </div>
+      {showProducts && (
         <div>
-          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>포함 재료 ({ingredients.length})</span>
-            <button onClick={() => setPicker(true)} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>선택</button>
+          <div className="flex items-center justify-between" style={{ margin: "4px 0 6px", padding: "0 2px" }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>시판 ({productList.length})</span>
+            <button onClick={() => setEditingProduct("new")} style={{ fontSize: 10.5, fontWeight: 700, color: C.sageDeep, background: "none", border: "none", cursor: "pointer" }}>+ 제품 추가</button>
           </div>
-          {ingredients.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: C.apricot }}>최소 1개 이상 선택해 주세요</div>
+          {productList.length === 0 ? (
+            <div style={{ background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 12, padding: "14px", textAlign: "center", fontSize: 11.5, color: C.muted }}>
+              등록된 시판 제품이 없어요. '+ 제품 추가'로 등록해 보세요.
+            </div>
           ) : (
-            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-              {ingredients.map((n) => (
-                <span key={n} className="flex items-center" style={{ gap: 4, fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "3px 5px 3px 9px" }}>
-                  {n}
-                  <button onClick={() => setIngredients(ingredients.filter((x) => x !== n))} style={{ background: "rgba(0,0,0,0.08)", border: "none", width: 14, height: 14, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}><X size={8} color={C.sageDeep} /></button>
-                </span>
-              ))}
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+              {productList.map((p, i) => {
+                const packs = stockOn ? productStockPacks(state, p.id) : null;
+                return (
+                  <button key={p.id} onClick={() => go("productDetail", { productId: p.id })} className="flex items-center justify-between"
+                    style={{ width: "100%", textAlign: "left", padding: "10px 12px", background: C.surface, border: "none",
+                      borderTop: i === 0 ? "none" : `1px solid ${C.border}`, cursor: "pointer" }}>
+                    <div className="flex items-center" style={{ gap: 7, minWidth: 0, flex: 1 }}>
+                      <ProductDot size={7} />
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                      {p.brand && <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.brand}</span>}
+                    </div>
+                    {packs != null ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: packs > 0 ? PRODUCT_COLOR : C.apricot, flexShrink: 0 }}>{packs}팩</span>
+                    ) : <ChevronRight size={13} color={C.muted} style={{ flexShrink: 0 }} />}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
-        <textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="메모 (선택)" rows={2}
-          style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.ink, outline: "none", resize: "none", fontFamily: "inherit" }} />
-        <button onClick={save} disabled={!canSave} style={{ ...primaryBtn, opacity: canSave ? 1 : 0.5, cursor: canSave ? "pointer" : "default" }}>{isNew ? "추가" : "저장"}</button>
-        {!isNew && state.settings.productStockEnabled && (
-          <button onClick={() => { onClose(); go && go("productStockDetail", { productId: base.id }); }}
-            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>재고 관리로 이동</button>
-        )}
-        {!isNew && <button onClick={() => setConfirmDel(true)} style={{ background: "none", border: "none", color: C.apricot, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "2px 0" }}>이 제품 삭제</button>}
-      </div>
-      {picker && <IngredientPicker multi alreadyAdded={ingredients} onPick={(names) => { setIngredients(Array.from(new Set([...ingredients, ...names]))); setPicker(false); }} onClose={() => setPicker(false)} />}
-      {confirmDel && (
-        <ConfirmModal
-          title={`'${name}' 제품을 삭제할까요?`}
-          message="과거 급여 기록의 제품 참조는 그대로 남아 이름으로 표시됩니다."
-          onConfirm={del}
-          onCancel={() => setConfirmDel(false)}
-        />
       )}
-    </BottomSheet>
+      <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.5, padding: "0 2px 4px" }}>
+        영양 DB {Object.keys(NUTRIENT_TAGS).length}개 재료 + 직접 등록한 재료·시판 제품이 함께 표시돼요. 새 재료는 식단표·제조 기록·기록 탭에서 추가하면 여기에 나타나요.
+      </div>
+      {editingProduct && <ProductEditSheet product={editingProduct} onClose={() => setEditingProduct(null)} go={go} />}
+    </div>
   );
 }
 
@@ -997,6 +911,7 @@ export function ProductDetailScreen({ productId, onBack, go }) {
     );
   }
   const packs = state.settings.productStockEnabled ? productStockPacks(state, productId) : null;
+  const { good, avoid } = productPairsFor(state, p.ingredients);
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title={p.name} onBack={onBack} />
@@ -1015,6 +930,7 @@ export function ProductDetailScreen({ productId, onBack, go }) {
           </div>
         </div>
         {p.memo && <div style={{ fontSize: 12, color: C.inkSoft, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>{p.memo}</div>}
+        <PairingSection good={good} avoid={avoid} emptyText="포함 재료 기준으로 궁합 정보가 있는 재료가 없어요" />
         <button onClick={() => setEditing(true)} style={primaryBtn}>정보 수정</button>
         {state.settings.productStockEnabled && (
           <button onClick={() => go && go("productStockDetail", { productId })}

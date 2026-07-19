@@ -4,6 +4,7 @@ import { Plus, Minus, Trash2, Refrigerator, Snowflake } from "lucide-react";
 import { C, stepBtn, PRODUCT_COLOR } from "../theme";
 import { fmtTime, uid } from "../lib/dates";
 import { deductFridge, deductFrozen, deductProductPacks, isStaple, restoreFridge, restoreFrozen, restoreProductPacks, sortByCategory, stockFridgeG, stockTotalCubes, unitGOf } from "../state/appState";
+import { pairingNamesOf } from "../lib/pairing";
 import { useStore } from "../store";
 import { AuthorInfo, CatDot, ConfirmModal, NumInput, ProductDot, Segmented, SubHeader, TimePicker } from "../components/common";
 import { StockChangeHint, ProductStockChangeHint } from "../components/hints";
@@ -327,7 +328,7 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
           {items.length === 0 ? "재료를 추가해 주세요" : "기록 저장"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} onClose={() => setPicker(false)} date={date} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} />}
       {productPicker && <ProductPicker onPick={addProduct} onClose={() => setProductPicker(false)} />}
       {confirmingSave && (
         <ConfirmModal
