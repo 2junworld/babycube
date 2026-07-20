@@ -392,11 +392,13 @@ export function FamilyStoreProvider({ familyId, user, onLogout }) {
   );
 }
 
-// 홈 화면에 설치된(standalone) PWA인지 - iOS는 이 상태에서 signInWithPopup이 조용히 멈추거나
-// 실패하는 경우가 있어, 처음부터 리다이렉트 방식을 사용해야 함
-function isStandalonePwa() {
-  if (typeof window === "undefined") return false;
-  return window.navigator.standalone === true || window.matchMedia?.("(display-mode: standalone)").matches === true;
+// iOS(아이폰) 홈 화면에 설치된 standalone PWA인지 - navigator.standalone은 iOS Safari에만 있는
+// 속성이라 이 값이 true면 iOS 설치 앱이 확실함. iOS는 이 상태에서 signInWithPopup이 조용히
+// 멈추는 경우가 있어 처음부터 리다이렉트를 써야 하지만, 안드로이드 설치 앱은 브라우저 탭과
+// 동일하게 팝업이 잘 동작하므로(오히려 리다이렉트가 창 전환 중 로그인 상태를 잃는 문제가 있었음)
+// display-mode 미디어쿼리(안드로이드도 매칭됨)로는 판단하지 않음
+function isIosStandalone() {
+  return typeof window !== "undefined" && window.navigator.standalone === true;
 }
 // 팝업 로그인이 지원되지 않거나 막혔을 때만 리다이렉트로 재시도 - 사용자가 그냥 팝업을 닫은
 // 경우(popup-closed-by-user)까지 자동으로 페이지를 이동시키면 오히려 당황스러우므로 제외
@@ -434,7 +436,7 @@ export function AuthGate() {
   const login = async () => {
     setError(""); setBusy(true);
     try {
-      if (isStandalonePwa()) {
+      if (isIosStandalone()) {
         await signInWithRedirect(auth, googleProvider);
         return; // 페이지가 구글로 이동하므로 이후 코드는 실행되지 않음
       }
