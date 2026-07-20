@@ -28,7 +28,11 @@ function useSwitchSwipe({ onSwipeLeft, onSwipeRight }) {
     if (!startRef.current) return;
     const dx = e.clientX - startRef.current.x;
     const dy = e.clientY - startRef.current.y;
-    if (Math.abs(dy) > Math.abs(dx) + 10) return;
+    if (Math.abs(dy) > Math.abs(dx) + 10) return; // 세로 스크롤 의도면 그대로 두고 네이티브 스크롤에 맡김
+    // 목록(스크롤 영역) 위에서 시작한 가로 스와이프도 창 전체에서 인식되도록, 가로 의도가 확인되는
+    // 즉시 preventDefault로 선점 - 안 하면 모바일에서 목록의 세로 스크롤 제스처가 먼저 가로채가서
+    // 스와이프가 목록 영역에서는 잘 안 먹는 문제가 있었음
+    if (Math.abs(dx) > 5 && e.cancelable) e.preventDefault();
     let d = dx;
     if (d < 0 && !onSwipeLeft) d *= 0.25;
     if (d > 0 && !onSwipeRight) d *= 0.25;
@@ -172,9 +176,11 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
   const toggle = (n) => setSelected((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n]);
   const confirmSelection = () => { dispatch({ type: "INGREDIENT_TOUCH", names: selected }); onPick(selected); onClose(); };
 
+  // 시트 높이를 콘텐츠 양에 따라 늘어나는 maxHeight 대신 고정 height로 둠 - ProductPicker와 항목 수가
+  // 달라 전환할 때마다 시트 높이가 오르락내리락하던 문제 방지(목록 영역이 flex:1로 남는 공간을 흡수)
   return (
     <div style={{ position: "fixed", top: vv.offsetTop, left: 0, right: 0, height: vv.height, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} {...swipeHandlers} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)", touchAction: "pan-y",
+      <div onClick={(e) => e.stopPropagation()} {...swipeHandlers} style={{ background: C.bg, width: "100%", height: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)", touchAction: "pan-y",
         transform: `translateX(${entered ? dragX : -36}px)`, opacity: entered ? 1 - Math.min(Math.abs(dragX) / 400, 0.3) : 0,
         transition: dragging ? "none" : "transform 0.22s ease, opacity 0.22s ease" }}>
         <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
@@ -214,7 +220,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
             ))}
           </div>
         </div>
-        <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 18px 24px" }}>
           {isNew && (
             <div style={{ marginBottom: 10, background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "11px 12px" }}>
               <div className="flex items-center" style={{ gap: 8, marginBottom: 9 }}>
@@ -450,7 +456,7 @@ export function ProductPicker({ onPick, onClose, initialQuery = "", onSwitchToIn
 
   return (
     <div style={{ position: "fixed", top: vv.offsetTop, left: 0, right: 0, height: vv.height, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} {...swipeHandlers} style={{ background: C.bg, width: "100%", maxHeight: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)", touchAction: "pan-y",
+      <div onClick={(e) => e.stopPropagation()} {...swipeHandlers} style={{ background: C.bg, width: "100%", height: "78%", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)", touchAction: "pan-y",
         transform: `translateX(${entered ? dragX : 36}px)`, opacity: entered ? 1 - Math.min(Math.abs(dragX) / 400, 0.3) : 0,
         transition: dragging ? "none" : "transform 0.22s ease, opacity 0.22s ease" }}>
         <div className="flex items-center justify-between" style={{ padding: "14px 18px 8px" }}>
@@ -476,7 +482,7 @@ export function ProductPicker({ onPick, onClose, initialQuery = "", onSwitchToIn
             </button>
           )}
         </div>
-        <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 18px 24px" }}>
           {creating && (
             <div style={{ marginBottom: 10, background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "11px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="flex items-center" style={{ gap: 8 }}>
