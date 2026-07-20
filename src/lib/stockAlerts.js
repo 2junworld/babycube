@@ -67,11 +67,15 @@ export function urgentStockNames(state, frozenDaysThreshold = 3) {
 export function frozenAlerts(state) {
   return Object.keys(state.stock).map((name) => {
     const cubes = stockTotalCubes(state, name);
+    // 냉동 큐브가 없어도 냉장 보관분이 남아있으면 실제로는 소진된 게 아니므로 이 알림에서 제외
+    // (버그: 냉장 재고만 있는 재료도 무조건 "소진"으로 뜨던 문제 - 냉동 재고 기준 알림이라
+    // 냉장으로 커버되는 동안은 "곧 떨어짐" 대상이 아님)
+    if (cubes <= 0 && stockFridgeG(state, name) > 0) return null;
     // 재고가 완전히 소진된 재료는 예측(daysLeft) 없이 항상 0일로 취급해 알림에 포함
     // (예전엔 cubes<=0이면 통째로 제외돼서, 정작 다 떨어진 순간 알림이 사라지는 문제가 있었음)
     const dl = cubes > 0 ? daysLeft(state, name) : 0;
     return { name, cubes, g: stockTotalFrozenG(state, name), daysLeft: dl };
-  }).filter((x) => x.daysLeft != null && x.daysLeft <= 5).sort((a, b) => a.daysLeft - b.daysLeft);
+  }).filter((x) => x && x.daysLeft != null && x.daysLeft <= 5).sort((a, b) => a.daysLeft - b.daysLeft);
 }
 
 export function fridgeAlerts(state) {
