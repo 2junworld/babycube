@@ -17,10 +17,13 @@ import { primaryBtn } from "../theme";
 // 정렬은 여러 기준을 동시에 켤 수 있음(중복 선택) — 아래 고정된 우선순위(즐겨찾기 > 오늘 사용 재료 > 궁합 좋은 재료 >
 // 재고순 > 카테고리순) 순서로 앞 기준이 같을 때만 다음 기준으로 넘어가며, 마지막엔 항상 이름순으로 마무리함.
 // 재고순만 한 칩을 반복 클릭하면 꺼짐→적은순→많은순→꺼짐 순으로 도는 3단 토글.
-export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], pairingNames = alreadyAdded, date = todayISO() }) {
+// onSwitchToProduct가 있으면 검색창 아래 "시판 제품에서 찾기" 링크가 나타나 눌렀을 때 입력 중이던
+// 검색어(q)와 함께 호출됨 - 급여 기록·식단표처럼 재료·시판 제품을 함께 담는 화면에서만 전달되고,
+// 재료만 다뤄야 하는 나머지 사용처(제조 기록·기본 재료 연결·혼합 큐브 구성 등)는 그대로 재료만 노출
+export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded = [], pairingNames = alreadyAdded, date = todayISO(), onSwitchToProduct, initialQuery = "" }) {
   const { state, dispatch } = useStore();
   const vv = useVisualViewport();
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuery);
   const [cat, setCat] = useState("전체");
   const [newCat, setNewCat] = useState("채소");
   const [selected, setSelected] = useState([]);
@@ -104,6 +107,12 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료 검색 또는 새 재료 입력"
               style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
           </div>
+          {onSwitchToProduct && (
+            <button onClick={() => onSwitchToProduct(q)} className="flex items-center" style={{ gap: 5, background: "none", border: "none", padding: "0 0 9px", cursor: "pointer" }}>
+              <ProductDot size={7} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: PRODUCT_COLOR, textDecoration: "underline" }}>시판 이유식을 찾으시나요? 시판 제품에서 찾기</span>
+            </button>
+          )}
           <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
             {["전체", ...CATEGORIES].map((c) => (
               <button key={c} onClick={() => setCat(c)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
@@ -212,11 +221,11 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
    시판 제품 등록/수정 시트 - 재료 정보 화면의 제품 관리 카테고리, 그리고 급여 기록·식단표에서
    제품 선택 도중 "새 제품 등록"으로 바로 들어올 때(onSaved) 함께 사용하는 공용 컴포넌트
    ===================================================================== */
-export function ProductEditSheet({ product, onClose, go, onSaved }) {
+export function ProductEditSheet({ product, onClose, go, onSaved, initialName }) {
   const { state, dispatch, notify } = useStore();
   const isNew = product === "new";
   const base = isNew ? {} : product;
-  const [name, setName] = useState(base.name || "");
+  const [name, setName] = useState(base.name || initialName || "");
   const [brand, setBrand] = useState(base.brand || "");
   const [packG, setPackG] = useState(base.packG || 100);
   const [ingredients, setIngredients] = useState(base.ingredients || []);
@@ -304,27 +313,36 @@ export function ProductEditSheet({ product, onClose, go, onSaved }) {
    시판 제품 선택 모달 - 급여 기록·식단표 편집 화면에서 "시판 제품 추가" 진입점 (시판 이유식 기능)
    재료 선택기(IngredientPicker)와 별도 경량 컴포넌트로 분리 - 정렬·다중선택 등 복잡한
    로직을 건드리지 않고 안전하게 추가하기 위한 구현 선택. "+ 새 제품 등록"으로 그 자리에서
-   바로 만들고 이어서 선택할 수 있음(ProductEditSheet의 onSaved로 연결)
+   바로 만들고 이어서 선택할 수 있음(ProductEditSheet의 onSaved로 연결). initialQuery는
+   IngredientPicker에서 "시판 제품에서 찾기"로 넘어올 때 입력 중이던 검색어를 그대로 이어받아
+   검색·신규 등록 이름에 함께 반영(재료 선택기의 "입력하면 바로 새로 추가" 경험과 동일하게)
    ===================================================================== */
-export function ProductPicker({ onPick, onClose }) {
+export function ProductPicker({ onPick, onClose, initialQuery = "", onSwitchToIngredient }) {
   const { state } = useStore();
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuery);
   const [creating, setCreating] = useState(false);
   const list = Object.values(state.products)
     .filter((p) => !q || p.name.includes(q) || (p.brand || "").includes(q))
     .sort((a, b) => a.name.localeCompare(b.name, "ko"));
   const stockOn = state.settings.productStockEnabled;
+  const trimmedQ = q.trim();
+  const exactMatch = trimmedQ && list.some((p) => p.name === trimmedQ);
 
   return (
     <BottomSheet title="시판 제품 선택" onClose={onClose}>
       <div style={{ padding: "0 18px 10px" }}>
         <div className="flex items-center" style={{ gap: 7, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 11px", marginBottom: 9 }}>
           <Search size={15} color={C.muted} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·브랜드로 검색"
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·브랜드로 검색 또는 새 제품 입력"
             style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
         </div>
+        {onSwitchToIngredient && (
+          <button onClick={() => onSwitchToIngredient(q)} className="flex items-center" style={{ gap: 5, background: "none", border: "none", padding: "0 0 9px", cursor: "pointer" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, textDecoration: "underline" }}>재료를 찾으시나요? 재료에서 찾기</span>
+          </button>
+        )}
         <button onClick={() => setCreating(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sageLight, border: "none", borderRadius: 10, padding: "9px 0", fontSize: 12.5, fontWeight: 700, color: C.sageDeep, cursor: "pointer", width: "100%" }}>
-          <Plus size={14} /> 새 시판 제품 등록
+          <Plus size={14} /> {trimmedQ && !exactMatch ? `'${trimmedQ}' 새 제품으로 등록` : "새 시판 제품 등록"}
         </button>
       </div>
       <div style={{ overflowY: "auto", padding: "0 18px 24px" }}>
@@ -360,7 +378,7 @@ export function ProductPicker({ onPick, onClose }) {
         })}
       </div>
       {creating && (
-        <ProductEditSheet product="new" onClose={() => setCreating(false)}
+        <ProductEditSheet product="new" initialName={trimmedQ} onClose={() => setCreating(false)}
           onSaved={(p) => { setCreating(false); onPick(p); }} />
       )}
     </BottomSheet>

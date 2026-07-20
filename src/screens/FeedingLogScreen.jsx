@@ -1,7 +1,7 @@
 /* 급여 기록 화면 - 제공 재료·재고 반영·섭취량·식단표 동기화 */
 import React, { useState } from "react";
 import { Plus, Minus, Trash2, Refrigerator, Snowflake } from "lucide-react";
-import { C, stepBtn, PRODUCT_COLOR } from "../theme";
+import { C, stepBtn } from "../theme";
 import { fmtTime, uid } from "../lib/dates";
 import { deductFridge, deductFrozen, deductProductPacks, isStaple, restoreFridge, restoreFrozen, restoreProductPacks, sortByCategory, stockFridgeG, stockTotalCubes, unitGOf } from "../state/appState";
 import { pairingNamesOf } from "../lib/pairing";
@@ -79,6 +79,8 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
   );
   const [picker, setPicker] = useState(false);
   const [productPicker, setProductPicker] = useState(false);
+  // 재료 선택기 ↔ 시판 제품 선택기 전환 시 입력 중이던 검색어를 그대로 이어받기 위한 값
+  const [switchQuery, setSwitchQuery] = useState("");
   const [intake, setIntake] = useState(existingLog ? existingLog.intakeG : null);
   const [confirmingSave, setConfirmingSave] = useState(false);
 
@@ -304,14 +306,9 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
           </div>
         </div>
 
-        <div className="flex items-center" style={{ gap: 8 }}>
-          <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-            <Plus size={14} /> 재료 추가
-          </button>
-          <button onClick={() => setProductPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${PRODUCT_COLOR}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: PRODUCT_COLOR, background: "transparent", cursor: "pointer" }}>
-            <Plus size={14} /> 시판 제품 추가
-          </button>
-        </div>
+        <button onClick={() => { setSwitchQuery(""); setPicker(true); }} className="flex items-center justify-center" style={{ width: "100%", gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+          <Plus size={14} /> 재료 추가
+        </button>
 
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
@@ -362,8 +359,15 @@ export function FeedingLogScreen({ date, planMeal, existingLog, onBack }) {
           {items.length === 0 ? "재료를 추가해 주세요" : "기록 저장"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} />}
-      {productPicker && <ProductPicker onPick={addProduct} onClose={() => setProductPicker(false)} />}
+      {picker && (
+        <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)}
+          pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} initialQuery={switchQuery}
+          onSwitchToProduct={(q) => { setSwitchQuery(q); setPicker(false); setProductPicker(true); }} />
+      )}
+      {productPicker && (
+        <ProductPicker onPick={addProduct} onClose={() => setProductPicker(false)} initialQuery={switchQuery}
+          onSwitchToIngredient={(q) => { setSwitchQuery(q); setProductPicker(false); setPicker(true); }} />
+      )}
       {confirmingSave && (
         <ConfirmModal
           title={`${label} 급여 기록을 저장할까요?`}

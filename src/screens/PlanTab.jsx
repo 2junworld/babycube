@@ -10,8 +10,8 @@ import { useDetailView } from "./uiPrefs";
 import { weekMealLabels } from "../lib/mealLabels";
 import { pairingNamesOf } from "../lib/pairing";
 import { GrowthStageHint, MealTipsPanel } from "../components/hints";
-import { IngredientPicker, MealCopyPicker, MealSlotPicker } from "../components/pickers";
-import { AddProductButton, PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
+import { IngredientPicker, MealCopyPicker, MealSlotPicker, ProductPicker } from "../components/pickers";
+import { PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
 import { primaryBtn } from "../theme";
 
 /* =====================================================================
@@ -29,10 +29,13 @@ export function MealEditScreen({ date, meal, onBack }) {
   })));
   const { items } = editor;
   const [picker, setPicker] = useState(false);
+  const [productPicker, setProductPicker] = useState(false);
+  const [switchQuery, setSwitchQuery] = useState("");
   const [slotPicker, setSlotPicker] = useState(false);
   const [copyPicker, setCopyPicker] = useState(false);
 
   const addItems = (names) => { setPicker(false); editor.addNames(names); };
+  const addProduct = (product) => { setProductPicker(false); editor.addProduct(product); };
   const copyMeal = (srcMeal) => editor.replaceFrom(srcMeal.items);
   const total = totalG(state, items);
 
@@ -86,12 +89,9 @@ export function MealEditScreen({ date, meal, onBack }) {
 
         <PlanItemsEditor editor={editor} />
 
-        <div className="flex items-center" style={{ gap: 8 }}>
-          <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-            <Plus size={14} /> 재료 추가
-          </button>
-          <AddProductButton editor={editor} />
-        </div>
+        <button onClick={() => { setSwitchQuery(""); setPicker(true); }} className="flex items-center justify-center" style={{ width: "100%", gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+          <Plus size={14} /> 재료 추가
+        </button>
 
         {meal.id && (
           <AuthorInfo createdBy={meal.createdBy} createdAt={meal.createdAt} updatedBy={meal.updatedBy} updatedAt={meal.updatedAt} />
@@ -101,7 +101,10 @@ export function MealEditScreen({ date, meal, onBack }) {
           {label ? "저장" : "끼니 종류를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={date} initialQuery={switchQuery}
+        onSwitchToProduct={(q) => { setSwitchQuery(q); setPicker(false); setProductPicker(true); }} />}
+      {productPicker && <ProductPicker onPick={addProduct} onClose={() => setProductPicker(false)} initialQuery={switchQuery}
+        onSwitchToIngredient={(q) => { setSwitchQuery(q); setProductPicker(false); setPicker(true); }} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>
@@ -121,6 +124,8 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
   const editor = usePlanItemsEditor([]);
   const { items } = editor;
   const [picker, setPicker] = useState(false);
+  const [productPicker, setProductPicker] = useState(false);
+  const [switchQuery, setSwitchQuery] = useState("");
   const [slotPicker, setSlotPicker] = useState(false);
   const [copyPicker, setCopyPicker] = useState(false);
   const [monthCursor, setMonthCursor] = useState(initialCursor);
@@ -133,6 +138,7 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
   const tipsDate = selectedDates.length > 0 ? [...selectedDates].sort()[0] : todayISO();
 
   const addItems = (names) => { setPicker(false); editor.addNames(names); };
+  const addProduct = (product) => { setProductPicker(false); editor.addProduct(product); };
   const copyMeal = (srcMeal) => {
     editor.replaceFrom(srcMeal.items);
     if (!label) setLabel(srcMeal.label);
@@ -222,12 +228,9 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
 
         <div>
           <PlanItemsEditor editor={editor} />
-          <div className="flex items-center" style={{ gap: 8, marginTop: 8 }}>
-            <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-              <Plus size={14} /> 재료 추가
-            </button>
-            <AddProductButton editor={editor} />
-          </div>
+          <button onClick={() => { setSwitchQuery(""); setPicker(true); }} className="flex items-center justify-center" style={{ width: "100%", marginTop: 8, gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+            <Plus size={14} /> 재료 추가
+          </button>
         </div>
 
         <div>
@@ -297,7 +300,10 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
           {selectedDates.length > 0 ? `${selectedDates.length}개 날짜에 저장` : "날짜를 선택하세요"}
         </button>
       </div>
-      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={tipsDate} />}
+      {picker && <IngredientPicker multi onPick={addItems} alreadyAdded={items.filter((it) => it.source !== "product").map((it) => it.name)} pairingNames={pairingNamesOf(state, items)} onClose={() => setPicker(false)} date={tipsDate} initialQuery={switchQuery}
+        onSwitchToProduct={(q) => { setSwitchQuery(q); setPicker(false); setProductPicker(true); }} />}
+      {productPicker && <ProductPicker onPick={addProduct} onClose={() => setProductPicker(false)} initialQuery={switchQuery}
+        onSwitchToIngredient={(q) => { setSwitchQuery(q); setProductPicker(false); setPicker(true); }} />}
       {slotPicker && <MealSlotPicker slots={state.mealSlots} timeFmt={timeFmt} onPick={pickSlot} onClose={() => setSlotPicker(false)} />}
       {copyPicker && <MealCopyPicker onPick={copyMeal} onClose={() => setCopyPicker(false)} />}
     </div>

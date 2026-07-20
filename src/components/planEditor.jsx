@@ -1,11 +1,10 @@
 /* 계획(식단표) 끼니 재료 편집기 - MealEditScreen·BulkSaveScreen 공용 (UX-1) */
 import React, { useState } from "react";
 import { Plus, Minus, Trash2 } from "lucide-react";
-import { C, stepBtn, PRODUCT_COLOR } from "../theme";
+import { C, stepBtn } from "../theme";
 import { gOf, sortByCategory, unitGOf } from "../state/appState";
 import { useStore } from "../store";
 import { CatDot, NumInput, ProductDot, Segmented } from "./common";
-import { ProductPicker } from "./pickers";
 
 // 재료·시판 제품 항목을 함께 다루기 위한 공통 식별키 (제품은 name이 없고 productId로 식별)
 const keyOf = (it) => it.productId || it.name;
@@ -153,15 +152,3 @@ export function PlanItemsEditor({ editor }) {
   );
 }
 
-// 식단표 편집 화면에서 "+ 시판 제품 추가" 버튼과 ProductPicker 연결을 한 번에 제공하는 헬퍼 컴포넌트
-export function AddProductButton({ editor }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button onClick={() => setOpen(true)} className="flex items-center justify-center" style={{ flex: 1, gap: 6, border: `1.5px dashed ${PRODUCT_COLOR}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: PRODUCT_COLOR, background: "transparent", cursor: "pointer" }}>
-        <Plus size={14} /> 시판 제품 추가
-      </button>
-      {open && <ProductPicker onPick={(p) => { editor.addProduct(p); setOpen(false); }} onClose={() => setOpen(false)} />}
-    </>
-  );
-}
