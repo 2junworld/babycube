@@ -23,16 +23,24 @@ function useSwitchSwipe({ onSwipeLeft, onSwipeRight }) {
   // 빠르게 연속으로 들어오는 pointermove 이벤트는 React 리렌더보다 앞서갈 수 있어, pointerup 시점에
   // state(dragX)를 그대로 읽으면 오래된 값을 참조하는 경우가 있음 - ref로 최신값을 동기적으로 추적
   const dragXRef = useRef(0);
-  const onPointerDown = (e) => { startRef.current = { x: e.clientX, y: e.clientY }; setDragging(true); };
+  // 방향이 아직 판정되지 않은 상태(첫 6px 이내)인지 - 그 사이엔 스크롤도 스와이프도 막지 않고 지켜만 봄
+  const lockRef = useRef(null); // null=미판정, "x"=가로 스와이프로 확정, "y"=세로 스크롤로 확정(이후 무시)
+  const onPointerDown = (e) => { startRef.current = { x: e.clientX, y: e.clientY }; lockRef.current = null; setDragging(true); };
   const onPointerMove = (e) => {
     if (!startRef.current) return;
+    if (lockRef.current === "y") return; // 세로 스크롤로 이미 확정 - 네이티브 스크롤에 완전히 맡김
     const dx = e.clientX - startRef.current.x;
     const dy = e.clientY - startRef.current.y;
-    if (Math.abs(dy) > Math.abs(dx) + 10) return; // 세로 스크롤 의도면 그대로 두고 네이티브 스크롤에 맡김
-    // 목록(스크롤 영역) 위에서 시작한 가로 스와이프도 창 전체에서 인식되도록, 가로 의도가 확인되는
-    // 즉시 preventDefault로 선점 - 안 하면 모바일에서 목록의 세로 스크롤 제스처가 먼저 가로채가서
-    // 스와이프가 목록 영역에서는 잘 안 먹는 문제가 있었음
-    if (Math.abs(dx) > 5 && e.cancelable) e.preventDefault();
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (lockRef.current === null) {
+      if (adx < 6 && ady < 6) return; // 이동량이 너무 작으면(터치 흔들림) 아직 방향 판정 보류
+      lockRef.current = adx > ady ? "x" : "y"; // 둘 중 더 크게 움직인 축으로 확정(동률이면 세로 우선)
+      if (lockRef.current === "y") return;
+    }
+    // 목록(스크롤 영역) 위에서 시작한 가로 스와이프도 창 전체에서 인식되도록, 가로로 확정되는 즉시
+    // preventDefault로 선점 - 실기기에서는 몇 px만 늦어도 브라우저가 이미 세로 스크롤로 제스처를
+    // 가져가버려서 이후 이벤트가 아예 안 들어옴(pointercancel)
+    if (e.cancelable) e.preventDefault();
     let d = dx;
     if (d < 0 && !onSwipeLeft) d *= 0.25;
     if (d > 0 && !onSwipeRight) d *= 0.25;
@@ -43,6 +51,7 @@ function useSwitchSwipe({ onSwipeLeft, onSwipeRight }) {
   const endDrag = () => {
     if (!startRef.current) return;
     startRef.current = null;
+    lockRef.current = null;
     setDragging(false);
     const final = dragXRef.current;
     if (final <= -SWIPE_THRESHOLD && onSwipeLeft) onSwipeLeft();
@@ -220,7 +229,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
             ))}
           </div>
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 18px 24px" }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 18px 24px", touchAction: "pan-y" }}>
           {isNew && (
             <div style={{ marginBottom: 10, background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "11px 12px" }}>
               <div className="flex items-center" style={{ gap: 8, marginBottom: 9 }}>
@@ -482,7 +491,7 @@ export function ProductPicker({ onPick, onClose, initialQuery = "", onSwitchToIn
             </button>
           )}
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 18px 24px" }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 18px 24px", touchAction: "pan-y" }}>
           {creating && (
             <div style={{ marginBottom: 10, background: C.sageLight, border: `1px dashed ${C.sage}`, borderRadius: 12, padding: "11px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="flex items-center" style={{ gap: 8 }}>
