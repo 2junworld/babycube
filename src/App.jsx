@@ -2,6 +2,7 @@ import React from "react";
 import { AuthGate, DemoProvider, DemoFamilyFlow } from "./sync/providers";
 import { C, FONT_IMPORT, primaryBtn } from "./theme";
 import { CubeMark } from "./components/common";
+import { PwaUpdateProvider } from "./pwa";
 
 /* ============================================================================
    이유식 공유 앱 (베이비큐브) — 앱 진입점
@@ -44,7 +45,9 @@ export default function App() {
   const demoParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("demo") : null;
   return (
     <ErrorBoundary>
-      {demoParam === "family" ? <DemoFamilyFlow /> : demoParam != null ? <DemoProvider /> : <AuthGate />}
+      <PwaUpdateProvider>
+        {demoParam === "family" ? <DemoFamilyFlow /> : demoParam != null ? <DemoProvider /> : <AuthGate />}
+      </PwaUpdateProvider>
     </ErrorBoundary>
   );
 }

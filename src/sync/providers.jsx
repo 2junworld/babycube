@@ -2,13 +2,14 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback } from "react";
 import { db, auth, googleProvider } from "../firebase";
 import { doc, setDoc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
+import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "firebase/auth";
 import { C, FONT_IMPORT, primaryBtn, MEMBER_COLOR_PALETTE } from "../theme";
 import { addDaysISO, todayISO, uid } from "../lib/dates";
 import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, migrateState, reducer, seedState, totalG } from "../state/appState";
 import { Store } from "../store";
 import { CubeMark } from "../components/common";
 import { Shell } from "../screens/Shell";
+import { UpdateBanner } from "../pwa";
 
 /* =====================================================================
    Firebase 연동 — 로그인 · 가족(공유 그룹) · 클라우드 저장
@@ -201,7 +202,7 @@ function DisplayNameSheet({ defaultName, onSubmit }) {
   const [name, setName] = useState(defaultName || "");
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 90, display: "flex", alignItems: "flex-end", fontFamily: "'Noto Sans KR', sans-serif" }}>
-      <div style={{ background: C.bg, width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: "20px 20px 0 0", padding: "20px 18px 26px", boxSizing: "border-box" }}>
+      <div style={{ background: C.bg, width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: "20px 20px 0 0", padding: "20px 18px calc(26px + env(safe-area-inset-bottom))", boxSizing: "border-box" }}>
         <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 6 }}>표시명을 입력해 주세요</div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, lineHeight: 1.5 }}>
           급여 기록·식단표 등에서 "누가 했는지" 표시할 때 사용돼요. 나중에 공유 멤버 화면에서 바꿀 수 있어요.
@@ -364,18 +365,22 @@ export function FamilyStoreProvider({ familyId, user, onLogout }) {
   return (
     <Store.Provider value={{ state, dispatch, cloud: { familyId, user, meta, leaveFamily, logout: onLogout }, notify }}>
       <Shell />
-      {syncError && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 70, background: C.apricot, color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
-          {syncError === "size"
-            ? "저장 용량이 한도를 초과해 저장에 실패했어요. 더보기 > 설정에서 데이터 사용량을 확인해 주세요."
-            : "저장에 실패했어요. 인터넷 연결을 확인해 주세요. 연결되면 자동으로 다시 저장을 시도합니다."}
-        </div>
-      )}
-      {!syncError && docBytes > DOC_SIZE_WARN_BYTES && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 69, background: C.butterLight, color: "#9A7416", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
-          데이터 사용량이 저장 한도의 {Math.round((docBytes / DOC_SIZE_LIMIT_BYTES) * 100)}%에 도달했어요. 오래된 기록 정리를 권장합니다.
-        </div>
-      )}
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 70, display: "flex", flexDirection: "column" }}>
+        {syncError && (
+          <div style={{ background: C.apricot, color: "#fff", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
+            {syncError === "size"
+              ? "저장 용량이 한도를 초과해 저장에 실패했어요. 더보기 > 설정에서 데이터 사용량을 확인해 주세요."
+              : "저장에 실패했어요. 인터넷 연결을 확인해 주세요. 연결되면 자동으로 다시 저장을 시도합니다."}
+          </div>
+        )}
+        {!syncError && docBytes > DOC_SIZE_WARN_BYTES && (
+          <div style={{ background: C.butterLight, color: "#9A7416", fontSize: 12, fontWeight: 700, textAlign: "center", padding: "8px 12px" }}>
+            데이터 사용량이 저장 한도의 {Math.round((docBytes / DOC_SIZE_LIMIT_BYTES) * 100)}%에 도달했어요. 오래된 기록 정리를 권장합니다.
+          </div>
+        )}
+        {/* 업데이트 적용(새로고침) 전 진행 중인 저장 요청이 있으면 끝나길 기다림(P0-1 pendingRef 재사용) */}
+        <UpdateBanner waitFor={() => pendingRef.current || Promise.resolve()} />
+      </div>
       <ToastView toast={toast} setToast={setToast} state={state} />
       {!state.memberProfiles[user.uid] && (
         <DisplayNameSheet
@@ -386,6 +391,14 @@ export function FamilyStoreProvider({ familyId, user, onLogout }) {
     </Store.Provider>
   );
 }
+
+// 팝업 로그인이 지원되지 않거나 막혔을 때만 리다이렉트로 재시도 - 사용자가 그냥 팝업을 닫은
+// 경우(popup-closed-by-user)까지 자동으로 페이지를 이동시키면 오히려 당황스러우므로 제외.
+// (실기기 확인 결과) 홈 화면에 설치된 standalone 앱(안드로이드·iOS 모두)에서는 signInWithRedirect가
+// 구글에서 돌아온 뒤 로그인 상태를 못 받아오고 조용히 로그인 화면으로 되돌아가는 문제가 있어서,
+// standalone 여부와 무관하게 항상 팝업을 우선 사용하고 리다이렉트는 팝업이 명백히 실패했을 때만
+// 최후 수단으로 시도함
+const POPUP_FALLBACK_CODES = new Set(["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"]);
 
 export function AuthGate() {
   const [user, setUser] = useState(undefined); // undefined=확인중, null=로그아웃
@@ -407,11 +420,23 @@ export function AuthGate() {
     return unsub;
   }, []);
 
+  // signInWithRedirect로 로그인한 경우, 구글에서 돌아온 직후 결과를 확인해 실패를 화면에 알려줌
+  // (성공은 위 onAuthStateChanged가 그대로 감지하므로 여기서는 에러 처리만 담당)
+  useEffect(() => {
+    getRedirectResult(auth).catch(() => {
+      setError("로그인에 실패했습니다. 다시 시도해 주세요.");
+      setBusy(false);
+    });
+  }, []);
+
   const login = async () => {
     setError(""); setBusy(true);
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (e) {
+      if (e && POPUP_FALLBACK_CODES.has(e.code)) {
+        try { await signInWithRedirect(auth, googleProvider); return; } catch { /* 아래 공통 에러 처리로 진행 */ }
+      }
       setError("로그인에 실패했습니다. 다시 시도해 주세요.");
       setBusy(false);
     }
@@ -595,6 +620,9 @@ export function DemoProvider() {
   return (
     <Store.Provider value={{ state, dispatch, cloud, notify }}>
       <Shell />
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 70 }}>
+        <UpdateBanner />
+      </div>
       <ToastView toast={toast} setToast={setToast} state={state} />
     </Store.Provider>
   );

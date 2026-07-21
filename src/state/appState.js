@@ -1093,11 +1093,34 @@ export function logProvideG(log) {
   }, 0);
 }
 
-// 시판 제품은 재료 함량을 알 수 없으므로 카테고리별 재료 섭취 통계에서 제외 (확정 정책)
+// 시판 제품의 일반적인 재료 구성비 추정치(포함 재료를 등록하지 않은 제품에 적용) - 시판 이유식 통념상
+// 곡류(탄수화물) 위주 비중이 가장 크고, 단백질·채소가 그다음, 과일·유제품은 소량인 구성을 반영
+const GENERIC_PRODUCT_CAT_RATIO = { 탄수화물: 0.55, 단백질: 0.2, 채소: 0.2, 과일: 0.03, 유제품: 0.02 };
+
+// 시판 제품 항목 1건의 제공량(g)을 카테고리별로 배분 - 포함 재료가 등록돼 있으면 그 재료들의 카테고리에
+// 균등 배분(정확한 함량 비율은 알 수 없어 재료 개수 기준으로 추정), 포함 재료 정보가 없으면 위 일반 비율로 추정
+export function productCatSplit(state, productId, g) {
+  const prod = state.products[productId];
+  const ingNames = (prod && prod.ingredients) || [];
+  const out = {};
+  if (ingNames.length > 0) {
+    const share = g / ingNames.length;
+    ingNames.forEach((n) => { const c = catOf(state, n); out[c] = (out[c] || 0) + share; });
+  } else {
+    CATEGORIES.forEach((c) => { out[c] = g * (GENERIC_PRODUCT_CAT_RATIO[c] || 0); });
+  }
+  return out;
+}
+
+// 시판 제품도 포함 재료(또는 일반 비율 추정)를 기준으로 카테고리별 재료 섭취 통계에 함께 반영
 export function catTotals(state, items) {
   const t = {}; CATEGORIES.forEach((c) => { t[c] = 0; });
   items.forEach((it) => {
-    if (it.source === "product") return;
+    if (it.source === "product") {
+      const split = productCatSplit(state, it.productId, gOf(state, it));
+      Object.entries(split).forEach(([c, g]) => { t[c] = (t[c] || 0) + g; });
+      return;
+    }
     t[catOf(state, it.name)] += gOf(state, it);
   });
   return t;

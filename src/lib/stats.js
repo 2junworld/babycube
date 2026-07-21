@@ -1,7 +1,7 @@
 /* 급여 통계 (주간 섭취율·월간 리포트·제조량) */
 import React from "react";
 import { addDaysISO, todayISO } from "./dates";
-import { catOf, catTotals, logProvideG } from "../state/appState";
+import { catOf, gOf, logProvideG, productCatSplit } from "../state/appState";
 import { CATEGORIES } from "../theme";
 
 export function weeklyRates(state) {
@@ -22,8 +22,9 @@ export function weeklyRates(state) {
 }
 
 /* 월간 리포트: 급여 횟수 · 평균 섭취율 · 카테고리별/재료별 추정 섭취 비율(제공량 × 전체 섭취율)
-   시판 제품 항목은 함량을 알 수 없어 카테고리·재료별 집계에서 제외하고(확정 정책),
-   대신 "제작 vs 시판" 비율(끼니 수 기준)로 별도 집계한다 */
+   시판 제품 항목은 포함 재료(또는 등록이 없으면 일반적인 이유식 비율 추정)를 기준으로 카테고리 집계에
+   함께 반영하고(productCatSplit), 재료별(topIngredients) 집계는 함량을 정확히 알 수 없어 기존대로 제외.
+   "제작 vs 시판" 비율(끼니 수 기준)은 별도로 함께 집계한다 */
 export function monthStats(state, year, month) {
   const catTotals = {}; CATEGORIES.forEach((c) => { catTotals[c] = 0; });
   const ingredientTotals = {}; // 재료명 -> 추정 섭취 g
@@ -39,7 +40,12 @@ export function monthStats(state, year, month) {
       count += 1;
       let hasProduct = false;
       log.items.forEach((it) => {
-        if (it.source === "product") { hasProduct = true; return; }
+        if (it.source === "product") {
+          hasProduct = true;
+          const split = productCatSplit(state, it.productId, gOf(state, it) * rate);
+          Object.entries(split).forEach(([c, g]) => { catTotals[c] = (catTotals[c] || 0) + g; });
+          return;
+        }
         const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
         const cat = catOf(state, it.name);
         catTotals[cat] = (catTotals[cat] || 0) + g * rate;
