@@ -1,6 +1,6 @@
 /* 더보기 탭 - 설정·공유 멤버·여행 모드·끼니 설정 */
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity } from "lucide-react";
+import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen } from "lucide-react";
 import { db } from "../firebase";
 import { doc, setDoc } from "firebase/firestore";
 import { C, primaryBtn, selectStyle } from "../theme";
@@ -526,18 +526,28 @@ export function MoreTab({ go }) {
     { key: "activity", icon: Activity, label: "활동 내역", sub: "누가 언제 기록·수정했는지 확인" },
     { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
     { key: "settings", icon: Settings2, label: "설정", sub: "시간 형식 · 알림 · 아기 정보" },
+    // 로그인 없이 보는 고정 안내 페이지(/guide) - 실제 URL 이동이라 go() 라우팅 대신 새 탭 링크로 처리
+    { icon: BookOpen, label: "설치·사용법 안내 다시 보기", sub: "지인에게 공유한 안내 페이지", href: "/guide" },
   ];
   return (
     <div style={{ paddingBottom: 90 }}>
       <ScreenHeader title="더보기" />
       <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-        {items.map((it) => (
-          <button key={it.key} onClick={() => go(it.key)} className="flex items-center" style={{ gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "13px 14px", cursor: "pointer", width: "100%", textAlign: "left" }}>
-            <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: 10, background: C.sageLight, flexShrink: 0 }}><it.icon size={16} color={C.sageDeep} /></div>
-            <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{it.label}</div><div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{it.sub}</div></div>
-            <ChevronRight size={16} color={C.muted} />
-          </button>
-        ))}
+        {items.map((it) => {
+          const content = (
+            <>
+              <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: 10, background: C.sageLight, flexShrink: 0 }}><it.icon size={16} color={C.sageDeep} /></div>
+              <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{it.label}</div><div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{it.sub}</div></div>
+              <ChevronRight size={16} color={C.muted} />
+            </>
+          );
+          const rowStyle = { gap: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "13px 14px", cursor: "pointer", width: "100%", textAlign: "left", boxSizing: "border-box" };
+          return it.href ? (
+            <a key={it.label} href={it.href} target="_blank" rel="noopener noreferrer" className="flex items-center" style={{ ...rowStyle, textDecoration: "none" }}>{content}</a>
+          ) : (
+            <button key={it.key} onClick={() => go(it.key)} className="flex items-center" style={rowStyle}>{content}</button>
+          );
+        })}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
         <div>베이비큐브 · v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?"}</div>
