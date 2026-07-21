@@ -488,6 +488,11 @@ function rawReducer(state, action) {
       if (("baseOf" in patch || "components" in patch) && state.ingredientTags && state.ingredientTags[name] != null) {
         next.ingredientTags = { ...state.ingredientTags, [name]: null };
       }
+      // 카테고리를 바꾸면 "먹어본 재료" 기록에 등록 당시 스냅샷돼 있는 cat도 함께 갱신 -
+      // 안 하면 기록 탭의 먹어본 재료 목록이 예전 카테고리로 계속 표시/분류되는 불일치가 생김
+      if ("cat" in patch && state.intros.some((it) => it.name === name)) {
+        next.intros = state.intros.map((it) => (it.name === name ? { ...it, cat: patch.cat } : it));
+      }
       return next;
     }
 

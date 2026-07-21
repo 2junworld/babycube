@@ -604,9 +604,18 @@ export function IngredientInfoScreen({ name, onBack, go }) {
           </span>
         </div>
 
-        {/* 재료 분류 - 변형(기본 재료 연결) · 혼합 큐브 구성 */}
+        {/* 재료 분류 - 카테고리 · 변형(기본 재료 연결) · 혼합 큐브 구성 */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>재료 분류</div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 6 }}>카테고리</div>
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+              {CATEGORIES.map((c) => (
+                <button key={c} onClick={() => setMeta({ cat: c })} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+                  border: "none", background: catOf(state, name) === c ? C.sage : C.sageLight, color: catOf(state, name) === c ? "#fff" : C.sageDeep }}>{c}</button>
+              ))}
+            </div>
+          </div>
           {baseSuggestion && (
             <div className="flex items-center justify-between" style={{ background: C.sageLight, borderRadius: 8, padding: "7px 9px", marginBottom: 8, gap: 8 }}>
               <span style={{ fontSize: 11, color: C.sageDeep, lineHeight: 1.4 }}>'{baseSuggestion}'를 조리 방식만 바꾼 재료인가요? 연결하면 영양·궁합 정보를 물려받아요.</span>
