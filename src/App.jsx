@@ -3,6 +3,7 @@ import { AuthGate, DemoProvider, DemoFamilyFlow } from "./sync/providers";
 import { C, FONT_IMPORT, primaryBtn } from "./theme";
 import { CubeMark } from "./components/common";
 import { PwaUpdateProvider } from "./pwa";
+import GuidePage from "./screens/GuidePage";
 
 /* ============================================================================
    이유식 공유 앱 (베이비큐브) — 앱 진입점
@@ -43,6 +44,16 @@ class ErrorBoundary extends React.Component {
 
 export default function App() {
   const demoParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("demo") : null;
+  // /guide: 로그인 없이 바로 보는 설치·사용법 안내 페이지 (지인 공유용 고정 링크) - 인증·동기화
+  // 레이어를 아예 거치지 않고 가장 먼저 분기해, 계정이 없어도 즉시 열림
+  const pathname = typeof window !== "undefined" ? window.location.pathname.replace(/\/+$/, "") : "";
+  if (pathname === "/guide") {
+    return (
+      <ErrorBoundary>
+        <GuidePage />
+      </ErrorBoundary>
+    );
+  }
   return (
     <ErrorBoundary>
       <PwaUpdateProvider>
