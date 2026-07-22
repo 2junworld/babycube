@@ -1,6 +1,6 @@
 /* 더보기 탭 - 설정·공유 멤버·여행 모드·끼니 설정 */
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen } from "lucide-react";
+import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen, MessageSquareText, Copy, Trash2, Send } from "lucide-react";
 import { db } from "../firebase";
 import { doc, setDoc } from "firebase/firestore";
 import { C, primaryBtn, selectStyle } from "../theme";
@@ -366,6 +366,103 @@ export function ActivityScreen({ onBack, go, filterUid, filterName }) {
   );
 }
 
+/* =====================================================================
+   개선 제안함 - 가족 구성원 누구나 짧게 개선 아이디어·오류를 남길 수 있는 창구.
+   작성자(by)·시각(at)은 dispatch가 자동 주입하는 action._actor/_at을 그대로 기록에 남김(작성자 추적과 동일 방식).
+   "복사하기"로 전체 내용을 날짜·작성자 포함 텍스트로 클립보드에 담아, 나중에 이 텍스트를 그대로
+   Claude Code 세션에 붙여넣어 한 번에 분석·반영을 요청할 수 있게 함 (별도 백엔드·조회 도구 없이도
+   기존 Firestore 동기화 데이터를 사람이 손으로 옮기는 가장 단순한 방식)
+   ===================================================================== */
+export function FeedbackScreen({ onBack }) {
+  const { state, dispatch, notify } = useStore();
+  const profiles = state.memberProfiles || {};
+  const [text, setText] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const submit = () => {
+    const t = text.trim();
+    if (!t) return;
+    dispatch({ type: "FEEDBACK_ADD", text: t });
+    setText("");
+  };
+  const remove = (f) => {
+    dispatch({ type: "FEEDBACK_DELETE", id: f.id });
+    notify("삭제했습니다", () => dispatch({ type: "RESTORE_FEEDBACK", entry: f }));
+  };
+
+  const list = [...state.feedback].reverse();
+  const dateTime = (iso) => {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${authorTime(iso)}`;
+  };
+  const copyAll = async () => {
+    const lines = [...state.feedback].map((f) => {
+      const name = (f.by && profiles[f.by] && profiles[f.by].name) || f.by || "알 수 없음";
+      return `- [${dateTime(f.at)}] ${name}: ${f.text}`;
+    });
+    const digest = `### 베이비큐브 개선 제안 모음 (${list.length}건)\n${lines.join("\n")}`;
+    try {
+      await navigator.clipboard.writeText(digest);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      notify("복사에 실패했어요. 브라우저 권한을 확인해 주세요");
+    }
+  };
+
+  return (
+    <div style={{ paddingBottom: 90 }}>
+      <SubHeader title="개선 제안" onBack={onBack} />
+      <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, padding: "0 2px" }}>
+          불편한 점이나 개선하면 좋을 아이디어를 자유롭게 남겨주세요. 나중에 모아서 한 번에 반영할게요.
+        </div>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 12 }}>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="예: 재고 화면 정렬 옵션이 헷갈려요" rows={3}
+            style={{ width: "100%", border: "none", outline: "none", fontSize: 13, color: C.ink, resize: "none", fontFamily: "inherit", boxSizing: "border-box" }} />
+          <button onClick={submit} disabled={!text.trim()} className="flex items-center justify-center"
+            style={{ ...primaryBtn, marginTop: 8, gap: 6, opacity: text.trim() ? 1 : 0.5, cursor: text.trim() ? "pointer" : "default" }}>
+            <Send size={14} /> 보내기
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between" style={{ padding: "0 2px" }}>
+          <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 700 }}>지금까지 {state.feedback.length}건</span>
+          {state.feedback.length > 0 && (
+            <button onClick={copyAll} className="flex items-center" style={{ gap: 5, background: "none", border: "none", color: C.sageDeep, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0 }}>
+              <Copy size={12} /> {copied ? "복사됨!" : "전체 복사하기"}
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {list.length === 0 && (
+            <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted, lineHeight: 1.6 }}>
+              아직 남겨진 제안이 없어요.<br />위에 첫 의견을 남겨보세요.
+            </div>
+          )}
+          {list.map((f) => {
+            const p = f.by && profiles[f.by];
+            return (
+              <div key={f.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 13px" }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 5 }}>
+                  <div className="flex items-center" style={{ gap: 6 }}>
+                    {p && <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.color, flexShrink: 0 }} />}
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep }}>{p ? p.name : "알 수 없음"}</span>
+                    <span style={{ fontSize: 10.5, color: C.muted }}>{dateTime(f.at)}</span>
+                  </div>
+                  <button onClick={() => remove(f)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={13} color={C.apricot} /></button>
+                </div>
+                <div style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{f.text}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TravelScreen({ onBack }) {
   const { state, dispatch } = useStore();
   const tv = state.travel;
@@ -524,6 +621,7 @@ export function MoreTab({ go }) {
     { key: "manufactureHistory", icon: History, label: "제조 이력", sub: "재료별 제조 배치 기록 조회" },
     { key: "members", icon: Users, label: "공유 멤버", sub: "초대 코드 · 구성원 관리" },
     { key: "activity", icon: Activity, label: "활동 내역", sub: "누가 언제 기록·수정했는지 확인" },
+    { key: "feedback", icon: MessageSquareText, label: "개선 제안", sub: "불편한 점·아이디어 남기기" },
     { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
     { key: "settings", icon: Settings2, label: "설정", sub: "시간 형식 · 알림 · 아기 정보" },
     // 로그인 없이 보는 고정 안내 페이지(/guide) - 실제 URL 이동이라 go() 라우팅 대신 새 탭 링크로 처리
