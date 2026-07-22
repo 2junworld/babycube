@@ -13,7 +13,7 @@ const installSteps = {
   ],
   android: [
     { icon: MoreVertical, text: "Chrome 우측 상단 메뉴(⋮) 탭" },
-    { icon: SquarePlus, text: "'홈 화면에 추가' 선택" },
+    { icon: SquarePlus, text: "'앱 설치' 선택" },
     { icon: CheckCircle2, text: "완료! 홈 화면 아이콘으로 실행" },
   ],
 };
