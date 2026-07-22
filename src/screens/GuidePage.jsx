@@ -66,10 +66,13 @@ function detectOS() {
 function UsageDetail({ card, onBack }) {
   return (
     <div style={{ maxWidth: 480, margin: "0 auto", padding: "20px 20px 44px" }}>
-      <button onClick={onBack} className="flex items-center" style={{ gap: 4, background: "none", border: "none", padding: 0, marginBottom: 16, cursor: "pointer", color: C.inkSoft }}>
-        <ChevronLeft size={18} />
-        <span style={{ fontSize: 12.5, fontWeight: 700 }}>안내로 돌아가기</span>
-      </button>
+      <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+        <button onClick={onBack} className="flex items-center" style={{ gap: 4, background: "none", border: "none", padding: 0, cursor: "pointer", color: C.inkSoft }}>
+          <ChevronLeft size={18} />
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>안내로 돌아가기</span>
+        </button>
+        <a href="/" style={{ fontSize: 11, fontWeight: 700, color: C.muted, textDecoration: "underline" }}>앱으로 돌아가기</a>
+      </div>
       <div className="flex items-center" style={{ gap: 8, marginBottom: 14 }}>
         <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: 10, background: C.sageLight, flexShrink: 0 }}>
           <card.icon size={16} color={C.sageDeep} />
@@ -107,7 +110,14 @@ export default function GuidePage() {
   return (
     <div style={{ minHeight: "100dvh", background: C.bg, fontFamily: "'Noto Sans KR', sans-serif" }}>
       <style>{FONT_IMPORT}</style>
-      <div style={{ maxWidth: 480, margin: "0 auto", padding: "32px 20px 44px" }}>
+      <div style={{ maxWidth: 480, margin: "0 auto", padding: "20px 20px 44px" }}>
+        {/* 더보기 탭·직접 링크 등 어디서 들어와도 앱으로 돌아갈 방법이 눈에 보이도록 상단 고정 -
+            /guide는 앱 라우터 밖의 별도 진입점이라 브라우저 뒤로가기가 항상 기대대로 동작하지 않음
+            (특히 새 탭·standalone PWA에서 열렸을 때 브라우저 뒤로가기 자체가 없을 수 있음) */}
+        <a href="/" className="flex items-center" style={{ gap: 4, textDecoration: "none", color: C.inkSoft, marginBottom: 14 }}>
+          <ChevronLeft size={18} />
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>앱으로 돌아가기</span>
+        </a>
         <div className="flex flex-col items-center" style={{ textAlign: "center", marginBottom: 24 }}>
           <CubeMark size={40} />
           <div style={{ fontSize: 19, fontWeight: 900, color: C.ink, marginTop: 10, fontFamily: "'Gowun Dodum', sans-serif" }}>베이비큐브</div>
