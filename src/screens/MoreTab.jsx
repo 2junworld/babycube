@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen, MessageSquareText, Copy, Trash2, Send, Palette } from "lucide-react";
 import { db } from "../firebase";
 import { doc, setDoc } from "firebase/firestore";
-import { C, primaryBtn, selectStyle } from "../theme";
+import { C, CATEGORY_COLOR_SWATCHES, primaryBtn, selectStyle } from "../theme";
 import { addDaysISO, ageText, fmtTime, todayISO, uid } from "../lib/dates";
 import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, avgPlannedMealsPerDay, categoryUsageCount, isStaple, migrateState } from "../state/appState";
 import { useStore } from "../store";
@@ -692,10 +692,24 @@ export function CategoryEditModal({ category, onClose }) {
               style={{ border: "none", background: "transparent", textAlign: "right", fontSize: 13, fontWeight: 700, color: C.ink, width: 150, outline: "none" }} />
           </div>
           {dup && <div style={{ fontSize: 11, color: C.apricot, padding: "0 2px" }}>이미 있는 카테고리 이름이에요</div>}
-          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
-            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>라벨 색상</span>
-            <input type="color" value={color} onChange={(e) => setColor(e.target.value)}
-              style={{ width: 40, height: 28, border: "none", background: "transparent", cursor: "pointer", padding: 0 }} />
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+            <div style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600, marginBottom: 9 }}>라벨 색상</div>
+            <div className="flex items-center" style={{ gap: 8, flexWrap: "wrap" }}>
+              {CATEGORY_COLOR_SWATCHES.map((sw) => {
+                const active = color.toLowerCase() === sw.toLowerCase();
+                return (
+                  <button key={sw} onClick={() => setColor(sw)} aria-label={sw} style={{ width: 26, height: 26, borderRadius: "50%",
+                    background: sw, cursor: "pointer", padding: 0, border: active ? `2px solid ${C.ink}` : `1px solid ${C.border}` }} />
+                );
+              })}
+              {/* 프리셋에 없는 색이면(직접 선택) 마지막 원이 현재 색으로 채워져 선택 상태를 보여줌 */}
+              <label style={{ width: 26, height: 26, borderRadius: "50%", background: color, cursor: "pointer", position: "relative",
+                border: CATEGORY_COLOR_SWATCHES.some((sw) => sw.toLowerCase() === color.toLowerCase()) ? `1px dashed ${C.muted}` : `2px solid ${C.ink}` }}>
+                <input type="color" value={color} onChange={(e) => setColor(e.target.value)}
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", padding: 0, border: "none" }} />
+              </label>
+            </div>
+            <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8 }}>맨 오른쪽 원을 누르면 직접 다른 색상도 고를 수 있어요</div>
           </div>
           <button onClick={save} disabled={!trimmed || dup} style={{ ...primaryBtn, opacity: !trimmed || dup ? 0.5 : 1, cursor: !trimmed || dup ? "default" : "pointer" }}>{isNew ? "추가" : "저장"}</button>
           {!isNew && <button onClick={() => setConfirmingDel(true)} style={{ background: "none", border: "none", color: C.apricot, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "2px 0" }}>이 카테고리 삭제</button>}

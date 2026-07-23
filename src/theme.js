@@ -24,6 +24,14 @@ export const DEFAULT_CATEGORIES = [
   { name: "유제품", color: "#7BA7BC", light: "#E3EEF2" },
 ];
 
+// 카테고리 관리 화면의 색상 선택 리스트 - 기본 5개 카테고리와 같은 채도·명도대(부드러운 중간톤,
+// 원색·형광색 배제)로 맞춘 프리셋. 앞 5개는 기존 카테고리 색과 동일해 눈에 익고, 뒤쪽은 같은
+// 톤으로 확장한 새 색상이라 카테고리를 몇 개를 추가해도 앱 전체 분위기와 어울리게 유지됨
+export const CATEGORY_COLOR_SWATCHES = [
+  "#9A9285", "#B9695C", "#6B8F71", "#E8B94A", "#7BA7BC", "#8E6FCB",
+  "#C17CA0", "#6FA88E", "#C98A4A", "#7C8FC4", "#9C9A5E", "#A97C63",
+];
+
 export const selectStyle = { border: `1px solid ${C.border}`, borderRadius: 8, padding: "4px 6px",
   fontSize: 12, fontWeight: 700, color: C.ink, background: C.surface, cursor: "pointer", outline: "none" };
 
