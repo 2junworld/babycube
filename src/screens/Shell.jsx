@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import { Home, CalendarDays, Package, Menu, LineChart as LineChartIcon } from "lucide-react";
 import { C, FONT_IMPORT } from "../theme";
 import { useStore } from "../store";
-import { TodayTab } from "./TodayTab";
+import { DayRecordScreen, TodayTab } from "./TodayTab";
 import { MealPlanTab } from "./PlanTab";
 import { FeedingLogScreen } from "./FeedingLogScreen";
 import { IngredientInfoScreen, ManufactureHistoryScreen, ProductDetailScreen, ProductStockDetailScreen, ShoppingScreen, StockDetailScreen, StockTab } from "./StockTab";
@@ -33,6 +33,7 @@ export function Shell() {
 
   let content;
   if (route === "feed") content = <FeedingLogScreen date={params.date} planMeal={params.planMeal} existingLog={params.existingLog} onBack={back} />;
+  else if (route === "dayRecord") content = <DayRecordScreen date={params.date} onBack={back} go={go} />;
   else if (route === "shopping") content = <ShoppingScreen onBack={back} />;
   else if (route === "settings") content = <SettingsScreen onBack={back} />;
   else if (route === "members") content = <MembersScreen onBack={back} go={go} />;

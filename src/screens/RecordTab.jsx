@@ -189,7 +189,7 @@ export function FeedingMonthPanel({ go }) {
         {/* 지난 날짜(오늘 포함) 기록 추가 - 개선 제안 반영: 예전엔 "오늘" 탭에서만 기록을 남길 수 있어
             지난 날짜에 깜빡한 기록을 나중에 추가할 방법이 없었음. 미래 날짜는 기록할 대상이 없으니 제외 */}
         {selected <= t && (
-          <button onClick={() => go("feed", { date: selected })} className="flex items-center justify-center"
+          <button onClick={() => go("dayRecord", { date: selected })} className="flex items-center justify-center"
             style={{ width: "100%", gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.sageDeep, background: "transparent", cursor: "pointer" }}>
             <Plus size={14} /> {selected.slice(5)} 기록 추가
           </button>
