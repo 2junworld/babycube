@@ -13,15 +13,16 @@ export const C = {
 export const FONT_IMPORT =
   "@import url('https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Noto+Sans+KR:wght@400;500;700;900&display=swap');";
 
-export const CATEGORY = {
-  탄수화물: { color: "#9A9285", light: "#ECE9E1", label: "탄수화물" },
-  단백질: { color: "#B9695C", light: "#F3E2DE", label: "단백질" },
-  채소: { color: "#6B8F71", light: "#E4ECE2", label: "채소" },
-  과일: { color: "#E8B94A", light: "#FBF0D6", label: "과일" },
-  유제품: { color: "#7BA7BC", light: "#E3EEF2", label: "유제품" },
-};
-
-export const CATEGORIES = ["탄수화물", "단백질", "채소", "과일", "유제품"];
+// 카테고리 초기값(시드) - 더보기 → 카테고리 관리에서 사용자가 직접 이름·색상을 수정/추가/삭제할 수 있음.
+// 여기 값은 seedState()/migrateState()가 최초 1회 state.categories로 복사해가는 시작값일 뿐이고,
+// 실제 카테고리 목록·색상은 이후 state.categories를 따른다(화면 코드에서 이 상수를 직접 쓰지 않음).
+export const DEFAULT_CATEGORIES = [
+  { name: "탄수화물", color: "#9A9285", light: "#ECE9E1" },
+  { name: "단백질", color: "#B9695C", light: "#F3E2DE" },
+  { name: "채소", color: "#6B8F71", light: "#E4ECE2" },
+  { name: "과일", color: "#E8B94A", light: "#FBF0D6" },
+  { name: "유제품", color: "#7BA7BC", light: "#E3EEF2" },
+];
 
 export const selectStyle = { border: `1px solid ${C.border}`, borderRadius: 8, padding: "4px 6px",
   fontSize: 12, fontWeight: 700, color: C.ink, background: C.surface, cursor: "pointer", outline: "none" };

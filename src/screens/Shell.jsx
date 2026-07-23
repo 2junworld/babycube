@@ -8,7 +8,7 @@ import { MealPlanTab } from "./PlanTab";
 import { FeedingLogScreen } from "./FeedingLogScreen";
 import { IngredientInfoScreen, ManufactureHistoryScreen, ProductDetailScreen, ProductStockDetailScreen, ShoppingScreen, StockDetailScreen, StockTab } from "./StockTab";
 import { FeedingCompareScreen, RecordHistoryScreen, RecordTab } from "./RecordTab";
-import { ActivityScreen, FeedbackScreen, MealSlotsScreen, MembersScreen, MoreTab, SettingsScreen, TravelScreen } from "./MoreTab";
+import { ActivityScreen, CategoriesScreen, FeedbackScreen, MealSlotsScreen, MembersScreen, MoreTab, SettingsScreen, TravelScreen } from "./MoreTab";
 
 /* =====================================================================
    앱 셸 (탭 + 라우팅)
@@ -40,6 +40,7 @@ export function Shell() {
   else if (route === "feedback") content = <FeedbackScreen onBack={back} />;
   else if (route === "travel") content = <TravelScreen onBack={back} />;
   else if (route === "mealSlots") content = <MealSlotsScreen onBack={back} />;
+  else if (route === "categories") content = <CategoriesScreen onBack={back} />;
   else if (route === "stockDetail") content = <StockDetailScreen name={params.name} onBack={back} />;
   else if (route === "recordHistory") content = <RecordHistoryScreen onBack={back} />;
   else if (route === "feedCompare") content = <FeedingCompareScreen date={params.date} logId={params.logId} label={params.label} onBack={back} />;

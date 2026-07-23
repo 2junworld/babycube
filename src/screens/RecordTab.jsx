@@ -2,9 +2,9 @@
 import React, { useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, Trash2, X } from "lucide-react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
-import { C, CATEGORIES, primaryBtn, PRODUCT_COLOR } from "../theme";
+import { C, primaryBtn, PRODUCT_COLOR } from "../theme";
 import { WD, addDaysISO, fmtTime, pad2, todayISO } from "../lib/dates";
-import { catOf, gOf, logProvideG, sortByCategory, totalG, unrestorableStockNames } from "../state/appState";
+import { catOf, categoryNames, defaultCategoryName, gOf, logProvideG, sortByCategory, totalG, unrestorableStockNames } from "../state/appState";
 import { useStore } from "../store";
 import { AuthorInfo, BottomSheet, CatDot, CategoryLegend, CategoryTotalsBar, Chip, ConfirmModal, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE } from "./uiPrefs";
@@ -216,13 +216,14 @@ export function RecordTab({ go }) {
   const yISO = addDaysISO(todayISO(), -1);
   const yLogs = state.logs[yISO] || [];
 
+  const cats = categoryNames(state);
   const introsByCat = {};
-  CATEGORIES.forEach((c) => { introsByCat[c] = []; });
+  cats.forEach((c) => { introsByCat[c] = []; });
   state.intros.forEach((it) => {
     if (it.status === "주의" || it.status === "중단") return;
     (introsByCat[it.cat] || (introsByCat[it.cat] = [])).push(it);
   });
-  CATEGORIES.forEach((c) => { introsByCat[c].sort((a, b) => a.name.localeCompare(b.name, "ko")); });
+  cats.forEach((c) => { introsByCat[c].sort((a, b) => a.name.localeCompare(b.name, "ko")); });
   const warnIntros = state.intros.filter((it) => it.status === "주의" || it.status === "중단").sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
   return (
@@ -364,7 +365,7 @@ export function RecordTab({ go }) {
             </button>
           </div>
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-            {CATEGORIES.map((cat) => (introsByCat[cat] || []).length > 0 && (
+            {cats.map((cat) => (introsByCat[cat] || []).length > 0 && (
               <div key={cat}>
                 <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 5 }}>{cat} ({introsByCat[cat].length})</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -415,7 +416,7 @@ export function IntroEditModal({ intro, onClose }) {
   const [picker, setPicker] = useState(false);
   const [confirmingDel, setConfirmingDel] = useState(false);
   const [name, setName] = useState(base.name || "");
-  const [cat, setCat] = useState(base.cat || "채소");
+  const [cat, setCat] = useState(base.cat || defaultCategoryName(state));
   const [status, setStatus] = useState(base.status || "이상없음");
   const [memo, setMemo] = useState(base.memo || "");
 
@@ -449,7 +450,7 @@ export function IntroEditModal({ intro, onClose }) {
           <div>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>카테고리</div>
             <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-              {CATEGORIES.map((c) => (
+              {categoryNames(state).map((c) => (
                 <button key={c} onClick={() => setCat(c)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
                   border: "none", background: cat === c ? C.sage : C.sageLight, color: cat === c ? "#fff" : C.sageDeep }}>{c}</button>
               ))}

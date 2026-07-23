@@ -2,7 +2,7 @@
    UI를 포함하지 않는 순수 로직 계층. 컴포넌트는 App.jsx 참고 */
 import { todayISO, addDaysISO, uid } from "../lib/dates";
 import { SEED_INGREDIENTS, DB_CATEGORY } from "../data/nutrition";
-import { CATEGORIES, MEMBER_COLOR_PALETTE } from "../theme";
+import { DEFAULT_CATEGORIES, MEMBER_COLOR_PALETTE } from "../theme";
 
 export function seedState() {
   const t = todayISO();
@@ -35,6 +35,7 @@ export function seedState() {
     ingredients: { ...SEED_INGREDIENTS },
     ingredientUsage: {},
     ingredientTags: {},
+    categories: DEFAULT_CATEGORIES.map((c) => ({ id: uid(), ...c })), // 재료 분류 - 이름·색상을 사용자가 직접 관리 가능(더보기 → 카테고리 관리)
     stock, plans, logs, intros,
     shopping: [],
     products: {}, // 시판 이유식 제품 사전 (productId → {name, brand, packG, ingredients, memo, ...})
@@ -60,6 +61,11 @@ export function seedState() {
 export function migrateState(s) {
   if (!s) return s;
   let out = { ...s };
+  // 카테고리 관리 기능 도입 - 구버전 데이터는 이전까지 고정값이던 5개 카테고리를 그대로 시드
+  if (!out.categories || out.categories.length === 0) {
+    out.categories = DEFAULT_CATEGORIES.map((c) => ({ id: uid(), ...c }));
+  }
+  const defaultCat = out.categories[0].name;
   if (out.eaten) {
     const migrated = Array.isArray(out.intros) ? [...out.intros] : [];
     Object.entries(out.eaten).forEach(([cat, names]) => {
@@ -72,14 +78,14 @@ export function migrateState(s) {
     (out.warnings || []).forEach((w) => {
       const i = migrated.findIndex((it) => it.name === w.name);
       if (i >= 0) migrated[i] = { ...migrated[i], status: "중단", memo: w.reason };
-      else migrated.push({ id: uid(), name: w.name, cat: "채소", status: "중단", memo: w.reason, date: todayISO() });
+      else migrated.push({ id: uid(), name: w.name, cat: defaultCat, status: "중단", memo: w.reason, date: todayISO() });
     });
     out.intros = migrated;
     delete out.eaten;
     delete out.warnings;
   }
   if (!out.intros) out.intros = [];
-  out.intros = out.intros.map((it) => ({ cat: "채소", memo: "", ...it }));
+  out.intros = out.intros.map((it) => ({ cat: defaultCat, memo: "", ...it }));
   if (!out.baby) out.baby = { name: "", sex: "남아", birth: "" }; // 생년월일 미설정 상태로 시작
   if (!out.ui) out.ui = { fridgeBannerHiddenDate: null };
   // 카테고리 이름 변경: 죽 → 탄수화물 (기존 저장 데이터 호환)
@@ -226,6 +232,18 @@ function mealCompareOf(state) {
   };
 }
 
+// 카테고리 추가·색상 변경 시 사용자는 라벨 색상 하나만 고르고, 옅은 배경색(light)은 흰색과 섞어 자동 유도
+// (기존 5개 기본 카테고리의 color→light 비율과 거의 일치하도록 amount 값을 조정함)
+function lightenColor(hex, amount = 0.82) {
+  const h = (hex || "#9A9285").replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16) || 0;
+  const g = parseInt(h.substring(2, 4), 16) || 0;
+  const b = parseInt(h.substring(4, 6), 16) || 0;
+  const mix = (c) => Math.round(c + (255 - c) * amount);
+  const toHex = (c) => Math.max(0, Math.min(255, c)).toString(16).padStart(2, "0");
+  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
+}
+
 /* --------------------------------- 리듀서 -------------------------------- */
 function rawReducer(state, action) {
   switch (action.type) {
@@ -308,8 +326,8 @@ function rawReducer(state, action) {
       if (!name) return state;
       const cur = state.stock[name] || { batches: [] };
       // 재료 마스터에 없으면 공통 규칙으로 추가 (UX-4)
-      const ingredients = ensureIngredientEntry(state.ingredients, name, action.cat, { unitG: batch.unitG });
-      const cat = (ingredients[name] || {}).cat || action.cat || "채소";
+      const ingredients = ensureIngredientEntry(state.ingredients, name, action.cat, { unitG: batch.unitG }, defaultCategoryName(state));
+      const cat = (ingredients[name] || {}).cat || action.cat || defaultCategoryName(state);
       // 먹어본 재료 목록에도 반영 - 제조만 하고 아직 먹이지 않은 상태이므로 "관찰중"으로 등록 (UX-4 확정)
       let intros = state.intros;
       if (!intros.some((it) => it.name === name)) {
@@ -387,21 +405,22 @@ function rawReducer(state, action) {
       // 메모에 "시판 '제품명'으로 첫 노출"을 남겨 알레르기 관찰 시 출처를 알 수 있게 함
       let ingredients = state.ingredients;
       let intros = state.intros;
+      const fallbackCat = defaultCategoryName(state);
       savedLog.items.forEach((it) => {
         if (it.source === "product") {
           const prod = state.products[it.productId];
           const prodName = prod ? prod.name : it.productName;
           (prod ? prod.ingredients : []).forEach((ingName) => {
-            ingredients = ensureIngredientEntry(ingredients, ingName);
+            ingredients = ensureIngredientEntry(ingredients, ingName, null, {}, fallbackCat);
             if (!intros.some((x) => x.name === ingName)) {
-              intros = [{ id: uid(), name: ingName, cat: (ingredients[ingName] || {}).cat || "채소", status: "관찰중", memo: `시판 '${prodName}'으로 첫 노출`, date }, ...intros];
+              intros = [{ id: uid(), name: ingName, cat: (ingredients[ingName] || {}).cat || fallbackCat, status: "관찰중", memo: `시판 '${prodName}'으로 첫 노출`, date }, ...intros];
             }
           });
           return;
         }
-        ingredients = ensureIngredientEntry(ingredients, it.name);
+        ingredients = ensureIngredientEntry(ingredients, it.name, null, {}, fallbackCat);
         if (!intros.some((x) => x.name === it.name)) {
-          intros = [{ id: uid(), name: it.name, cat: (ingredients[it.name] || {}).cat || "채소", status: "관찰중", memo: "", date }, ...intros];
+          intros = [{ id: uid(), name: it.name, cat: (ingredients[it.name] || {}).cat || fallbackCat, status: "관찰중", memo: "", date }, ...intros];
         }
       });
       return { ...state, stock, productStock, ingredients, intros, logs: { ...state.logs, [date]: dayLogs } };
@@ -455,7 +474,7 @@ function rawReducer(state, action) {
       let intros;
       if (idx >= 0) { intros = [...state.intros]; intros[idx] = { ...intros[idx], ...intro }; }
       else intros = [{ ...intro, id: intro.id || uid() }, ...state.intros];
-      const ingredients = ensureIngredientEntry(state.ingredients, intro.name, intro.cat);
+      const ingredients = ensureIngredientEntry(state.ingredients, intro.name, intro.cat, {}, defaultCategoryName(state));
       return { ...state, intros, ingredients };
     }
     case "INTRO_DELETE":
@@ -480,7 +499,7 @@ function rawReducer(state, action) {
       const name = normalizeIngredientName(action.name);
       if (!name || state.ingredients[name]) return state;
       const extra = baseOf && baseOf !== name ? { baseOf } : {};
-      return { ...state, ingredients: ensureIngredientEntry(state.ingredients, name, cat, extra) };
+      return { ...state, ingredients: ensureIngredientEntry(state.ingredients, name, cat, extra, defaultCategoryName(state)) };
     }
 
     /* ---- 재료 즐겨찾기 토글 ---- */
@@ -495,7 +514,7 @@ function rawReducer(state, action) {
     case "INGREDIENT_SET_META": {
       const { name, patch } = action;
       if (!name) return state;
-      const cur = state.ingredients[name] || { cat: DB_CATEGORY[name] || "채소", unitG: 15 };
+      const cur = state.ingredients[name] || { cat: DB_CATEGORY[name] || defaultCategoryName(state), unitG: 15 };
       const next = { ...state, ingredients: { ...state.ingredients, [name]: { ...cur, ...patch } } };
       // 분류(기본 재료 연결·혼합 구성)를 바꾸면 이전에 직접 지정했던 태그를 초기화해
       // 상속·합산 결과가 바로 반영되게 함 (옛 지정값이 새 분류를 가리는 문제 방지)
@@ -551,6 +570,49 @@ function rawReducer(state, action) {
     case "MEALSLOT_DELETE":
       return { ...state, mealSlots: state.mealSlots.filter((s) => s.id !== action.id) };
 
+    /* ---- 카테고리 관리 (더보기 → 카테고리 관리) - 이름·색상 추가/수정/삭제.
+       이름을 바꾸면 그 카테고리를 쓰던 재료 마스터·먹어본 재료 기록에도 새 이름을 함께 반영(캐스케이드).
+       마지막 남은 1개이거나, 재료가 그 카테고리를 사용 중이면 삭제를 막아 데이터 무결성을 지킴 ---- */
+    case "CATEGORY_ADD": {
+      const name = (action.name || "").trim();
+      if (!name || state.categories.some((c) => c.name === name)) return state; // 빈 이름·이름 중복 방지
+      const color = action.color || "#9A9285";
+      return { ...state, categories: [...state.categories, { id: uid(), name, color, light: lightenColor(color) }] };
+    }
+    case "CATEGORY_UPDATE": {
+      const { id, patch } = action;
+      const idx = state.categories.findIndex((c) => c.id === id);
+      if (idx < 0) return state;
+      const cur = state.categories[idx];
+      const nextName = patch.name != null ? patch.name.trim() : cur.name;
+      if (!nextName) return state;
+      if (nextName !== cur.name && state.categories.some((c) => c.id !== id && c.name === nextName)) return state; // 다른 카테고리와 이름 중복 방지
+      const nextColor = patch.color || cur.color;
+      const nextCat = { ...cur, name: nextName, color: nextColor, light: patch.color ? lightenColor(patch.color) : cur.light };
+      const categories = [...state.categories];
+      categories[idx] = nextCat;
+      const next = { ...state, categories };
+      if (nextName !== cur.name) {
+        if (Object.values(state.ingredients).some((v) => v && v.cat === cur.name)) {
+          next.ingredients = Object.fromEntries(Object.entries(state.ingredients).map(([n, v]) =>
+            [n, v && v.cat === cur.name ? { ...v, cat: nextName } : v]));
+        }
+        if (state.intros.some((it) => it.cat === cur.name)) {
+          next.intros = state.intros.map((it) => (it.cat === cur.name ? { ...it, cat: nextName } : it));
+        }
+      }
+      return next;
+    }
+    case "CATEGORY_DELETE": {
+      const { id } = action;
+      if (state.categories.length <= 1) return state; // 최소 1개는 남겨야 함
+      const target = state.categories.find((c) => c.id === id);
+      if (!target) return state;
+      const inUse = Object.values(state.ingredients).some((v) => v && v.cat === target.name);
+      if (inUse) return state; // 사용 중인 카테고리는 삭제 차단(재료들의 분류를 먼저 바꿔야 함)
+      return { ...state, categories: state.categories.filter((c) => c.id !== id) };
+    }
+
     /* ---- 구성원 프로필 (작성자 표시명·뱃지 색상) ----
        처음 등록 시 참여 순서대로 팔레트 색상을 배정. 이미 있으면 표시명만 갱신(색상·가입일 불변) */
     case "MEMBER_PROFILE_SET": {
@@ -580,7 +642,8 @@ function rawReducer(state, action) {
       const saved = withAuthorMeta(prev, nextRaw, action._actor, action._at);
       // 포함 재료가 재료 마스터에 없으면 등록 (UX-4 공통 규칙)
       let ingredients = state.ingredients;
-      ingredientsList.forEach((n) => { ingredients = ensureIngredientEntry(ingredients, n); });
+      const fallbackCat = defaultCategoryName(state);
+      ingredientsList.forEach((n) => { ingredients = ensureIngredientEntry(ingredients, n, null, {}, fallbackCat); });
       return { ...state, ingredients, products: { ...state.products, [id]: saved } };
     }
     case "PRODUCT_DELETE": {
@@ -768,6 +831,23 @@ const ACTIVITY_BUILDERS = {
     const target = prev.mealSlots.find((s) => s.id === action.id);
     if (!target) return null;
     return { kind: "delete", summary: `끼니 종류 삭제: ${target.label}` };
+  },
+  CATEGORY_ADD: (prev, next, action) => {
+    const added = next.categories.find((c) => !prev.categories.some((p) => p.id === c.id));
+    if (!added) return null;
+    return { kind: "create", summary: `카테고리 추가: ${added.name}` };
+  },
+  CATEGORY_UPDATE: (prev, next, action) => {
+    const prevCat = prev.categories.find((c) => c.id === action.id);
+    const nextCat = next.categories.find((c) => c.id === action.id);
+    if (!prevCat || !nextCat || prevCat === nextCat) return null;
+    return { kind: "update", summary: prevCat.name !== nextCat.name ? `카테고리 이름 변경: ${prevCat.name} → ${nextCat.name}` : `카테고리 색상 변경: ${nextCat.name}` };
+  },
+  CATEGORY_DELETE: (prev, next, action) => {
+    if (prev.categories.length === next.categories.length) return null;
+    const target = prev.categories.find((c) => c.id === action.id);
+    if (!target) return null;
+    return { kind: "delete", summary: `카테고리 삭제: ${target.name}` };
   },
   /* ---- 시판 이유식: 제품 등록·수정·삭제, 전역 토글 전환만 기록 (작성자 뱃지는 미노출) ---- */
   PRODUCT_UPSERT: (prev, next, action) => {
@@ -1048,9 +1128,11 @@ export function avgPlannedMealsPerDay(state) {
 
 // 재료 마스터(ingredients) 등록 공통 헬퍼 - 어떤 경로(식단·제조·먹어본 재료·급여 기록)로
 // 재료가 추가되든 동일한 규칙으로 등록되어 재료 정보(위키)에 즉시 노출됨 (UX-4)
-export function ensureIngredientEntry(ingredients, name, cat, extra = {}) {
+// fallbackCat: cat도, 영양 DB의 기본 분류도 없을 때 쓰는 최종 대체값 - 호출부에서 state.categories의
+// 첫 카테고리(defaultCategoryName)를 넘겨줌(사용자가 카테고리를 삭제/개명해도 항상 실제 존재하는 이름이 되도록)
+export function ensureIngredientEntry(ingredients, name, cat, extra = {}, fallbackCat = "채소") {
   if (!name || ingredients[name]) return ingredients;
-  return { ...ingredients, [name]: { cat: cat || DB_CATEGORY[name] || "채소", unitG: 15, favorite: false, ...extra } };
+  return { ...ingredients, [name]: { cat: cat || DB_CATEGORY[name] || fallbackCat, unitG: 15, favorite: false, ...extra } };
 }
 
 // 재료명 정규화: 앞뒤 공백 제거. 빈 문자열이면 null 반환 (등록 거부용)
@@ -1080,10 +1162,34 @@ export function unrestorableStockNames(state, logsArr) {
 }
 
 /* ----------------------------- 공통 계산 헬퍼 ----------------------------- */
+// 카테고리 관리 (state.categories) 조회 헬퍼 - 화면 코드는 theme.js의 정적 값 대신 이 함수들로
+// 항상 사용자가 직접 수정/추가/삭제한 최신 카테고리 목록을 참조한다
+export function categoryList(state) {
+  return state.categories || [];
+}
+export function categoryNames(state) {
+  return categoryList(state).map((c) => c.name);
+}
+export function categoryMap(state) {
+  const m = {};
+  categoryList(state).forEach((c) => { m[c.name] = c; });
+  return m;
+}
+// 재료의 cat 값이 삭제/이름변경으로 더 이상 존재하지 않는 카테고리를 가리킬 때의 안전한 대체값
+export function defaultCategoryName(state) {
+  const first = categoryList(state)[0];
+  return first ? first.name : "미분류";
+}
+// 이 카테고리 이름을 현재 사용 중인 재료 수 - 카테고리 삭제 가능 여부 판단(사용 중이면 삭제 차단)에 사용
+export function categoryUsageCount(state, name) {
+  return Object.values(state.ingredients).filter((v) => v && v.cat === name).length;
+}
+
 export function catOf(state, name) {
   const reg = state.ingredients[name] || SEED_INGREDIENTS[name];
-  if (reg) return reg.cat;
-  return DB_CATEGORY[name] || "채소"; // 등록 전이라도 영양 DB에 있는 재료는 올바른 카테고리로 표시
+  const cat = reg ? reg.cat : DB_CATEGORY[name]; // 등록 전이라도 영양 DB에 있는 재료는 올바른 카테고리로 표시
+  if (cat && categoryNames(state).includes(cat)) return cat;
+  return defaultCategoryName(state); // 삭제/이름변경으로 더 이상 존재하지 않는 카테고리를 가리키던 경우 안전한 대체값
 }
 
 export function unitGOf(state, name) {
@@ -1126,14 +1232,15 @@ export function productCatSplit(state, productId, g) {
     const share = g / ingNames.length;
     ingNames.forEach((n) => { const c = catOf(state, n); out[c] = (out[c] || 0) + share; });
   } else {
-    CATEGORIES.forEach((c) => { out[c] = g * (GENERIC_PRODUCT_CAT_RATIO[c] || 0); });
+    // 사용자가 카테고리를 새로 추가·개명한 경우 이 일반 비율표엔 없을 수 있어 그런 카테고리는 0으로 처리됨(자연스러운 폴백)
+    categoryNames(state).forEach((c) => { out[c] = g * (GENERIC_PRODUCT_CAT_RATIO[c] || 0); });
   }
   return out;
 }
 
 // 시판 제품도 포함 재료(또는 일반 비율 추정)를 기준으로 카테고리별 재료 섭취 통계에 함께 반영
 export function catTotals(state, items) {
-  const t = {}; CATEGORIES.forEach((c) => { t[c] = 0; });
+  const t = {}; categoryNames(state).forEach((c) => { t[c] = 0; });
   items.forEach((it) => {
     if (it.source === "product") {
       const split = productCatSplit(state, it.productId, gOf(state, it));
@@ -1148,12 +1255,13 @@ export function catTotals(state, items) {
 // 재료 목록 정렬: 죽 → 단백질 → 채소 → 과일 순, 동일 카테고리 내에서는 가나다순, 시판 제품은 항상 맨 뒤
 // (끼니 재료 나열, 재료 선택, 먹어본 재료 등 재료가 리스트업되는 모든 곳에서 공통 사용)
 export function sortByCategory(state, list, nameOf = (x) => x.name) {
+  const cats = categoryNames(state);
   return [...list].sort((a, b) => {
     const ap = a.source === "product", bp = b.source === "product";
     if (ap !== bp) return ap ? 1 : -1;
     if (ap && bp) return (a.productName || "").localeCompare(b.productName || "", "ko");
-    const oa = CATEGORIES.indexOf(catOf(state, nameOf(a)));
-    const ob = CATEGORIES.indexOf(catOf(state, nameOf(b)));
+    const oa = cats.indexOf(catOf(state, nameOf(a)));
+    const ob = cats.indexOf(catOf(state, nameOf(b)));
     if (oa !== ob) return oa - ob;
     return nameOf(a).localeCompare(nameOf(b), "ko");
   });

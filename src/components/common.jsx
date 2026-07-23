@@ -1,9 +1,9 @@
 /* 공용 UI 컴포넌트 - 배지·리스트·모달·시간 선택 등 화면들이 공유 (C-2 파일 분리) */
 import React, { useState, useEffect } from "react";
 import { ChevronLeft, X } from "lucide-react";
-import { C, CATEGORY, CATEGORIES, selectStyle, PRODUCT_COLOR } from "../theme";
+import { C, selectStyle, PRODUCT_COLOR } from "../theme";
 import { fmtTime } from "../lib/dates";
-import { catOf, gOf, catTotals, sortByCategory } from "../state/appState";
+import { catOf, categoryList, categoryMap, gOf, catTotals, sortByCategory } from "../state/appState";
 import { useStore } from "../store";
 
 export function CubeMark({ size = 18 }) {
@@ -55,7 +55,7 @@ export function Segmented({ options, value, onChange }) {
 
 export function CatDot({ name, size = 7 }) {
   const { state } = useStore();
-  const color = (CATEGORY[catOf(state, name)] || {}).color || C.muted;
+  const color = (categoryMap(state)[catOf(state, name)] || {}).color || C.muted;
   return <span style={{ display: "inline-block", width: size, height: size, borderRadius: "50%",
     background: color, marginRight: 6, flexShrink: 0 }} />;
 }
@@ -67,12 +67,13 @@ export function ProductDot({ size = 7 }) {
 }
 
 export function CategoryLegend() {
+  const { state } = useStore();
   return (
     <div className="flex items-center" style={{ gap: 13, flexWrap: "wrap" }}>
-      {Object.values(CATEGORY).map((v) => (
-        <div key={v.label} className="flex items-center" style={{ gap: 5 }}>
+      {categoryList(state).map((v) => (
+        <div key={v.id} className="flex items-center" style={{ gap: 5 }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: v.color, display: "inline-block" }} />
-          <span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>{v.label}</span>
+          <span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>{v.name}</span>
         </div>
       ))}
     </div>
@@ -82,11 +83,12 @@ export function CategoryLegend() {
 export function CategoryBar({ items, height = 6 }) {
   const { state } = useStore();
   const totals = catTotals(state, items);
+  const cm = categoryMap(state);
   const sum = Object.values(totals).reduce((a, b) => a + b, 0) || 1;
   return (
     <div style={{ display: "flex", width: "100%", height, borderRadius: height / 2, overflow: "hidden", background: C.border }}>
       {Object.entries(totals).map(([cat, g]) =>
-        g > 0 ? <div key={cat} style={{ width: `${(g / sum) * 100}%`, background: CATEGORY[cat].color }} /> : null
+        g > 0 ? <div key={cat} style={{ width: `${(g / sum) * 100}%`, background: (cm[cat] || {}).color || C.muted }} /> : null
       )}
     </div>
   );
@@ -94,11 +96,13 @@ export function CategoryBar({ items, height = 6 }) {
 
 // CategoryBar와 동일한 모양이지만, items 배열이 아니라 카테고리별 g 합계(totals 객체)를 바로 받는 버전
 export function CategoryTotalsBar({ totals, height = 6 }) {
+  const { state } = useStore();
+  const cm = categoryMap(state);
   const sum = Object.values(totals).reduce((a, b) => a + b, 0) || 1;
   return (
     <div style={{ display: "flex", width: "100%", height, borderRadius: height / 2, overflow: "hidden", background: C.border }}>
       {Object.entries(totals).map(([cat, g]) =>
-        g > 0 ? <div key={cat} style={{ width: `${(g / sum) * 100}%`, background: CATEGORY[cat].color }} /> : null
+        g > 0 ? <div key={cat} style={{ width: `${(g / sum) * 100}%`, background: (cm[cat] || {}).color || C.muted }} /> : null
       )}
     </div>
   );
@@ -357,8 +361,10 @@ export function BottomSheet({ title, onClose, maxHeight = "78%", children }) {
    기록 탭
    ===================================================================== */
 export function Chip({ children, cat, tone = "default", onClick, onDelete }) {
+  const { state } = useStore();
   const tones = { default: { bg: C.sageLight, fg: C.sageDeep }, warn: { bg: C.apricotLight, fg: C.apricot } };
-  const tn = (cat && CATEGORY[cat]) ? { bg: CATEGORY[cat].light, fg: CATEGORY[cat].color } : tones[tone];
+  const catInfo = cat && categoryMap(state)[cat];
+  const tn = catInfo ? { bg: catInfo.light, fg: catInfo.color } : tones[tone];
   return (
     <span className="flex items-center" style={{ background: tn.bg, borderRadius: 999, overflow: "hidden" }}>
       <button onClick={onClick} disabled={!onClick} style={{ background: "none", border: "none", padding: onDelete ? "5px 4px 5px 10px" : "5px 10px",

@@ -1,11 +1,11 @@
 /* 더보기 탭 - 설정·공유 멤버·여행 모드·끼니 설정 */
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen, MessageSquareText, Copy, Trash2, Send } from "lucide-react";
+import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen, MessageSquareText, Copy, Trash2, Send, Palette } from "lucide-react";
 import { db } from "../firebase";
 import { doc, setDoc } from "firebase/firestore";
 import { C, primaryBtn, selectStyle } from "../theme";
 import { addDaysISO, ageText, fmtTime, todayISO, uid } from "../lib/dates";
-import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, avgPlannedMealsPerDay, isStaple, migrateState } from "../state/appState";
+import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, avgPlannedMealsPerDay, categoryUsageCount, isStaple, migrateState } from "../state/appState";
 import { useStore } from "../store";
 import { authorTime, CatDot, ConfirmModal, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { downloadFile, feedingLogsToCSV } from "../lib/exporters";
@@ -613,11 +613,112 @@ export function MealSlotEditModal({ slot, timeFmt, onClose }) {
   );
 }
 
+/* =====================================================================
+   카테고리 관리 (재료 분류 이름·라벨 색상을 사용자가 직접 추가/수정/삭제)
+   이름을 바꾸면 이미 등록된 재료·먹어본 재료 기록에도 새 이름이 캐스케이드로 반영됨(리듀서 처리).
+   삭제는 최소 1개를 남겨야 하고, 그 카테고리를 쓰는 재료가 있으면 막힘(리듀서가 조용히 no-op하므로
+   여기서 미리 검사해 이유를 안내함) - MealSlotsScreen과 동일한 목록+수정모달 구조를 따름
+   ===================================================================== */
+export function CategoriesScreen({ onBack }) {
+  const { state } = useStore();
+  const [editing, setEditing] = useState(null); // null | 'new' | categoryObj
+  const cats = state.categories;
+
+  return (
+    <div style={{ paddingBottom: 90, position: "relative" }}>
+      <SubHeader title="카테고리 관리" onBack={onBack} right={
+        <button onClick={() => setEditing("new")} className="flex items-center" style={{ gap: 3, background: "none", border: "none", cursor: "pointer" }}>
+          <Plus size={14} color={C.sageDeep} /><span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>추가</span>
+        </button>
+      } />
+      <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, padding: "0 2px" }}>
+          재료를 분류하는 카테고리의 이름과 라벨 색상을 직접 관리할 수 있어요. 이름을 바꾸면 이미 등록된 재료·먹어본 재료 기록에도 새 이름이 함께 반영돼요.
+        </div>
+        {cats.map((c) => (
+          <button key={c.id} onClick={() => setEditing(c)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "13px 14px", cursor: "pointer" }}>
+            <div className="flex items-center" style={{ gap: 10 }}>
+              <span style={{ width: 18, height: 18, borderRadius: "50%", background: c.color, flexShrink: 0, border: `1px solid ${C.border}` }} />
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{c.name}</span>
+            </div>
+            <div className="flex items-center" style={{ gap: 6 }}>
+              <span style={{ fontSize: 11, color: C.muted }}>{categoryUsageCount(state, c.name)}개 재료</span>
+              <ChevronRight size={15} color={C.muted} />
+            </div>
+          </button>
+        ))}
+      </div>
+      {editing && <CategoryEditModal category={editing} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+export function CategoryEditModal({ category, onClose }) {
+  const { state, dispatch, notify } = useStore();
+  const isNew = category === "new";
+  const base = isNew ? {} : category;
+  const [name, setName] = useState(base.name || "");
+  const [color, setColor] = useState(base.color || "#9A9285");
+  const [confirmingDel, setConfirmingDel] = useState(false);
+  const trimmed = name.trim();
+  const dup = trimmed && state.categories.some((c) => c.name === trimmed && c.id !== base.id);
+
+  const save = () => {
+    if (!trimmed || dup) return;
+    if (isNew) dispatch({ type: "CATEGORY_ADD", name: trimmed, color });
+    else dispatch({ type: "CATEGORY_UPDATE", id: base.id, patch: { name: trimmed, color } });
+    onClose();
+  };
+  const del = () => {
+    setConfirmingDel(false);
+    if (state.categories.length <= 1) { notify("카테고리는 최소 1개 이상 있어야 해요"); return; }
+    const usage = categoryUsageCount(state, base.name);
+    if (usage > 0) { notify(`'${base.name}' 카테고리를 사용 중인 재료가 ${usage}개 있어서 삭제할 수 없어요. 먼저 재료들의 카테고리를 바꿔 주세요.`); return; }
+    dispatch({ type: "CATEGORY_DELETE", id: base.id });
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 50, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", borderRadius: "20px 20px 0 0", padding: "16px 18px calc(26px + env(safe-area-inset-bottom))", position: "relative" }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{isNew ? "카테고리 추가" : "카테고리 수정"}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} color={C.muted} /></button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>이름</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 견과류"
+              style={{ border: "none", background: "transparent", textAlign: "right", fontSize: 13, fontWeight: 700, color: C.ink, width: 150, outline: "none" }} />
+          </div>
+          {dup && <div style={{ fontSize: 11, color: C.apricot, padding: "0 2px" }}>이미 있는 카테고리 이름이에요</div>}
+          <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
+            <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>라벨 색상</span>
+            <input type="color" value={color} onChange={(e) => setColor(e.target.value)}
+              style={{ width: 40, height: 28, border: "none", background: "transparent", cursor: "pointer", padding: 0 }} />
+          </div>
+          <button onClick={save} disabled={!trimmed || dup} style={{ ...primaryBtn, opacity: !trimmed || dup ? 0.5 : 1, cursor: !trimmed || dup ? "default" : "pointer" }}>{isNew ? "추가" : "저장"}</button>
+          {!isNew && <button onClick={() => setConfirmingDel(true)} style={{ background: "none", border: "none", color: C.apricot, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "2px 0" }}>이 카테고리 삭제</button>}
+        </div>
+        {confirmingDel && (
+          <ConfirmModal
+            title={`'${base.name}' 카테고리를 삭제할까요?`}
+            message="이 카테고리를 사용 중인 재료가 있으면 삭제할 수 없어요."
+            onConfirm={del}
+            onCancel={() => setConfirmingDel(false)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function MoreTab({ go }) {
   const { notify } = useStore();
   const { needRefresh, checkForUpdate } = usePwaUpdate();
   const items = [
     { key: "mealSlots", icon: Clock, label: "끼니 설정", sub: "끼니 이름·시간 관리" },
+    { key: "categories", icon: Palette, label: "카테고리 관리", sub: "재료 분류 이름·색상 추가/수정/삭제" },
     { key: "manufactureHistory", icon: History, label: "제조 이력", sub: "재료별 제조 배치 기록 조회" },
     { key: "members", icon: Users, label: "공유 멤버", sub: "초대 코드 · 구성원 관리" },
     { key: "activity", icon: Activity, label: "활동 내역", sub: "누가 언제 기록·수정했는지 확인" },
