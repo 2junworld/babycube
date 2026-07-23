@@ -2,10 +2,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Plus, X, Check, Search, Star, Info } from "lucide-react";
-import { C, CATEGORIES } from "../theme";
+import { C } from "../theme";
 import { fmtTime, todayISO, uid } from "../lib/dates";
 import { DB_CATEGORY } from "../data/nutrition";
-import { catOf, normalizeIngredientName, productStockPacks, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
+import { catOf, categoryNames, defaultCategoryName, normalizeIngredientName, productStockPacks, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
 import { useStore } from "../store";
 import { BottomSheet, CatDot, ConfirmModal, MealItemList, NumInput, ProductDot, Segmented, useVisualViewport } from "./common";
 import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedTodayMap } from "../lib/pairing";
@@ -105,7 +105,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
   const vv = useVisualViewport();
   const [q, setQ] = useState(initialQuery);
   const [cat, setCat] = useState("전체");
-  const [newCat, setNewCat] = useState("채소");
+  const [newCat, setNewCat] = useState(() => defaultCategoryName(state));
   const [selected, setSelected] = useState([]);
   const [sortSel, setSortSelRaw] = useState(readSortPref);
   const setSortSel = (updater) => setSortSelRaw((s) => {
@@ -118,6 +118,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
   const entered = useSlideIn();
   const { dragX, dragging, handlers: swipeHandlers } = useSwitchSwipe({ onSwipeLeft: onSwitchToProduct ? () => onSwitchToProduct(q) : null });
   const names = Object.keys(state.ingredients);
+  const cats = categoryNames(state);
   // 새 재료 입력 시: 영양 DB에 있으면 카테고리 자동 선택, 변형 재료로 보이면 기본 재료의 카테고리를 미리 선택
   const newSuggestion = q && !names.includes(q) ? suggestBaseFor(state, q) : null;
   useEffect(() => {
@@ -153,7 +154,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
     if (aHas !== bHas) return aHas ? -1 : 1; // 재고 있는 재료가 항상 먼저
     return sortSel.stock === "asc" ? sa - sb : sb - sa;
   });
-  if (sortSel.cat) sortChain.push((a, b) => CATEGORIES.indexOf(catOf(state, a)) - CATEGORIES.indexOf(catOf(state, b)));
+  if (sortSel.cat) sortChain.push((a, b) => cats.indexOf(catOf(state, a)) - cats.indexOf(catOf(state, b)));
   sortChain.push((a, b) => a.localeCompare(b, "ko")); // 최종 안정 정렬(동률 시 이름순)
   const filtered = [...base].sort((a, b) => {
     for (const cmp of sortChain) {
@@ -210,7 +211,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
             </div>
           )}
           <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-            {["전체", ...CATEGORIES].map((c) => (
+            {["전체", ...cats].map((c) => (
               <button key={c} onClick={() => setCat(c)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
                 border: "none", background: cat === c ? C.sage : C.sageLight, color: cat === c ? "#fff" : C.sageDeep }}>{c}</button>
             ))}
@@ -238,7 +239,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
               </div>
               <div style={{ fontSize: 10.5, color: C.sageDeep, fontWeight: 700, marginBottom: 6 }}>카테고리</div>
               <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                {CATEGORIES.map((c) => (
+                {cats.map((c) => (
                   <button key={c} onClick={() => setNewCat(c)} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
                     border: "none", background: newCat === c ? C.sage : C.surface, color: newCat === c ? "#fff" : C.sageDeep }}>{c}</button>
                 ))}

@@ -2,10 +2,10 @@
 import React, { useState } from "react";
 import { ChevronRight, Plus, Trash2, X, Check, Refrigerator, Snowflake, ShoppingCart, AlertTriangle, Search } from "lucide-react";
 import { db } from "../firebase";
-import { C, CATEGORIES, primaryBtn, selectStyle, PRODUCT_COLOR, PRODUCT_COLOR_LIGHT } from "../theme";
+import { C, primaryBtn, selectStyle, PRODUCT_COLOR, PRODUCT_COLOR_LIGHT } from "../theme";
 import { addDaysISO, todayISO } from "../lib/dates";
 import { NUTRIENT_TAGS, TAG_KEYS, TAG_LABELS } from "../data/nutrition";
-import { catOf, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
+import { catOf, categoryNames, defaultCategoryName, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
 import { AuthorInfo, BottomSheet, CatDot, ConfirmModal, CubeGrid, NumInput, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE, readStockPref, writeStockPref } from "./uiPrefs";
@@ -22,7 +22,7 @@ export function BatchModal({ presetName, onClose }) {
   const t = todayISO();
   const [name, setName] = useState(presetName || "");
   const [picker, setPicker] = useState(!presetName);
-  const [cat, setCat] = useState("채소");
+  const [cat, setCat] = useState(() => defaultCategoryName(state));
   const [date, setDate] = useState(t);
   const [unitG, setUnitG] = useState(name ? unitGOf(state, name) : 15);
   const [frozen, setFrozen] = useState(10);
@@ -54,7 +54,7 @@ export function BatchModal({ presetName, onClose }) {
           {name && !state.ingredients[name] && (
             <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
               <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>카테고리</span>
-              <select value={cat} onChange={(e) => setCat(e.target.value)} style={selectStyle}>{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
+              <select value={cat} onChange={(e) => setCat(e.target.value)} style={selectStyle}>{categoryNames(state).map((c) => <option key={c}>{c}</option>)}</select>
             </div>
           )}
           <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
@@ -88,7 +88,9 @@ export function BatchModal({ presetName, onClose }) {
    재고 탭
    ===================================================================== */
 // 재고 탭 필터 칩: 전체 / 소진임박(urgentStockNames) / 냉동(냉동 수량 있음) / 냉장(냉장 수량 있음) / 카테고리별
-export const STOCK_FILTERS = ["전체", "소진임박", "냉동", "냉장", ...CATEGORIES];
+export function stockFilters(state) {
+  return ["전체", "소진임박", "냉동", "냉장", ...categoryNames(state)];
+}
 
 // 재고 탭 정렬 옵션: 기본은 카테고리순(카테고리 → 가나다순), 그 외 이름순/재고량순 선택 가능
 export const STOCK_SORT_OPTIONS = [
@@ -207,12 +209,13 @@ export function StockTab({ go }) {
   const setLayout = (v) => { setLayoutRaw(v); writeStockPref("bc_stock_layout", v); };
 
   const productStockOn = state.settings.productStockEnabled;
+  const cats = categoryNames(state);
   const allNames = Object.keys(state.stock).filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
   const urgent = urgentStockNames(state); // 이미 긴급도순으로 정렬돼 있음(냉장 보관중 > 냉동 보관기한 임박순)
   const urgentMap = new Map(urgent.map((u) => [u.name, u]));
   // 재료(문자열 이름)와 시판 제품을 한 목록으로 합쳐서 카테고리별로 함께 묶어 보여줌 - "시판"도 다른
   // 카테고리와 동일하게 필터 칩으로 선택해 따로 볼 수 있음(상단 고정 섹션 없이 통합)
-  const filters = [...STOCK_FILTERS, ...(productStockOn ? ["시판"] : [])];
+  const filters = [...stockFilters(state), ...(productStockOn ? ["시판"] : [])];
   const entries = [
     ...allNames.map((name) => ({ type: "ingredient", name })),
     ...(productStockOn ? Object.values(state.products).map((product) => ({ type: "product", product })) : []),
@@ -230,7 +233,7 @@ export function StockTab({ go }) {
   };
   const stockAmt = (e) => e.type === "product" ? productStockPacks(state, e.product.id) : stockTotalFrozenG(state, e.name) + stockFridgeG(state, e.name);
   const labelOf = (e) => e.type === "product" ? e.product.name : e.name;
-  const catRank = (e) => e.type === "product" ? CATEGORIES.length : CATEGORIES.indexOf(catOf(state, e.name));
+  const catRank = (e) => e.type === "product" ? cats.length : cats.indexOf(catOf(state, e.name));
   const sortEntries = (list) => {
     if (sortMode === "cat") return [...list].sort((a, b) => {
       const ra = catRank(a), rb = catRank(b);
@@ -610,7 +613,7 @@ export function IngredientInfoScreen({ name, onBack, go }) {
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 6 }}>카테고리</div>
             <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-              {CATEGORIES.map((c) => (
+              {categoryNames(state).map((c) => (
                 <button key={c} onClick={() => setMeta({ cat: c })} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
                   border: "none", background: catOf(state, name) === c ? C.sage : C.sageLight, color: catOf(state, name) === c ? "#fff" : C.sageDeep }}>{c}</button>
               ))}
@@ -754,12 +757,13 @@ export function IngredientInfoScreen({ name, onBack, go }) {
    먹어본 재료는 진하게(활성) 표시, 탭하면 재료/제품 상세 화면으로 이동
    ===================================================================== */
 const WIKI_EATEN_FILTERS = ["전체", "이상없음", "관찰중", "안 먹어봄"];
-const WIKI_CATEGORIES = [...CATEGORIES, "시판"];
 
 export function IngredientWikiPanel({ go }) {
   const { state } = useStore();
+  const cats = categoryNames(state);
+  const wikiCategories = [...cats, "시판"];
   const [q, setQ] = useState("");
-  const [catFilter, setCatFilter] = useState([]); // 다중 선택, 빈 배열 = 전체. CATEGORIES + "시판"
+  const [catFilter, setCatFilter] = useState([]); // 다중 선택, 빈 배열 = 전체. 카테고리 목록 + "시판"
   const [eatenFilter, setEatenFilter] = useState("전체"); // 시판 제품에는 적용 안 됨(정책)
   const [editingProduct, setEditingProduct] = useState(null); // null | "new" | productObj
   // 먹어본 재료: intros 등록분 + 변형 재료를 먹었다면 그 기본 재료도 먹은 것으로 간주 (예: 사과퓨레 → 사과)
@@ -789,9 +793,9 @@ export function IngredientWikiPanel({ go }) {
     return true;
   });
   const byCat = {};
-  CATEGORIES.forEach((c) => { byCat[c] = []; });
-  filtered.forEach((n) => { (byCat[catOf(state, n)] || byCat["채소"]).push(n); });
-  CATEGORIES.forEach((c) => {
+  cats.forEach((c) => { byCat[c] = []; });
+  filtered.forEach((n) => { (byCat[catOf(state, n)] || byCat[cats[0]]).push(n); });
+  cats.forEach((c) => {
     byCat[c].sort((a, b) => {
       const ea = eaten.has(a), eb = eaten.has(b);
       if (ea !== eb) return ea ? -1 : 1; // 먹어본 재료 먼저
@@ -813,7 +817,7 @@ export function IngredientWikiPanel({ go }) {
       </div>
       <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
         <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>카테고리</span>
-        {WIKI_CATEGORIES.map((c) => (
+        {wikiCategories.map((c) => (
           <button key={c} onClick={() => toggleCat(c)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
             border: `1px solid ${catFilter.includes(c) ? C.sage : C.border}`, background: catFilter.includes(c) ? C.sageLight : "transparent", color: catFilter.includes(c) ? C.sageDeep : C.muted }}>{c}</button>
         ))}
@@ -833,7 +837,7 @@ export function IngredientWikiPanel({ go }) {
       {filtered.length === 0 && productList.length === 0 && (
         <div style={{ textAlign: "center", padding: "24px 0", fontSize: 12, color: C.muted }}>조건에 맞는 항목이 없어요</div>
       )}
-      {CATEGORIES.map((cat) => byCat[cat].length > 0 && (
+      {cats.map((cat) => byCat[cat].length > 0 && (
         <div key={cat}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 6px", padding: "0 2px" }}>{cat} ({byCat[cat].length})</div>
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>

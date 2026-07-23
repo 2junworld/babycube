@@ -1,7 +1,7 @@
 /* 동기화 계층 - 로그인·가족 설정·Firestore 실시간 동기화·데모 Provider (C-2 2단계) */
 import React, { useState, useEffect, useReducer, useRef, useCallback } from "react";
 import { db, auth, googleProvider } from "../firebase";
-import { doc, setDoc, getDoc, updateDoc, onSnapshot, arrayUnion } from "firebase/firestore";
+import { doc, setDoc, getDoc, updateDoc, onSnapshot, arrayUnion, addDoc, collection } from "firebase/firestore";
 import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "firebase/auth";
 import { C, FONT_IMPORT, primaryBtn, MEMBER_COLOR_PALETTE } from "../theme";
 import { addDaysISO, todayISO, uid } from "../lib/dates";
@@ -346,6 +346,27 @@ export function FamilyStoreProvider({ familyId, user, onLogout }) {
     window.addEventListener("online", retry);
     return () => window.removeEventListener("online", retry);
   }, [ready, familyId]);
+
+  // 개선 제안함을 가족별 state → 전체 공유 컬렉션(globalFeedback)으로 옮기는 1회성 마이그레이션.
+  // 이 기능이 가족별 state.feedback이던 시절에 이미 남겨진 제안이 있으면 새 컬렉션에 복사한 뒤
+  // 로컬에서 비운다(FEEDBACK_MIGRATED). 실패하면 state.feedback이 그대로 남아 다음 로드 때 재시도됨
+  useEffect(() => {
+    if (!ready) return;
+    const old = state.feedback;
+    if (!old || old.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        for (const f of old) {
+          const by = f.by || user.uid;
+          const byName = (state.memberProfiles[by] || {}).name || user.displayName || "익명";
+          await addDoc(collection(db, "globalFeedback"), { text: f.text, by, byName, familyId, at: f.at || new Date().toISOString() });
+        }
+        if (!cancelled) dispatch({ type: "FEEDBACK_MIGRATED" });
+      } catch { /* 실패하면 state.feedback이 비워지지 않아 다음 로드 때 다시 시도됨 */ }
+    })();
+    return () => { cancelled = true; };
+  }, [ready, state.feedback, familyId, user.uid, user.displayName, dispatch]);
 
   const leaveFamily = async () => {
     const ref = doc(db, "families", familyId);

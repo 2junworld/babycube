@@ -1,8 +1,7 @@
 /* 급여 통계 (주간 섭취율·월간 리포트·제조량) */
 import React from "react";
 import { addDaysISO, todayISO } from "./dates";
-import { catOf, gOf, logProvideG, productCatSplit } from "../state/appState";
-import { CATEGORIES } from "../theme";
+import { catOf, categoryNames, gOf, logProvideG, productCatSplit } from "../state/appState";
 
 export function weeklyRates(state) {
   const t = todayISO();
@@ -26,7 +25,7 @@ export function weeklyRates(state) {
    함께 반영하고(productCatSplit), 재료별(topIngredients) 집계는 함량을 정확히 알 수 없어 기존대로 제외.
    "제작 vs 시판" 비율(끼니 수 기준)은 별도로 함께 집계한다 */
 export function monthStats(state, year, month) {
-  const catTotals = {}; CATEGORIES.forEach((c) => { catTotals[c] = 0; });
+  const catTotals = {}; categoryNames(state).forEach((c) => { catTotals[c] = 0; });
   const ingredientTotals = {}; // 재료명 -> 추정 섭취 g
   let totalProv = 0, totalIntake = 0, count = 0, productMealCount = 0;
   Object.keys(state.logs).forEach((d) => {
