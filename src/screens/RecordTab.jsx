@@ -61,8 +61,23 @@ export function FeedingWeekPanel({ go }) {
                 </div>
                 {labels.map((lab) => {
                   const cellLogs = findLogs(lab);
-                  // 기록이 없는 칸: 계획만 있음/계획도 없음/미래 날짜 모두 구분 없이 빈 칸으로 표시
-                  if (cellLogs.length === 0) return <div key={lab} />;
+                  if (cellLogs.length === 0) {
+                    if (iso > t) return <div key={lab} />; // 미래 날짜는 기록할 대상이 없으므로 빈 칸 그대로
+                    // 계획은 있었는데 아직 기록 안 한 지난 끼니는 "미기록"으로 눈에 띄게 표시(개선 요청) -
+                    // 계획도 기록도 없는 칸은 옅은 + 표시만 해서 눌러서 바로 기록할 수 있게 함
+                    const missed = iso < t && (state.plans[iso] || []).some((m) => m.label === lab);
+                    return (
+                      <button key={lab} onClick={() => go("dayRecord", { date: iso })}
+                        style={{ padding: "0 4px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 2,
+                          background: "none", border: "none", cursor: "pointer" }}>
+                        {missed ? (
+                          <span style={{ fontSize: 8.5, fontWeight: 800, background: C.apricotLight, color: C.apricot, padding: "2px 6px", borderRadius: 999 }}>미기록</span>
+                        ) : (
+                          <Plus size={14} color={C.muted} />
+                        )}
+                      </button>
+                    );
+                  }
                   const prov = cellLogs.reduce((s, l) => s + logProvideG(l), 0);
                   const intake = cellLogs.reduce((s, l) => s + (l.intakeG || 0), 0);
                   const pct = prov ? Math.round((intake / prov) * 100) : 0;
@@ -116,8 +131,14 @@ export function FeedingWeekPanel({ go }) {
 export function FeedingMonthPanel({ go }) {
   const { state } = useStore();
   const t = todayISO();
-  const [ym, setYm] = useState(() => ({ y: Number(t.slice(0, 4)), m: Number(t.slice(5, 7)) - 1 }));
-  const [selected, setSelected] = useState(t);
+  // 오늘 탭의 "기록 탭 월별로 이동" 바로가기가 넘겨준 날짜가 있으면 그 달·그 날짜로 바로 열림
+  const [ym, setYm] = useState(() => {
+    const d = UI_STATE.recordMonthSelected || t;
+    return { y: Number(d.slice(0, 4)), m: Number(d.slice(5, 7)) - 1 };
+  });
+  const [selected, setSelectedRaw] = useState(() => UI_STATE.recordMonthSelected || t);
+  const setSelected = (iso) => { setSelectedRaw(iso); UI_STATE.recordMonthSelected = iso; };
+  const [calcMode, setCalcMode] = useState("g"); // 달력 칸 표시 - "g"(섭취량) | "percent"(계획 대비 %)
   const shiftMonth = (n) => setYm((p) => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
 
   const first = new Date(ym.y, ym.m, 1);
@@ -126,6 +147,16 @@ export function FeedingMonthPanel({ go }) {
   const cells = [...Array(startPad).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
   const isoOf = (d) => `${ym.y}-${pad2(ym.m + 1)}-${pad2(d)}`;
   const dayIntakeG = (iso) => (state.logs[iso] || []).reduce((s, l) => s + (l.intakeG || 0), 0);
+  // 계획 대비 % - 그 날 식단표에 계획된 총량(g) 대비 실제 섭취량(g) 비율. 계획이 없는 날은 비교 대상이 없어 "-"
+  const dayPlannedG = (iso) => totalG(state, (state.plans[iso] || []).flatMap((m) => m.items));
+  // 계획은 있었는데 하나라도 기록이 안 된 지난 날짜 표시(개선 요청) - 오늘은 아직 하루가 안 끝났으니 제외
+  const dayMissed = (iso) => {
+    if (iso >= t) return false;
+    const planned = state.plans[iso] || [];
+    if (planned.length === 0) return false;
+    const loggedLabels = new Set((state.logs[iso] || []).map((l) => l.label));
+    return planned.some((m) => !loggedLabels.has(m.label));
+  };
   const monthTotal = cells.reduce((s, d) => d ? s + dayIntakeG(isoOf(d)) : s, 0);
   const selLogs = state.logs[selected] || [];
   const selTotal = selLogs.reduce((s, l) => s + (l.intakeG || 0), 0);
@@ -140,6 +171,13 @@ export function FeedingMonthPanel({ go }) {
         </div>
         {monthTotal > 0 && <span style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep }}>이 달 총 {monthTotal}g</span>}
       </div>
+      <div className="flex items-center" style={{ gap: 6 }}>
+        <span style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>달력 표시</span>
+        {[["g", "섭취량(g)"], ["percent", "계획 대비 %"]].map(([v, l]) => (
+          <button key={v} onClick={() => setCalcMode(v)} style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
+            border: `1px solid ${calcMode === v ? C.sage : C.border}`, background: calcMode === v ? C.sageLight : "transparent", color: calcMode === v ? C.sageDeep : C.muted }}>{l}</button>
+        ))}
+      </div>
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: 10 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
           {WD.map((d) => <span key={d} style={{ fontSize: 10, color: C.muted, fontWeight: 700, textAlign: "center" }}>{d}</span>)}
@@ -147,16 +185,26 @@ export function FeedingMonthPanel({ go }) {
             if (!d) return <div key={i} />;
             const iso = isoOf(d);
             const g = dayIntakeG(iso);
+            const planned = dayPlannedG(iso);
+            const pct = planned > 0 ? Math.round((g / planned) * 100) : null;
             const isToday = iso === t, isSel = iso === selected;
+            const missed = dayMissed(iso);
+            const bodyText = calcMode === "g" ? (g > 0 ? `${g}g` : "-") : (pct != null ? `${pct}%` : "-");
+            const bodyShown = calcMode === "g" ? g > 0 : pct != null;
             return (
               <button key={i} onClick={() => setSelected(iso)} className="flex flex-col items-center justify-center"
-                style={{ height: 46, borderRadius: 10, background: isSel ? C.sageLight : "transparent", cursor: "pointer",
+                style={{ position: "relative", height: 46, borderRadius: 10, background: isSel ? C.sageLight : "transparent", cursor: "pointer",
                   border: isToday ? `1.5px solid ${C.sage}` : isSel ? `1px solid ${C.sage}` : "1px solid transparent", padding: 0 }}>
+                {missed && <span style={{ position: "absolute", top: 4, right: 8, width: 5, height: 5, borderRadius: "50%", background: C.apricot }} />}
                 <span style={{ fontSize: 11.5, fontWeight: isToday ? 800 : 500, color: isToday ? C.sageDeep : C.inkSoft }}>{d}</span>
-                <span style={{ fontSize: 9, fontWeight: 800, color: g > 0 ? C.sageDeep : "transparent", marginTop: 2 }}>{g > 0 ? `${g}g` : "-"}</span>
+                <span style={{ fontSize: 9, fontWeight: 800, color: bodyShown ? C.sageDeep : "transparent", marginTop: 2 }}>{bodyText}</span>
               </button>
             );
           })}
+        </div>
+        <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, textAlign: "center" }}>
+          <span style={{ display: "inline-block", width: 5, height: 5, borderRadius: "50%", background: C.apricot, marginRight: 4, verticalAlign: 2 }} />
+          계획은 있었는데 아직 기록 안 한 날짜
         </div>
       </div>
       <div>
@@ -165,7 +213,7 @@ export function FeedingMonthPanel({ go }) {
           {selLogs.length > 0 && <span style={{ fontSize: 12.5, fontWeight: 800, color: C.sageDeep }}>총 {selTotal}g</span>}
         </div>
         {selLogs.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
             {selLogs.map((log) => {
               const prov = logProvideG(log);
               const pct = prov ? Math.round((log.intakeG / prov) * 100) : 0;
@@ -185,7 +233,15 @@ export function FeedingMonthPanel({ go }) {
               );
             })}
           </div>
-        ) : <div style={{ textAlign: "center", padding: "18px 0", fontSize: 12, color: C.muted }}>이 날짜엔 급여 기록이 없습니다</div>}
+        ) : <div style={{ textAlign: "center", padding: "12px 0", fontSize: 12, color: C.muted }}>이 날짜엔 급여 기록이 없습니다</div>}
+        {/* 지난 날짜(오늘 포함) 기록 추가 - 개선 제안 반영: 예전엔 "오늘" 탭에서만 기록을 남길 수 있어
+            지난 날짜에 깜빡한 기록을 나중에 추가할 방법이 없었음. 미래 날짜는 기록할 대상이 없으니 제외 */}
+        {selected <= t && (
+          <button onClick={() => go("dayRecord", { date: selected })} className="flex items-center justify-center"
+            style={{ width: "100%", gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.sageDeep, background: "transparent", cursor: "pointer" }}>
+            <Plus size={14} /> {selected.slice(5)} 기록 추가
+          </button>
+        )}
       </div>
     </div>
   );

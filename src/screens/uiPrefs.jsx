@@ -3,7 +3,7 @@ import React, { useState } from "react";
 
 // 탭 내부 화면 상태(서브탭·뷰 선택)를 세션 동안 기억 - 하위 화면(재료 정보 등)에 다녀와도
 // 탭이 리셋되지 않고 보던 화면으로 복귀하도록 함
-export const UI_STATE = { recordView: "table", recordTableRange: "week", stockSubTab: "stock" };
+export const UI_STATE = { recordView: "table", recordTableRange: "week", stockSubTab: "stock", recordMonthSelected: null };
 
 // 재고 탭 정렬·표시 설정을 기기에 저장 (탭 이동·앱 재시작 후에도 유지)
 export function readStockPref(key, fallback, validKeys) {
