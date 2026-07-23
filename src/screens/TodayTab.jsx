@@ -1,6 +1,6 @@
 /* 오늘 탭 - 오늘의 끼니 카드·바로 기록·소진 임박 재료 */
-import React, { useState } from "react";
-import { Plus, X, Refrigerator, Snowflake, ShoppingCart, ChevronLeft, ChevronRight } from "lucide-react";
+import React from "react";
+import { Plus, X, Refrigerator, Snowflake, ShoppingCart, ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
 import { C } from "../theme";
 import { WD, addDaysISO, ageText, fmtTime, todayISO } from "../lib/dates";
 import { logProvideG, totalG } from "../state/appState";
@@ -122,11 +122,9 @@ export function DayRecordScreen({ date, onBack, go }) {
 /* =====================================================================
    오늘 탭
    ===================================================================== */
-export function TodayTab({ go }) {
+export function TodayTab({ go, viewDate, setViewDate, onOpenRecordMonth }) {
   const { state, dispatch } = useStore();
   const t = todayISO();
-  // 오늘 탭에서 과거 날짜로 이동해 그날의 계획·기록을 바로 볼 수 있게(개선 요청) - 미래로는 못 감(기록할 대상이 없음)
-  const [viewDate, setViewDate] = useState(t);
   const isToday = viewDate === t;
   const rAlertsAll = fridgeAlerts(state);
   const fAlerts = frozenAlerts(state);
@@ -136,22 +134,30 @@ export function TodayTab({ go }) {
     <div style={{ paddingBottom: 90 }}>
       <ScreenHeader title="베이비큐브" right={<span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{ageText(state.baby.birth)} · {isToday ? "오늘" : viewDate.slice(5)}</span>} />
 
-      <div className="flex items-center justify-center" style={{ gap: 16, padding: "0 18px 12px" }}>
-        <button onClick={() => setViewDate(addDaysISO(viewDate, -1))} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+      {/* 3열 그리드로 좌(◀)/중(날짜)/우(▶·오늘로·바로가기)를 나눠, "오늘로" 버튼 유무와 무관하게
+          날짜 텍스트가 항상 화면 가운데에 오도록 함(오늘로가 오른쪽에만 붙어 밸런스가 안 맞던 문제 수정) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", padding: "0 18px 12px" }}>
+        <button onClick={() => setViewDate(addDaysISO(viewDate, -1))} style={{ justifySelf: "start", background: "none", border: "none", cursor: "pointer", padding: 4 }}>
           <ChevronLeft size={17} color={C.muted} />
         </button>
-        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, whiteSpace: "nowrap" }}>
           {isToday ? "오늘" : `${viewDate.slice(5)} (${WD[new Date(viewDate + "T00:00:00").getDay()]})`}
         </span>
-        <button onClick={() => setViewDate(addDaysISO(viewDate, 1))} disabled={isToday}
-          style={{ background: "none", border: "none", cursor: isToday ? "default" : "pointer", padding: 4, opacity: isToday ? 0.3 : 1 }}>
-          <ChevronRight size={17} color={C.muted} />
-        </button>
-        {!isToday && (
-          <button onClick={() => setViewDate(t)} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>
-            오늘로
+        <div style={{ justifySelf: "end", display: "flex", alignItems: "center", gap: 4 }}>
+          {!isToday && (
+            <button onClick={() => setViewDate(t)} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "4px 9px", cursor: "pointer" }}>
+              오늘로
+            </button>
+          )}
+          <button onClick={() => setViewDate(addDaysISO(viewDate, 1))} disabled={isToday}
+            style={{ background: "none", border: "none", cursor: isToday ? "default" : "pointer", padding: 4, opacity: isToday ? 0.3 : 1 }}>
+            <ChevronRight size={17} color={C.muted} />
           </button>
-        )}
+          {/* 기록 탭 → 급여표(월별)로 바로가기 - 보고 있던 날짜를 그대로 넘겨서 이어서 볼 수 있음 */}
+          <button onClick={() => onOpenRecordMonth(viewDate)} aria-label="기록 탭 월별로 이동" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+            <CalendarDays size={16} color={C.sageDeep} />
+          </button>
+        </div>
       </div>
 
       {rAlertsAll.length > 0 && !bannerHidden && isToday && (
