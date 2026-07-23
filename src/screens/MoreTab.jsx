@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen, MessageSquareText, Copy, Trash2, Send, Palette } from "lucide-react";
 import { db } from "../firebase";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, collection, addDoc, deleteDoc, onSnapshot, query, orderBy, limit } from "firebase/firestore";
 import { C, CATEGORY_COLOR_SWATCHES, primaryBtn, selectStyle } from "../theme";
 import { addDaysISO, ageText, fmtTime, todayISO, uid } from "../lib/dates";
 import { DOC_SIZE_LIMIT_BYTES, DOC_SIZE_WARN_BYTES, avgPlannedMealsPerDay, categoryUsageCount, isStaple, migrateState } from "../state/appState";
@@ -367,39 +367,69 @@ export function ActivityScreen({ onBack, go, filterUid, filterName }) {
 }
 
 /* =====================================================================
-   개선 제안함 - 가족 구성원 누구나 짧게 개선 아이디어·오류를 남길 수 있는 창구.
-   작성자(by)·시각(at)은 dispatch가 자동 주입하는 action._actor/_at을 그대로 기록에 남김(작성자 추적과 동일 방식).
-   "복사하기"로 전체 내용을 날짜·작성자 포함 텍스트로 클립보드에 담아, 나중에 이 텍스트를 그대로
-   Claude Code 세션에 붙여넣어 한 번에 분석·반영을 요청할 수 있게 함 (별도 백엔드·조회 도구 없이도
-   기존 Firestore 동기화 데이터를 사람이 손으로 옮기는 가장 단순한 방식)
+   개선 제안함 - 어느 가족이든 앱을 쓰는 누구나 짧게 개선 아이디어·오류를 남길 수 있는 창구.
+   가족별 state가 아니라 전체 공유 Firestore 컬렉션(globalFeedback)에 직접 저장·구독한다 -
+   가족마다 데이터가 완전히 분리되는 이 앱의 일반 구조상, 만약 state.feedback처럼 가족별로
+   저장했다면 다른 가족(예: 지인에게 안내 링크로 공유해 따로 가입한 사람)이 남긴 제안은 영영
+   보이지 않기 때문. globalFeedback은 조회는 로그인 없이도 가능하게 열어 두고(민감한 개인정보가
+   아니므로), 작성/삭제는 로그인한 사용자 본인 것만 가능하도록 보안 규칙에서 제한한다(firestore.rules 참고).
+   "전체 복사하기"로 날짜·작성자 포함 텍스트를 클립보드에 담아, 그대로 Claude Code 세션에
+   붙여넣어 분석·반영을 요청할 수 있다.
    ===================================================================== */
 export function FeedbackScreen({ onBack }) {
-  const { state, dispatch, notify } = useStore();
-  const profiles = state.memberProfiles || {};
+  const { state, notify, cloud } = useStore();
+  const isDemo = !cloud || cloud.familyId === "demo";
+  const myUid = cloud && cloud.user && cloud.user.uid;
+  const myName = (state.memberProfiles[myUid] || {}).name || (cloud && cloud.user && cloud.user.displayName) || "이름 없음";
   const [text, setText] = useState("");
   const [copied, setCopied] = useState(false);
+  const [demoList, setDemoList] = useState([]); // 데모 모드 전용 - 실제 Firestore에 저장하지 않음(기존 데모 철학 유지)
+  const [cloudList, setCloudList] = useState(null); // null = 아직 로딩 중
 
-  const submit = () => {
+  useEffect(() => {
+    if (isDemo) return;
+    const q = query(collection(db, "globalFeedback"), orderBy("at", "desc"), limit(300));
+    const unsub = onSnapshot(q, (snap) => setCloudList(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), () => setCloudList([]));
+    return unsub;
+  }, [isDemo]);
+
+  const list = isDemo ? demoList : (cloudList || []);
+  const loading = !isDemo && cloudList === null;
+
+  const submit = async () => {
     const t = text.trim();
     if (!t) return;
-    dispatch({ type: "FEEDBACK_ADD", text: t });
     setText("");
+    if (isDemo) {
+      setDemoList((p) => [{ id: uid(), text: t, by: myUid, byName: myName, familyId: "demo", at: new Date().toISOString() }, ...p]);
+      return;
+    }
+    try {
+      await addDoc(collection(db, "globalFeedback"), { text: t, by: myUid, byName: myName, familyId: cloud.familyId, at: new Date().toISOString() });
+    } catch {
+      notify("등록에 실패했어요. 인터넷 연결을 확인해 주세요");
+    }
   };
-  const remove = (f) => {
-    dispatch({ type: "FEEDBACK_DELETE", id: f.id });
-    notify("삭제했습니다", () => dispatch({ type: "RESTORE_FEEDBACK", entry: f }));
+  const remove = async (f) => {
+    if (isDemo) {
+      setDemoList((p) => p.filter((x) => x.id !== f.id));
+      notify("삭제했습니다", () => setDemoList((p) => [f, ...p]));
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, "globalFeedback", f.id));
+      notify("삭제했습니다", () => addDoc(collection(db, "globalFeedback"), { text: f.text, by: f.by, byName: f.byName, familyId: f.familyId, at: f.at }));
+    } catch {
+      notify("삭제에 실패했어요. 인터넷 연결을 확인해 주세요");
+    }
   };
 
-  const list = [...state.feedback].reverse();
   const dateTime = (iso) => {
     const d = new Date(iso);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${authorTime(iso)}`;
   };
   const copyAll = async () => {
-    const lines = [...state.feedback].map((f) => {
-      const name = (f.by && profiles[f.by] && profiles[f.by].name) || f.by || "알 수 없음";
-      return `- [${dateTime(f.at)}] ${name}: ${f.text}`;
-    });
+    const lines = list.map((f) => `- [${dateTime(f.at)}] ${f.byName || "알 수 없음"}: ${f.text}`);
     const digest = `### 베이비큐브 개선 제안 모음 (${list.length}건)\n${lines.join("\n")}`;
     try {
       await navigator.clipboard.writeText(digest);
@@ -415,7 +445,7 @@ export function FeedbackScreen({ onBack }) {
       <SubHeader title="개선 제안" onBack={onBack} />
       <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, padding: "0 2px" }}>
-          불편한 점이나 개선하면 좋을 아이디어를 자유롭게 남겨주세요. 나중에 모아서 한 번에 반영할게요.
+          불편한 점이나 개선하면 좋을 아이디어를 자유롭게 남겨주세요. 앱을 쓰는 모든 가족이 함께 보는 목록이라, 다른 분이 남긴 제안도 여기서 볼 수 있어요.
         </div>
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 12 }}>
           <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="예: 재고 화면 정렬 옵션이 헷갈려요" rows={3}
@@ -427,8 +457,8 @@ export function FeedbackScreen({ onBack }) {
         </div>
 
         <div className="flex items-center justify-between" style={{ padding: "0 2px" }}>
-          <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 700 }}>지금까지 {state.feedback.length}건</span>
-          {state.feedback.length > 0 && (
+          <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 700 }}>{loading ? "불러오는 중..." : `지금까지 ${list.length}건`}</span>
+          {list.length > 0 && (
             <button onClick={copyAll} className="flex items-center" style={{ gap: 5, background: "none", border: "none", color: C.sageDeep, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0 }}>
               <Copy size={12} /> {copied ? "복사됨!" : "전체 복사하기"}
             </button>
@@ -436,22 +466,23 @@ export function FeedbackScreen({ onBack }) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {list.length === 0 && (
+          {!loading && list.length === 0 && (
             <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted, lineHeight: 1.6 }}>
               아직 남겨진 제안이 없어요.<br />위에 첫 의견을 남겨보세요.
             </div>
           )}
           {list.map((f) => {
-            const p = f.by && profiles[f.by];
+            const mine = isDemo || f.by === myUid;
+            const otherFamily = !isDemo && f.familyId && f.familyId !== cloud.familyId;
             return (
               <div key={f.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 13px" }}>
                 <div className="flex items-center justify-between" style={{ marginBottom: 5 }}>
-                  <div className="flex items-center" style={{ gap: 6 }}>
-                    {p && <span style={{ width: 7, height: 7, borderRadius: "50%", background: p.color, flexShrink: 0 }} />}
-                    <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep }}>{p ? p.name : "알 수 없음"}</span>
+                  <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep }}>{f.byName || "알 수 없음"}</span>
                     <span style={{ fontSize: 10.5, color: C.muted }}>{dateTime(f.at)}</span>
+                    {otherFamily && <span style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 999, padding: "1px 7px" }}>다른 가족</span>}
                   </div>
-                  <button onClick={() => remove(f)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={13} color={C.apricot} /></button>
+                  {mine && <button onClick={() => remove(f)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={13} color={C.apricot} /></button>}
                 </div>
                 <div style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{f.text}</div>
               </div>

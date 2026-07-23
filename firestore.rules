@@ -47,5 +47,19 @@ service cloud.firestore {
     match /users/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+
+    // 개선 제안함(더보기 → 개선 제안): 가족 구분 없이 앱을 쓰는 모든 사람이 함께 보는 전체 공유 컬렉션.
+    // 재고·기록·아기 정보 같은 개인 데이터와 달리 민감정보가 아니라고 보고, 조회는 로그인 없이도
+    // 허용해 별도 계정 없이도(예: 개발 도구) 내용을 확인할 수 있게 열어둠. 작성·삭제는 로그인한
+    // 사용자 본인 것만 가능
+    match /globalFeedback/{id} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0 && request.resource.data.text.size() < 2000;
+      allow update: if false;
+      allow delete: if request.auth != null && request.auth.uid == resource.data.by;
+    }
   }
 }

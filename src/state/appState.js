@@ -45,7 +45,6 @@ export function seedState() {
     members: ["엄마", "아빠"],
     memberProfiles: {}, // uid → { name, color, joinedAt } - 작성자 표시명·뱃지 색상 (로그인 시 자동 등록)
     activity: [], // 최근 200건 활동 로그 (작성자 추적)
-    feedback: [], // 개선 제안함: [{id, text, by, at}] - 더보기 → 개선 제안에서 작성, 누가·언제인지 by/at으로 추적
     baby: { name: "", sex: "남아", birth: "" }, // 생년월일 미설정 - 설정 화면에서 입력 안내
     ui: { fridgeBannerHiddenDate: null },
     mealSlots: [
@@ -121,7 +120,6 @@ export function migrateState(s) {
   // 작성자 추적 기능 도입 - 구버전 데이터는 빈 값으로 시작 (기존 기록에 소급 기입하지 않음)
   if (!out.memberProfiles) out.memberProfiles = {};
   if (!out.activity) out.activity = [];
-  if (!out.feedback) out.feedback = [];
   // 시판 이유식 기능 도입 - 구버전 데이터는 빈 값/기본 OFF로 시작
   if (!out.products) out.products = {};
   if (!out.productStock) out.productStock = {};
@@ -480,17 +478,12 @@ function rawReducer(state, action) {
     case "INTRO_DELETE":
       return { ...state, intros: state.intros.filter((it) => it.id !== action.id) };
 
-    /* ---- 개선 제안함 (더보기 → 개선 제안) - action._actor/_at으로 누가·언제인지 자동 기록 ---- */
-    case "FEEDBACK_ADD": {
-      const text = (action.text || "").trim();
-      if (!text) return state;
-      const entry = { id: uid(), text, by: action._actor || null, at: action._at || new Date().toISOString() };
-      return { ...state, feedback: [...state.feedback, entry] };
-    }
-    case "FEEDBACK_DELETE":
-      return { ...state, feedback: state.feedback.filter((f) => f.id !== action.id) };
-    case "RESTORE_FEEDBACK":
-      return { ...state, feedback: [...state.feedback, action.entry] };
+    // 개선 제안함은 더 이상 가족별 state가 아니라 전체 공유 Firestore 컬렉션(globalFeedback)에 직접
+    // 저장됨(어느 가족이 올렸든 모두가 볼 수 있어야 하므로) - FeedbackScreen이 addDoc/onSnapshot으로 직접
+    // 다룸. 이 액션은 예전 방식(가족별 state.feedback)으로 이미 저장된 구버전 데이터를 1회 마이그레이션한
+    // 뒤 로컬에서 비우는 용도로만 남아있음 (providers.jsx의 마이그레이션 effect에서 호출)
+    case "FEEDBACK_MIGRATED":
+      return { ...state, feedback: [] };
 
     /* ---- 재료 마스터에 카테고리 지정하여 등록 (신규 재료 추가시) ----
        카테고리를 명시하지 않으면 영양 DB의 카테고리를 우선 사용, baseOf가 오면 변형 재료로 연결 */
