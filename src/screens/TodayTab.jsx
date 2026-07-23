@@ -1,8 +1,8 @@
 /* 오늘 탭 - 오늘의 끼니 카드·바로 기록·소진 임박 재료 */
-import React from "react";
-import { Plus, X, Refrigerator, Snowflake, ShoppingCart } from "lucide-react";
+import React, { useState } from "react";
+import { Plus, X, Refrigerator, Snowflake, ShoppingCart, ChevronLeft, ChevronRight } from "lucide-react";
 import { C } from "../theme";
-import { ageText, fmtTime, todayISO } from "../lib/dates";
+import { WD, addDaysISO, ageText, fmtTime, todayISO } from "../lib/dates";
 import { logProvideG, totalG } from "../state/appState";
 import { useStore } from "../store";
 import { CategoryBar, CubeGrid, IngredientTable, MealItemList, ScreenHeader, StatusBadge, SubHeader } from "../components/common";
@@ -125,15 +125,36 @@ export function DayRecordScreen({ date, onBack, go }) {
 export function TodayTab({ go }) {
   const { state, dispatch } = useStore();
   const t = todayISO();
+  // 오늘 탭에서 과거 날짜로 이동해 그날의 계획·기록을 바로 볼 수 있게(개선 요청) - 미래로는 못 감(기록할 대상이 없음)
+  const [viewDate, setViewDate] = useState(t);
+  const isToday = viewDate === t;
   const rAlertsAll = fridgeAlerts(state);
   const fAlerts = frozenAlerts(state);
   const bannerHidden = state.ui.fridgeBannerHiddenDate === t;
 
   return (
     <div style={{ paddingBottom: 90 }}>
-      <ScreenHeader title="베이비큐브" right={<span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{ageText(state.baby.birth)} · 오늘</span>} />
+      <ScreenHeader title="베이비큐브" right={<span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{ageText(state.baby.birth)} · {isToday ? "오늘" : viewDate.slice(5)}</span>} />
 
-      {rAlertsAll.length > 0 && !bannerHidden && (
+      <div className="flex items-center justify-center" style={{ gap: 16, padding: "0 18px 12px" }}>
+        <button onClick={() => setViewDate(addDaysISO(viewDate, -1))} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+          <ChevronLeft size={17} color={C.muted} />
+        </button>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>
+          {isToday ? "오늘" : `${viewDate.slice(5)} (${WD[new Date(viewDate + "T00:00:00").getDay()]})`}
+        </span>
+        <button onClick={() => setViewDate(addDaysISO(viewDate, 1))} disabled={isToday}
+          style={{ background: "none", border: "none", cursor: isToday ? "default" : "pointer", padding: 4, opacity: isToday ? 0.3 : 1 }}>
+          <ChevronRight size={17} color={C.muted} />
+        </button>
+        {!isToday && (
+          <button onClick={() => setViewDate(t)} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "4px 10px", cursor: "pointer" }}>
+            오늘로
+          </button>
+        )}
+      </div>
+
+      {rAlertsAll.length > 0 && !bannerHidden && isToday && (
         <div style={{ padding: "0 18px", marginBottom: 14 }}>
           <div className="flex items-start" style={{ gap: 10, background: C.apricotLight, borderRadius: 14, padding: "12px 14px" }}>
             <Refrigerator size={18} color={C.apricot} style={{ marginTop: 1, flexShrink: 0 }} />
@@ -152,10 +173,10 @@ export function TodayTab({ go }) {
       )}
 
       <div style={{ padding: "0 18px" }}>
-        <DayFeedingCards date={t} go={go} />
+        <DayFeedingCards date={viewDate} go={go} />
       </div>
 
-      {fAlerts.length > 0 && (
+      {fAlerts.length > 0 && isToday && (
         <div style={{ padding: "16px 18px 0" }}>
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14 }}>
             <div className="flex items-center" style={{ gap: 7, marginBottom: 10 }}>
