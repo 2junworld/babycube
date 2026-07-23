@@ -29,7 +29,7 @@ export const DEFAULT_CATEGORIES = [
 // 톤으로 확장한 새 색상이라 카테고리를 몇 개를 추가해도 앱 전체 분위기와 어울리게 유지됨
 export const CATEGORY_COLOR_SWATCHES = [
   "#9A9285", "#B9695C", "#6B8F71", "#E8B94A", "#7BA7BC", "#8E6FCB",
-  "#C17CA0", "#6FA88E", "#C98A4A", "#7C8FC4", "#9C9A5E", "#A97C63",
+  "#C17CA0", "#6FA88E", "#C98A4A", "#7C8FC4", "#9C9A5E", "#A97C63", "#D8C9A0",
 ];
 
 export const selectStyle = { border: `1px solid ${C.border}`, borderRadius: 8, padding: "4px 6px",
