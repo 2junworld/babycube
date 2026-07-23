@@ -2,7 +2,7 @@ import React from "react";
 import { AuthGate, DemoProvider, DemoFamilyFlow } from "./sync/providers";
 import { C, FONT_IMPORT, primaryBtn } from "./theme";
 import { CubeMark } from "./components/common";
-import { PwaUpdateProvider } from "./pwa";
+import { PwaUpdateProvider, WhatsNewSheet } from "./pwa";
 import GuidePage from "./screens/GuidePage";
 
 /* ============================================================================
@@ -57,6 +57,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <PwaUpdateProvider>
+        <WhatsNewSheet />
         {demoParam === "family" ? <DemoFamilyFlow /> : demoParam != null ? <DemoProvider /> : <AuthGate />}
       </PwaUpdateProvider>
     </ErrorBoundary>
