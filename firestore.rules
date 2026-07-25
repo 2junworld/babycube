@@ -48,6 +48,14 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
 
+    // 가족 메타 정보(예: families/{familyId}/meta/visionUsage - 성분표 AI 인식 일일 사용량 카운트).
+    // 재고·기록처럼 앱 클라이언트가 직접 쓰는 데이터는 아니고 api/parse-label.js가 사용자 본인의
+    // ID 토큰으로 대신 읽고 쓰므로, 가족 문서 자체와 동일하게 "그 가족 멤버만" 허용하면 충분함
+    match /families/{familyId}/meta/{doc} {
+      allow read, write: if request.auth != null
+        && request.auth.uid in get(/databases/$(database)/documents/families/$(familyId)).data.members;
+    }
+
     // 개선 제안함(더보기 → 개선 제안): 가족 구분 없이 앱을 쓰는 모든 사람이 함께 보는 전체 공유 컬렉션.
     // 재고·기록·아기 정보 같은 개인 데이터와 달리 민감정보가 아니라고 보고, 조회는 로그인 없이도
     // 허용해 별도 계정 없이도(예: 개발 도구) 내용을 확인할 수 있게 열어둠. 작성·삭제는 로그인한

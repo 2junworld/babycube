@@ -9,17 +9,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "firebase": "latest",
+    "jose": "^6.2.4",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest",
-    "recharts": "latest",
-    "firebase": "latest"
+    "recharts": "latest"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "tailwindcss": "latest",
     "@tailwindcss/vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "tailwindcss": "latest",
+    "vite": "latest",
     "vite-plugin-pwa": "latest"
   }
 }
