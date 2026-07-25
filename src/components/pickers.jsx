@@ -1,7 +1,7 @@
 /* 선택기 모달 - 재료·끼니 종류·식단 복사 */
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Plus, X, Check, Search, Star, Info } from "lucide-react";
+import { Plus, X, Check, Search, Star, Info, Camera } from "lucide-react";
 import { C } from "../theme";
 import { fmtTime, todayISO, uid } from "../lib/dates";
 import { DB_CATEGORY } from "../data/nutrition";
@@ -11,6 +11,7 @@ import { BottomSheet, CatDot, ConfirmModal, MealItemList, NumInput, ProductDot, 
 import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedTodayMap } from "../lib/pairing";
 import { primaryBtn } from "../theme";
 import { IngredientInfoScreen } from "../screens/StockTab";
+import { matchIngredientsFromLabel, resizeLabelImage } from "../lib/labelRecognition";
 
 // 재료 선택 ↔ 시판 제품 선택 시트를 좌우로 스와이프해서 전환하는 제스처 - 세로 스크롤(목록)과
 // 헷갈리지 않도록 가로 이동이 세로 이동보다 뚜렷할 때만 반응하고, 전환 콜백이 없는 방향은 살짝만
@@ -333,7 +334,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
    붙여서 쓴다(재료 선택기의 "검색어로 바로 새 재료 추가"와 동일한 경험을 시판 제품에도 제공)
    ===================================================================== */
 function ProductEditForm({ product, initialName, onSaved, onClose, go, embedded = false }) {
-  const { state, dispatch, notify } = useStore();
+  const { state, dispatch, notify, cloud } = useStore();
   const isNew = product === "new";
   const base = isNew ? {} : product;
   const [name, setName] = useState(base.name || initialName || "");
@@ -344,6 +345,53 @@ function ProductEditForm({ product, initialName, onSaved, onClose, go, embedded 
   const [picker, setPicker] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const canSave = name.trim() && ingredients.length > 0;
+
+  // 성분표 촬영으로 자동 입력(AI 인식, /api/parse-label) - 데모 모드는 실제 Firestore/서버를
+  // 건드리지 않는다는 기존 원칙에 따라 이 기능도 제외(로그인 계정이 있어야 ID 토큰을 얻을 수 있음)
+  const isDemo = !cloud || cloud.familyId === "demo";
+  const [recognizing, setRecognizing] = useState(false);
+  const [recogError, setRecogError] = useState("");
+  const [recogInfo, setRecogInfo] = useState(null); // { newOnes, excluded, allergyHits }
+  const labelInputRef = useRef(null);
+
+  const handleLabelFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // 같은 사진을 다시 골라도 onChange가 동작하도록 초기화
+    if (!file) return;
+    setRecogError("");
+    setRecogInfo(null);
+    setRecognizing(true);
+    try {
+      const base64 = await resizeLabelImage(file);
+      const idToken = await cloud.user.getIdToken();
+      const res = await fetch("/api/parse-label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64, idToken, familyId: cloud.familyId }),
+      });
+      if (res.status === 401) { setRecogError("인증에 실패했어요. 다시 로그인한 뒤 시도해 주세요."); return; }
+      if (res.status === 429) { setRecogError("오늘 인식 한도를 모두 사용했어요. 아래에 직접 입력해 주세요."); return; }
+      if (res.status === 422) { setRecogError("성분표를 인식하지 못했어요. 성분표 글씨가 잘 보이게 다시 촬영해 주세요."); return; }
+      if (!res.ok) { setRecogError("인식 중 문제가 생겼어요. 잠시 후 다시 시도하거나 직접 입력해 주세요."); return; }
+      const data = await res.json();
+      // 이미 값이 있는 필드는 덮어쓰지 않음 - 사용자가 먼저 입력해둔 내용을 AI 결과가 지우지 않게
+      if (data.productName && !name.trim()) setName(data.productName);
+      if (data.manufacturer && !brand.trim()) setBrand(data.manufacturer);
+      const { matched, newOnes, excluded } = matchIngredientsFromLabel(state, data.ingredients);
+      const added = [...matched, ...newOnes];
+      setIngredients((prev) => Array.from(new Set([...prev, ...added])));
+      // 이 앱의 제품 모델엔 월령 전용 필드가 없어(과도한 스키마 확장 대신) 메모에 짧게 남김
+      if (data.stage && !memo.trim()) setMemo(`월령: ${data.stage}`);
+      // 알레르기 경고 - 이 가정에서 이미 주의/중단 이력이 있는 재료가 섞여 있으면 눈에 띄게 안내
+      const warnNames = new Set(state.intros.filter((it) => it.status === "주의" || it.status === "중단").map((it) => it.name));
+      const allergyHits = added.filter((n) => warnNames.has(n));
+      setRecogInfo({ newOnes, excluded, allergyHits });
+    } catch {
+      setRecogError("인식 중 문제가 생겼어요. 인터넷 연결을 확인하거나 직접 입력해 주세요.");
+    } finally {
+      setRecognizing(false);
+    }
+  };
 
   const save = () => {
     if (!canSave) return;
@@ -362,6 +410,31 @@ function ProductEditForm({ product, initialName, onSaved, onClose, go, embedded 
 
   return (
     <>
+      {!isDemo && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <button onClick={() => labelInputRef.current && labelInputRef.current.click()} disabled={recognizing}
+            className="flex items-center justify-center" style={{ gap: 6, background: C.sageLight, border: "none", borderRadius: 10, padding: "10px 0",
+              fontSize: 12.5, fontWeight: 700, color: C.sageDeep, cursor: recognizing ? "default" : "pointer", opacity: recognizing ? 0.6 : 1 }}>
+            <Camera size={14} /> {recognizing ? "성분표 인식하는 중..." : "성분표 촬영으로 자동 입력"}
+          </button>
+          <input ref={labelInputRef} type="file" accept="image/*" capture="environment" onChange={handleLabelFile} style={{ display: "none" }} />
+          <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.4 }}>
+            AI가 인식한 결과는 그대로 저장되지 않아요 — 아래 내용을 확인한 뒤 저장해 주세요.
+          </div>
+          {recogError && <div style={{ fontSize: 11.5, color: C.apricot, fontWeight: 600, lineHeight: 1.4 }}>{recogError}</div>}
+          {recogInfo && recogInfo.allergyHits.length > 0 && (
+            <div style={{ fontSize: 11, color: C.apricot, fontWeight: 700, background: C.apricotLight, borderRadius: 8, padding: "7px 9px", lineHeight: 1.4 }}>
+              ⚠ 주의/중단 이력이 있는 재료가 포함돼 있어요: {recogInfo.allergyHits.join(", ")}
+            </div>
+          )}
+          {recogInfo && (recogInfo.newOnes.length > 0 || recogInfo.excluded.length > 0) && (
+            <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.6 }}>
+              {recogInfo.newOnes.length > 0 && <div>재료 마스터에 없어 새로 추가됨: {recogInfo.newOnes.join(", ")}</div>}
+              {recogInfo.excluded.length > 0 && <div>첨가물로 보여 재료 목록에서 제외함: {recogInfo.excluded.join(", ")}</div>}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px" }}>
         <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>제품명</div>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 소고기미역진밥"
