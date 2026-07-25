@@ -372,6 +372,9 @@ function ProductEditForm({ product, initialName, onSaved, onClose, go, embedded 
       if (res.status === 401) { setRecogError("인증에 실패했어요. 다시 로그인한 뒤 시도해 주세요."); return; }
       if (res.status === 429) { setRecogError("오늘 인식 한도를 모두 사용했어요. 아래에 직접 입력해 주세요."); return; }
       if (res.status === 422) { setRecogError("성분표를 인식하지 못했어요. 성분표 글씨가 잘 보이게 다시 촬영해 주세요."); return; }
+      // 500(server_misconfigured): API 키 미설정·무효 등 재시도해도 해결 안 되는 설정 문제 - 502 등
+      // 일시적 오류와 다른 문구로 안내(재시도를 유도하지 않고 바로 직접 입력으로 안내)
+      if (res.status === 500) { setRecogError("성분표 인식 기능에 설정 문제가 있어요. 지금은 아래에 직접 입력해 주세요."); return; }
       if (!res.ok) { setRecogError("인식 중 문제가 생겼어요. 잠시 후 다시 시도하거나 직접 입력해 주세요."); return; }
       const data = await res.json();
       // 이미 값이 있는 필드는 덮어쓰지 않음 - 사용자가 먼저 입력해둔 내용을 AI 결과가 지우지 않게

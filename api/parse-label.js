@@ -92,10 +92,16 @@ const GEMINI_PROMPT = `한국 시판 이유식 제품의 성분표 사진이다.
 사진이 성분표가 아니거나 판독이 불가능하면 다른 필드 없이 {"error":"unreadable"} 만 출력한다.`;
 
 // 실패(네트워크·타임아웃·비정상 응답)는 그대로 throw해서 호출부가 502로 응답하게 하고,
-// Gemini가 정상 응답했지만 JSON 파싱이 안 되는 경우만 {error:"unreadable"}로 취급(422 처리용)
+// Gemini가 정상 응답했지만 JSON 파싱이 안 되는 경우만 {error:"unreadable"}로 취급(422 처리용).
+// API 키 자체가 없거나 유효하지 않은 경우는 별도 code("config")를 붙여, 호출부가 이를
+// "일시적 오류"(502)가 아니라 "설정 문제"(500)로 구분해 응답하게 함(원인 파악·안내 문구용)
 async function callGemini(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("gemini_api_key_missing");
+  if (!apiKey) {
+    const err = new Error("gemini_api_key_missing");
+    err.code = "config";
+    throw err;
+  }
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const controller = new AbortController();
@@ -117,7 +123,17 @@ async function callGemini(base64Image) {
   } finally {
     clearTimeout(timeoutId);
   }
-  if (!r.ok) throw new Error(`gemini_http_${r.status}`);
+  if (!r.ok) {
+    let bodyText = "";
+    try { bodyText = await r.text(); } catch { /* 응답 본문을 못 읽어도 아래에서 상태코드만으로 처리 */ }
+    // Vercel 함수 로그에서 실제 원인을 바로 확인할 수 있도록 남김(클라이언트에는 노출하지 않음)
+    console.error(`Gemini API 오류 응답 (${r.status}):`, bodyText.slice(0, 500));
+    const err = new Error(`gemini_http_${r.status}`);
+    // 구글이 실제로 반환하는 오류 사유(reason: "API_KEY_INVALID")로 판별 - 문구 변경에 덜 취약하도록
+    // 메시지 문자열 대신 이 reason 코드를 우선 확인
+    if (bodyText.includes("API_KEY_INVALID") || bodyText.includes("API key not valid")) err.code = "config";
+    throw err;
+  }
   const data = await r.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("gemini_empty_response");
@@ -170,8 +186,10 @@ export default async function handler(req, res) {
   try {
     parsed = await callGemini(image);
   } catch (err) {
-    console.error("Gemini 호출 실패:", err);
-    res.status(502).json({ error: "gemini_error" });
+    console.error("Gemini 호출 실패:", err.message, err.code || "");
+    // API 키가 없거나 유효하지 않은 경우("config")는 재시도해도 절대 해결되지 않는 설정 문제이므로
+    // 일시적 오류(502)와 구분되는 상태코드(500)로 응답해 클라이언트가 다른 안내 문구를 보여주게 함
+    res.status(err.code === "config" ? 500 : 502).json({ error: err.code === "config" ? "server_misconfigured" : "gemini_error" });
     return;
   }
 

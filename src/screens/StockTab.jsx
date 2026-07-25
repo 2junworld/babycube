@@ -766,6 +766,7 @@ export function IngredientWikiPanel({ go }) {
   const [catFilter, setCatFilter] = useState([]); // 다중 선택, 빈 배열 = 전체. 카테고리 목록 + "시판"
   const [eatenFilter, setEatenFilter] = useState("전체"); // 시판 제품에는 적용 안 됨(정책)
   const [editingProduct, setEditingProduct] = useState(null); // null | "new" | productObj
+  const [addIngredientOpen, setAddIngredientOpen] = useState(false); // 재료 등록 진입점(개선 요청 - 상단에 바로 노출)
   // 먹어본 재료: intros 등록분 + 변형 재료를 먹었다면 그 기본 재료도 먹은 것으로 간주 (예: 사과퓨레 → 사과)
   const eaten = new Set();
   state.intros.forEach((it) => {
@@ -814,6 +815,18 @@ export function IngredientWikiPanel({ go }) {
         <Search size={15} color={C.muted} />
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료·시판 제품 검색"
           style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, color: C.ink, width: "100%" }} />
+      </div>
+      {/* 재료/제품 등록 진입점 - 예전엔 시판 제품 등록 버튼이 필터를 걸어야만 보이는 목록 맨 아래에
+          있어서 찾기 어렵다는 피드백을 반영해 상단에 항상 보이게 고정 */}
+      <div className="flex items-center" style={{ gap: 8 }}>
+        <button onClick={() => setAddIngredientOpen(true)} className="flex items-center justify-center"
+          style={{ flex: 1, gap: 5, background: C.sageLight, border: "none", borderRadius: 10, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>
+          <Plus size={13} /> 재료 등록
+        </button>
+        <button onClick={() => setEditingProduct("new")} className="flex items-center justify-center"
+          style={{ flex: 1, gap: 5, background: C.sageLight, border: "none", borderRadius: 10, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>
+          <Plus size={13} /> 시판 제품 등록
+        </button>
       </div>
       <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
         <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginRight: 1 }}>카테고리</span>
@@ -914,6 +927,11 @@ export function IngredientWikiPanel({ go }) {
         영양 DB {Object.keys(NUTRIENT_TAGS).length}개 재료 + 직접 등록한 재료·시판 제품이 함께 표시돼요. 새 재료는 식단표·제조 기록·기록 탭에서 추가하면 여기에 나타나요.
       </div>
       {editingProduct && <ProductEditSheet product={editingProduct} onClose={() => setEditingProduct(null)} go={go} />}
+      {/* 재료 등록: 기존 재료 선택창을 그대로 재사용 - 새 이름을 입력해 등록하거나 이미 있는 재료를
+          골라도 그 재료의 상세 정보 화면으로 이동해 바로 이어서 편집할 수 있음 */}
+      {addIngredientOpen && (
+        <IngredientPicker onPick={(name) => { setAddIngredientOpen(false); go("ingredientInfo", { name }); }} onClose={() => setAddIngredientOpen(false)} />
+      )}
     </div>
   );
 }
