@@ -1,6 +1,6 @@
 /* 더보기 탭 - 설정·공유 멤버·여행 모드·끼니 설정 */
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen, MessageSquareText, Copy, Trash2, Send, Palette } from "lucide-react";
+import { ChevronRight, Plus, X, Check, Settings2, Users, Plane, Clock, History, Activity, BookOpen, MessageSquareText, Copy, Trash2, Send, Palette, Sparkles } from "lucide-react";
 import { db } from "../firebase";
 import { doc, setDoc, collection, addDoc, deleteDoc, onSnapshot, query, orderBy, limit } from "firebase/firestore";
 import { C, CATEGORY_COLOR_SWATCHES, primaryBtn, selectStyle } from "../theme";
@@ -10,6 +10,7 @@ import { useStore } from "../store";
 import { authorTime, CatDot, ConfirmModal, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { downloadFile, feedingLogsToCSV } from "../lib/exporters";
 import { usePwaUpdate } from "../pwa";
+import { CHANGELOG } from "../changelog";
 
 /* =====================================================================
    더보기 하위 화면들
@@ -758,6 +759,26 @@ export function CategoryEditModal({ category, onClose }) {
   );
 }
 
+// 업데이트 내역 - 새 버전이 나올 때마다 한 번만 뜨는 안내(pwa.jsx의 WhatsNewSheet)를 놓쳤거나
+// 앱을 완전히 껐다 켜서 못 본 사람도, 언제든 더보기에서 지난 변경 내역을 훑어볼 수 있게 함
+export function ChangelogHistoryScreen({ onBack }) {
+  return (
+    <div style={{ paddingBottom: 40 }}>
+      <SubHeader title="업데이트 내역" onBack={onBack} />
+      <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 18 }}>
+        {CHANGELOG.map((c) => (
+          <div key={c.version}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep, marginBottom: 6 }}>v{c.version}</div>
+            <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
+              {c.notes.map((n, i) => <li key={i} style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5 }}>{n}</li>)}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function MoreTab({ go }) {
   const { notify } = useStore();
   const { needRefresh, checkForUpdate } = usePwaUpdate();
@@ -768,6 +789,7 @@ export function MoreTab({ go }) {
     { key: "members", icon: Users, label: "공유 멤버", sub: "초대 코드 · 구성원 관리" },
     { key: "activity", icon: Activity, label: "활동 내역", sub: "누가 언제 기록·수정했는지 확인" },
     { key: "feedback", icon: MessageSquareText, label: "개선 제안", sub: "불편한 점·아이디어 남기기" },
+    { key: "changelog", icon: Sparkles, label: "업데이트 내역", sub: "버전별로 새로 생긴 기능 보기" },
     { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
     { key: "settings", icon: Settings2, label: "설정", sub: "시간 형식 · 알림 · 아기 정보" },
     // 로그인 없이 보는 고정 안내 페이지(/guide) - 실제 URL 이동이라 go() 라우팅 대신 새 탭 링크로 처리
