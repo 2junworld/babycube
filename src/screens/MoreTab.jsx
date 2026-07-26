@@ -769,9 +769,14 @@ export function ChangelogHistoryScreen({ onBack }) {
         {CHANGELOG.map((c) => (
           <div key={c.version}>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep, marginBottom: 6 }}>v{c.version}</div>
-            <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
-              {c.notes.map((n, i) => <li key={i} style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5 }}>{n}</li>)}
-            </ul>
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {c.notes.map((n, i) => (
+                <div key={i} className="flex items-start" style={{ gap: 8, padding: "7px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+                  <span className="flex items-center justify-center" style={{ flexShrink: 0, width: 16, height: 16, marginTop: 1, borderRadius: 8, background: C.sageLight, color: C.sageDeep, fontSize: 10, fontWeight: 700 }}>{i + 1}</span>
+                  <span style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5 }}>{n}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>
