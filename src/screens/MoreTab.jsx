@@ -15,7 +15,23 @@ import { CHANGELOG } from "../changelog";
 /* =====================================================================
    더보기 하위 화면들
    ===================================================================== */
-export function SettingsScreen({ onBack }) {
+// 더보기 목록이 항목별 화면으로 흩어져 있으면 목록 자체가 길어지므로, 자주 안 쓰는 세부 설정류
+// (끼니 설정 · 카테고리 관리 · 안내 다시 보기)는 설정 화면 안의 바로가기 행으로 묶어 넣음
+function SettingsShortcutRow({ icon: Icon, label, sub, onClick, href }) {
+  const content = (
+    <>
+      <div className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: 9, background: C.sageLight, flexShrink: 0 }}><Icon size={14} color={C.sageDeep} /></div>
+      <div style={{ flex: 1 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{label}</div>{sub && <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>{sub}</div>}</div>
+      <ChevronRight size={14} color={C.muted} />
+    </>
+  );
+  const style = { gap: 10, width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer", textDecoration: "none", boxSizing: "border-box" };
+  return href
+    ? <a href={href} target="_blank" rel="noopener noreferrer" className="flex items-center" style={style}>{content}</a>
+    : <button onClick={onClick} className="flex items-center" style={style}>{content}</button>;
+}
+
+export function SettingsScreen({ onBack, go }) {
   const { state, dispatch, notify } = useStore();
   const s = state.settings;
   const baby = state.baby;
@@ -74,6 +90,10 @@ export function SettingsScreen({ onBack }) {
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title="설정" onBack={onBack} />
       <div style={{ padding: "10px 18px 0", display: "flex", flexDirection: "column", gap: 18 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          <SettingsShortcutRow icon={Clock} label="끼니 설정" sub="끼니 이름·시간 관리" onClick={() => go("mealSlots")} />
+          <SettingsShortcutRow icon={Palette} label="카테고리 관리" sub="재료 분류 이름·색상 추가/수정/삭제" onClick={() => go("categories")} />
+        </div>
         <div>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 7, padding: "0 2px" }}>시간 표시 형식</div>
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px" }}>
@@ -187,6 +207,7 @@ export function SettingsScreen({ onBack }) {
             </button>
           </div>
         </div>
+        <SettingsShortcutRow icon={BookOpen} label="설치·사용법 안내 다시 보기" sub="지인에게 공유한 안내 페이지" href="/guide" />
       </div>
       {confirmingReset && (
         <ConfirmModal
@@ -759,6 +780,20 @@ export function CategoryEditModal({ category, onClose }) {
   );
 }
 
+// 이력 허브 - "지난 기록을 조회한다"는 성격이 같은 제조 이력·활동 내역을 더보기 목록에서
+// 항목 하나로 묶고, 그 안에서 둘 중 하나를 골라 들어가게 함(각 화면 자체는 그대로 재사용)
+export function HistoryScreen({ onBack, go }) {
+  return (
+    <div style={{ paddingBottom: 40 }}>
+      <SubHeader title="이력" onBack={onBack} />
+      <div style={{ padding: "6px 18px 0", display: "flex", flexDirection: "column", gap: 8 }}>
+        <SettingsShortcutRow icon={History} label="제조 이력" sub="재료별 제조 배치 기록 조회" onClick={() => go("manufactureHistory")} />
+        <SettingsShortcutRow icon={Activity} label="활동 내역" sub="누가 언제 기록·수정했는지 확인" onClick={() => go("activity")} />
+      </div>
+    </div>
+  );
+}
+
 // 업데이트 내역 - 새 버전이 나올 때마다 한 번만 뜨는 안내(pwa.jsx의 WhatsNewSheet)를 놓쳤거나
 // 앱을 완전히 껐다 켜서 못 본 사람도, 언제든 더보기에서 지난 변경 내역을 훑어볼 수 있게 함
 export function ChangelogHistoryScreen({ onBack }) {
@@ -788,17 +823,12 @@ export function MoreTab({ go }) {
   const { notify } = useStore();
   const { needRefresh, checkForUpdate } = usePwaUpdate();
   const items = [
-    { key: "mealSlots", icon: Clock, label: "끼니 설정", sub: "끼니 이름·시간 관리" },
-    { key: "categories", icon: Palette, label: "카테고리 관리", sub: "재료 분류 이름·색상 추가/수정/삭제" },
-    { key: "manufactureHistory", icon: History, label: "제조 이력", sub: "재료별 제조 배치 기록 조회" },
+    { key: "settings", icon: Settings2, label: "설정", sub: "끼니·카테고리·아기 정보·데이터 관리" },
+    { key: "history", icon: History, label: "이력", sub: "제조 이력 · 활동 내역 조회" },
     { key: "members", icon: Users, label: "공유 멤버", sub: "초대 코드 · 구성원 관리" },
-    { key: "activity", icon: Activity, label: "활동 내역", sub: "누가 언제 기록·수정했는지 확인" },
+    { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
     { key: "feedback", icon: MessageSquareText, label: "개선 제안", sub: "불편한 점·아이디어 남기기" },
     { key: "changelog", icon: Sparkles, label: "업데이트 내역", sub: "버전별로 새로 생긴 기능 보기" },
-    { key: "travel", icon: Plane, label: "여행 모드", sub: "필요 큐브 자동 계산" },
-    { key: "settings", icon: Settings2, label: "설정", sub: "시간 형식 · 알림 · 아기 정보" },
-    // 로그인 없이 보는 고정 안내 페이지(/guide) - 실제 URL 이동이라 go() 라우팅 대신 새 탭 링크로 처리
-    { icon: BookOpen, label: "설치·사용법 안내 다시 보기", sub: "지인에게 공유한 안내 페이지", href: "/guide" },
   ];
   return (
     <div style={{ paddingBottom: 90 }}>

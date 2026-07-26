@@ -9,7 +9,7 @@ import { MealPlanTab } from "./PlanTab";
 import { FeedingLogScreen } from "./FeedingLogScreen";
 import { IngredientInfoScreen, ManufactureHistoryScreen, ProductDetailScreen, ProductStockDetailScreen, ShoppingScreen, StockDetailScreen, StockTab } from "./StockTab";
 import { FeedingCompareScreen, RecordHistoryScreen, RecordTab } from "./RecordTab";
-import { ActivityScreen, CategoriesScreen, ChangelogHistoryScreen, FeedbackScreen, MealSlotsScreen, MembersScreen, MoreTab, SettingsScreen, TravelScreen } from "./MoreTab";
+import { ActivityScreen, CategoriesScreen, ChangelogHistoryScreen, FeedbackScreen, HistoryScreen, MealSlotsScreen, MembersScreen, MoreTab, SettingsScreen, TravelScreen } from "./MoreTab";
 import { UI_STATE } from "./uiPrefs";
 
 /* =====================================================================
@@ -48,7 +48,8 @@ export function Shell() {
   if (route === "feed") content = <FeedingLogScreen date={params.date} planMeal={params.planMeal} existingLog={params.existingLog} onBack={back} />;
   else if (route === "dayRecord") content = <DayRecordScreen date={params.date} onBack={back} go={go} />;
   else if (route === "shopping") content = <ShoppingScreen onBack={back} />;
-  else if (route === "settings") content = <SettingsScreen onBack={back} />;
+  else if (route === "settings") content = <SettingsScreen onBack={back} go={go} />;
+  else if (route === "history") content = <HistoryScreen onBack={back} go={go} />;
   else if (route === "members") content = <MembersScreen onBack={back} go={go} />;
   else if (route === "activity") content = <ActivityScreen onBack={back} go={go} filterUid={params.uid} filterName={params.name} />;
   else if (route === "feedback") content = <FeedbackScreen onBack={back} />;
