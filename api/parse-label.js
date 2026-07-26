@@ -102,7 +102,9 @@ async function callGemini(base64Image) {
     err.code = "config";
     throw err;
   }
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  // "gemini-flash-latest"는 구글이 관리하는 별칭으로, 특정 버전을 하드코딩했다가 신규 사용자
+  // 대상 지원 중단(예: gemini-2.5-flash 404)으로 막히는 걸 피하기 위해 기본값으로 사용
+  const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 25000);
@@ -131,7 +133,12 @@ async function callGemini(base64Image) {
     const err = new Error(`gemini_http_${r.status}`);
     // 구글이 실제로 반환하는 오류 사유(reason: "API_KEY_INVALID")로 판별 - 문구 변경에 덜 취약하도록
     // 메시지 문자열 대신 이 reason 코드를 우선 확인
-    if (bodyText.includes("API_KEY_INVALID") || bodyText.includes("API key not valid")) err.code = "config";
+    // 404(모델명이 잘못됐거나 더 이상 제공되지 않음)도 재시도로 해결되지 않는 설정 문제라 동일 취급
+    if (
+      bodyText.includes("API_KEY_INVALID") ||
+      bodyText.includes("API key not valid") ||
+      r.status === 404
+    ) err.code = "config";
     throw err;
   }
   const data = await r.json();
