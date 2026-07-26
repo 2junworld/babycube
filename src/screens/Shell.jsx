@@ -27,15 +27,19 @@ export function Shell() {
   const { state } = useStore();
   const fontScale = state.settings.fontScale || 1;
   const [tab, setTabRaw] = useState("today");
-  const [route, setRoute] = useState(null); // 풀스크린 하위 화면
-  const [params, setParams] = useState({});
+  // 풀스크린 하위 화면 스택 - 설정→끼니 설정처럼 2단계 이상 들어갈 수 있는 화면이 생기면서,
+  // 단일 route 값(뒤로가기 = 항상 탭 목록으로)만으로는 "한 단계만 뒤로" 가 안 돼 스택으로 전환
+  const [stack, setStack] = useState([]); // [{route, params}, ...]
+  const top = stack[stack.length - 1];
+  const route = top ? top.route : null;
+  const params = top ? top.params : {};
   // 오늘 탭에서 보고 있는 날짜 - 하단 탭 라벨에도 반영해야 해서(개선 요청) Shell이 들고 있음.
   // 다른 탭으로 이동하면 오늘로 리셋(아래 setTab 참고)
   const [todayViewDate, setTodayViewDate] = useState(todayISO());
 
-  const go = (r, p = {}) => { setParams(p); setRoute(r); };
-  const back = () => setRoute(null);
-  const setTab = (key) => { setTabRaw(key); if (key !== "today") setTodayViewDate(todayISO()); };
+  const go = (r, p = {}) => setStack((s) => [...s, { route: r, params: p }]);
+  const back = () => setStack((s) => s.slice(0, -1));
+  const setTab = (key) => { setTabRaw(key); setStack([]); if (key !== "today") setTodayViewDate(todayISO()); };
   // 오늘 탭 날짜 이동 → 기록 탭 급여표(월별)로 바로가기 - 보던 날짜를 그대로 넘겨 이어서 봄
   const openRecordMonth = (date) => {
     UI_STATE.recordMonthSelected = date;
