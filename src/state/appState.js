@@ -297,9 +297,10 @@ function rawReducer(state, action) {
       if (idx >= 0) dayMeals[idx] = savedMeal;
       else dayMeals.push(savedMeal);
       dayMeals.sort((a, b) => a.time.localeCompare(b.time));
-      // 재고에 없는 재료 → 장보기 목록 자동 등록
+      // 재고에 없는 재료 → 장보기 목록 자동 등록 (시판 제품 항목은 name이 없어 제외 -
+      // 안 걸러지면 name:undefined가 shopping에 들어가 Firestore 저장 시 오류가 남)
       let shopping = state.shopping;
-      meal.items.forEach((it) => {
+      meal.items.filter((it) => it.source !== "product").forEach((it) => {
         const inStock = stockTotalCubes(state, it.name) > 0 || stockFridgeG(state, it.name) > 0;
         const already = shopping.some((s) => s.name === it.name && !s.done);
         if (!inStock && !already && !isStaple(state, it.name)) {
