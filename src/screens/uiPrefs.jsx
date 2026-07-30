@@ -5,6 +5,10 @@ import React, { useState } from "react";
 // 탭이 리셋되지 않고 보던 화면으로 복귀하도록 함
 export const UI_STATE = { recordView: "table", recordTableRange: "week", stockSubTab: "stock", recordMonthSelected: null };
 
+// 최상위(App.jsx)의 WhatsNewSheet는 Shell 바깥(형제 컴포넌트)에 있어 go()에 직접 접근할 수 없음 -
+// "업데이트 내역으로 이동해줘"라는 신호만 커스텀 이벤트로 보내고, Shell이 받아서 실제 이동을 처리(pwa.jsx)
+export const GO_TO_CHANGELOG_EVENT = "bc:go-changelog";
+
 // 재고 탭 정렬·표시 설정을 기기에 저장 (탭 이동·앱 재시작 후에도 유지)
 export function readStockPref(key, fallback, validKeys) {
   try {

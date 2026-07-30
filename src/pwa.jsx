@@ -5,6 +5,7 @@ import { useRegisterSW } from "virtual:pwa-register/react";
 import { C, primaryBtn } from "./theme";
 import { BottomSheet } from "./components/common";
 import { CHANGELOG } from "./changelog";
+import { GO_TO_CHANGELOG_EVENT } from "./screens/uiPrefs";
 
 const PwaUpdateContext = createContext({ needRefresh: false, applyUpdate: () => {}, checkForUpdate: () => {} });
 
@@ -111,6 +112,10 @@ export function WhatsNewSheet() {
           {entry.notes.map((n, i) => <li key={i} style={{ fontSize: 13, color: C.ink, lineHeight: 1.5 }}>{n}</li>)}
         </ul>
         <button onClick={dismiss} style={primaryBtn}>확인</button>
+        <button onClick={() => { dismiss(); window.dispatchEvent(new Event(GO_TO_CHANGELOG_EVENT)); }}
+          style={{ background: "none", border: "none", color: C.sageDeep, fontWeight: 700, fontSize: 12.5, textDecoration: "underline", cursor: "pointer", padding: "2px 0" }}>
+          지난 업데이트 내역 모두 보기
+        </button>
       </div>
     </BottomSheet>
   );

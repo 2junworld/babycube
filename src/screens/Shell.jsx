@@ -1,5 +1,5 @@
 /* 앱 셸 - 하단 탭바와 화면 라우팅 */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Home, CalendarDays, Package, Menu, LineChart as LineChartIcon } from "lucide-react";
 import { C, FONT_IMPORT } from "../theme";
 import { todayISO } from "../lib/dates";
@@ -10,7 +10,7 @@ import { FeedingLogScreen } from "./FeedingLogScreen";
 import { IngredientInfoScreen, ManufactureHistoryScreen, ProductDetailScreen, ProductStockDetailScreen, ShoppingScreen, StockDetailScreen, StockTab } from "./StockTab";
 import { FeedingCompareScreen, RecordHistoryScreen, RecordTab } from "./RecordTab";
 import { ActivityScreen, CategoriesScreen, ChangelogHistoryScreen, FeedbackScreen, HistoryScreen, MealSlotsScreen, MembersScreen, MoreTab, SettingsScreen, TravelScreen } from "./MoreTab";
-import { UI_STATE } from "./uiPrefs";
+import { GO_TO_CHANGELOG_EVENT, UI_STATE } from "./uiPrefs";
 
 /* =====================================================================
    앱 셸 (탭 + 라우팅)
@@ -40,6 +40,13 @@ export function Shell() {
   const go = (r, p = {}) => setStack((s) => [...s, { route: r, params: p }]);
   const back = () => setStack((s) => s.slice(0, -1));
   const setTab = (key) => { setTabRaw(key); setStack([]); if (key !== "today") setTodayViewDate(todayISO()); };
+  // 업데이트 안내 팝업(pwa.jsx의 WhatsNewSheet)은 Shell 바깥(형제)에 있어 go()를 직접 못 부르므로,
+  // 커스텀 이벤트로 받은 "업데이트 내역으로 이동" 신호를 여기서 실제 네비게이션으로 처리
+  useEffect(() => {
+    const onGoChangelog = () => go("changelog");
+    window.addEventListener(GO_TO_CHANGELOG_EVENT, onGoChangelog);
+    return () => window.removeEventListener(GO_TO_CHANGELOG_EVENT, onGoChangelog);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // 오늘 탭 날짜 이동 → 기록 탭 급여표(월별)로 바로가기 - 보던 날짜를 그대로 넘겨 이어서 봄
   const openRecordMonth = (date) => {
     UI_STATE.recordMonthSelected = date;
