@@ -106,6 +106,15 @@ export function validateAutoGenRules(state, rules) {
   };
 }
 
+// 카테고리 관리 화면에서 삭제 전에 확인하는 용도 - 이 카테고리가 자동 생성 규칙에서 실제로(0,0이 아니게)
+// 쓰이고 있는지. categoryFloor(예: "단백질 분산")는 카테고리 이름으로 참조하므로 이름으로도 확인
+export function categoryUsedInAutoGenRules(rules, category) {
+  if (!rules) return false;
+  const r = rules.perMeal && rules.perMeal.categoryCounts && rules.perMeal.categoryCounts[category.id];
+  if (r && ((r.min || 0) > 0 || (r.max || 0) > 0)) return true;
+  return (rules.ingredientRules || []).some((rule) => rule.enabled && rule.type === "categoryFloor" && rule.categoryName === category.name);
+}
+
 // 생성 전 규칙 화면에서 보여줄 충돌 경고 (필수 규칙 재료가 재료 풀에서 빠진 경우 등)
 export function checkRuleConflicts(state, rules, pool) {
   const poolSet = new Set(pool);
