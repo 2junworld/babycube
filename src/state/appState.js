@@ -1190,6 +1190,17 @@ export function unitGOf(state, name) {
   return (state.ingredients[name] || SEED_INGREDIENTS[name] || { unitG: 15 }).unitG;
 }
 
+// 재료 마스터의 unitG는 그 재료를 처음 제조했을 때 값이 고정되고 이후엔 안 바뀜(ensureIngredientEntry
+// 참고) - 성장하며 큐브를 더 크게/작게 만들면 실제 냉동고 사정과 달라짐. 식단표 등에서 재료를 새로
+// 추가할 때는 이 값 대신, 지금 재고에 남아있는 배치 중 가장 최근에 제조한 배치의 큐브 중량을 우선
+// 참고해 "제조할 때 입력한 중량"이 그대로 보이게 함(재고가 하나도 없으면 마스터 기본값으로 폴백)
+export function currentUnitGOf(state, name) {
+  const batches = stockBatches(state, name);
+  if (batches.length === 0) return unitGOf(state, name);
+  const withStock = [...batches].reverse().find((b) => (b.frozen || 0) > 0);
+  return (withStock || batches[batches.length - 1]).unitG;
+}
+
 export function gOf(state, item) {
   // 시판 제품 항목은 기본적으로 팩 수 × 1팩 용량(g)이지만, 한 팩을 다 먹이지 않은 경우를 위해
   // gramsOverride로 실제 제공량을 직접 지정할 수 있음(재고 차감은 여전히 qty=팩 수 기준)
