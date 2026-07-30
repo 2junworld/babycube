@@ -106,6 +106,15 @@ export function validateAutoGenRules(state, rules) {
   };
 }
 
+// 재료의 현재 실제 재고 구성을 보고 냉동 큐브 vs 냉장 계량 중 어느 쪽으로 다룰지 판단(재고가
+// 아예 없으면 냉동으로 간주 - 대부분의 재료가 냉동 위주라 안전한 기본값). 재료 풀 화면(라벨·급여량
+// UI)과 생성 알고리즘이 항상 같은 기준으로 판단하도록 공유 함수로 뺌.
+export function sourceTypeOf(state, name) {
+  const hasFrozen = stockTotalCubes(state, name) > 0;
+  const hasFridge = stockFridgeG(state, name) > 0;
+  return hasFrozen || !hasFridge ? "frozen" : "fridge";
+}
+
 // 카테고리 관리 화면에서 삭제 전에 확인하는 용도 - 이 카테고리가 자동 생성 규칙에서 실제로(0,0이 아니게)
 // 쓰이고 있는지. categoryFloor(예: "단백질 분산")는 카테고리 이름으로 참조하므로 이름으로도 확인
 export function categoryUsedInAutoGenRules(rules, category) {
@@ -210,12 +219,8 @@ export function generatePlan(state, opts) {
 
   // 재료별 저장 형태 판단(냉동 큐브 vs 냉장 계량) - 지금 실제 재고 구성을 기준으로 생성 내내 고정.
   // staple(무른밥 등)도 예외 없이 동일하게 판단 - 무른밥은 흔히 냉장 보관이라 실제 재고 형태를 따르는 게 맞음
-  const sourceTypeOf = {};
-  pool.forEach((name) => {
-    const hasFrozen = stockTotalCubes(state, name) > 0;
-    const hasFridge = stockFridgeG(state, name) > 0;
-    sourceTypeOf[name] = hasFrozen || !hasFridge ? "frozen" : "fridge";
-  });
+  const storageTypeOf = {};
+  pool.forEach((name) => { storageTypeOf[name] = sourceTypeOf(state, name); });
 
   // 규칙 인덱싱
   const requireDailyRules = (rules.ingredientRules || []).filter((r) => r.enabled && r.type === "requireDaily");
@@ -274,7 +279,7 @@ export function generatePlan(state, opts) {
   };
 
   const scoreCandidate = (name) => {
-    const isFridge = sourceTypeOf[name] === "fridge";
+    const isFridge = storageTypeOf[name] === "fridge";
     const batches = stockBatches(state, name);
     const hasStock = vStock
       ? ((vStock[name] || {}).batches || []).some((b) => (isFridge ? (b.fridgeG || 0) > 0 : (b.frozen || 0) > 0))
@@ -336,7 +341,7 @@ export function generatePlan(state, opts) {
 
   const buildItem = (name, targetG, dateIdx) => {
     const unitG = currentUnitGOf(state, name) || 15;
-    const isFridge = sourceTypeOf[name] === "fridge";
+    const isFridge = storageTypeOf[name] === "fridge";
     const requestedAmount = isFridge ? Math.max(1, Math.round(targetG)) : Math.max(1, Math.round(targetG / unitG));
     let actual = requestedAmount;
     if (vStock) actual = isFridge ? deductFridge(vStock, name, requestedAmount, []) : deductFrozen(vStock, name, requestedAmount, []);
