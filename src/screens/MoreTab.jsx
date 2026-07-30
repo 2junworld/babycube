@@ -715,7 +715,9 @@ export function CategoryEditModal({ category, onClose }) {
   const [color, setColor] = useState(base.color || "#9A9285");
   const [confirmingDel, setConfirmingDel] = useState(false);
   // 이 카테고리가 자동 생성 규칙에서 실제로 쓰이고 있으면, 재료 사용 여부 확인을 통과한 뒤에도
-  // 한 번 더 확인을 받음(삭제하면 그 규칙 설정이 사라진다는 걸 미리 알려주기 위함)
+  // 한 번 더 확인을 받음. 삭제해도 규칙 설정 자체는 안 건드림(CATEGORY_DELETE는 categories만 바꿈) -
+  // 다만 그 규칙은 이제 없는 카테고리를 참조하게 되므로, 나중에 자동 생성을 실제로 쓰려는 시점에
+  // "이 규칙은 사용할 수 없어요" 안내로 막고 규칙을 고치도록 유도함(생성 화면 쪽에서 처리, PR C)
   const [confirmingAutoGenImpact, setConfirmingAutoGenImpact] = useState(false);
   const trimmed = name.trim();
   const dup = trimmed && state.categories.some((c) => c.name === trimmed && c.id !== base.id);
@@ -787,7 +789,7 @@ export function CategoryEditModal({ category, onClose }) {
         {confirmingAutoGenImpact && (
           <ConfirmModal
             title="자동 생성 규칙에서 사용 중이에요"
-            message={`'${base.name}' 카테고리는 식단 자동 생성 규칙에 설정돼 있어요. 삭제하면 그 규칙 설정이 사라져요.`}
+            message={`'${base.name}' 카테고리는 식단 자동 생성 규칙에 설정돼 있어요. 삭제하면 그 규칙을 자동 생성에 사용할 때 오류가 나요 - 규칙 화면에서 다시 확인해 주셔야 해요.`}
             confirmLabel="그래도 삭제"
             onConfirm={doDelete}
             onCancel={() => setConfirmingAutoGenImpact(false)}

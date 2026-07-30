@@ -115,6 +115,17 @@ export function categoryUsedInAutoGenRules(rules, category) {
   return (rules.ingredientRules || []).some((rule) => rule.enabled && rule.type === "categoryFloor" && rule.categoryName === category.name);
 }
 
+// 카테고리 삭제는 저장된 규칙을 건드리지 않으므로(위 categoryUsedInAutoGenRules 경고 참고), 삭제
+// 이후에도 규칙엔 이제 없는 카테고리 참조가 그대로 남아있을 수 있음. 자동 생성을 실제로 실행하기
+// 직전(PR C의 생성 버튼)에 이 함수로 확인해서, 걸리면 조용히 기본값으로 대체하지 말고 "이 규칙은
+// 지금 상태로 쓸 수 없어요" 안내로 막고 규칙 화면으로 보내 사용자가 직접 다시 확인하게 함
+export function rulesReferenceDeletedCategory(state, rules) {
+  if (!rules) return false;
+  const validIds = new Set(categoryList(state).map((c) => c.id));
+  const counts = (rules.perMeal && rules.perMeal.categoryCounts) || {};
+  return Object.entries(counts).some(([id, r]) => !validIds.has(id) && ((r.min || 0) > 0 || (r.max || 0) > 0));
+}
+
 // 생성 전 규칙 화면에서 보여줄 충돌 경고 (필수 규칙 재료가 재료 풀에서 빠진 경우 등)
 export function checkRuleConflicts(state, rules, pool) {
   const poolSet = new Set(pool);
