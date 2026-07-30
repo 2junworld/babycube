@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { Plus, Minus, Trash2 } from "lucide-react";
 import { C, stepBtn } from "../theme";
-import { gOf, sortByCategory, unitGOf } from "../state/appState";
+import { currentUnitGOf, gOf, sortByCategory, unitGOf } from "../state/appState";
 import { useStore } from "../store";
 import { CatDot, NumInput, ProductDot, Segmented } from "./common";
 
@@ -30,7 +30,9 @@ export function usePlanItemsEditor(initialItems) {
   const addNames = (names) => {
     setItems((p) => {
       const existing = new Set(p.map((it) => it.name));
-      const toAdd = names.filter((n) => !existing.has(n)).map((name) => ({ name, qty: 1, unitG: unitGOf(state, name), gramsOverride: null }));
+      // unitG 기본값은 재료 마스터 고정값이 아니라, 지금 재고에 있는 가장 최근 제조 배치의 실제
+      // 큐브 중량을 우선 참고 - 제조 때 입력한 값과 식단표가 어긋나지 않게 함
+      const toAdd = names.filter((n) => !existing.has(n)).map((name) => ({ name, qty: 1, unitG: currentUnitGOf(state, name), gramsOverride: null }));
       return [...p, ...toAdd];
     });
   };
