@@ -2,22 +2,21 @@
    AI(Gemini) 미사용 - 저장된 규칙(state.settings.autoGenRules)과 재료 풀만으로 결정. (작업지시서 PR A)
 
    범위 밖으로 명시적으로 뺀 것 / 단순화한 것:
-   - "생선 빈도 제한" 프리셋은 재료 마스터에 "이 재료는 생선이다" 같은 태그가 없어서, 흔한 생선류 이름을
-     하드코딩한 목록(FISH_INGREDIENT_NAMES)으로 대체함. 사용자가 규칙 화면에서 이름을 추가/제거할 수 있음.
-   - 생성되는 재료 항목은 항상 냉동 큐브 기준(source 없음)으로만 만듦 - 냉장(fridge) 소스는 다루지 않음
-     (기존 PlanItemsEditor의 새 재료 추가 기본값과 동일한 단순화).
-   - "동일 조합 반복 간격"은 조합을 미리 예측해 후보를 걸러내지 않고(끼니 하나를 다 채워야 조합이
-     정해지므로 사전 필터링 비용이 큼), 끼니를 다 채운 뒤 사후 검사만 해서 위반 시 경고만 남김
-     (자리를 비우거나 되돌리지 않음 - 스펙 5번 "그래도 불가하면 경고 표시"에 해당하는 최종 완화 단계로 취급).
+   - "동일 조합 반복"은 여러 날에 걸친 간격 대신 "같은 날 안에서만 안 겹치면 됨"으로 단순화(사용자 피드백).
+     끼니 하나를 다 채운 뒤 오늘 이미 나온 조합과 겹치면 카테고리 하나를 다른 후보로 바꿔보는 재시도를
+     몇 차례 하고, 그래도 안 되면 경고만 남기고 그대로 둠.
 */
 import { addDaysISO, uid } from "./dates";
-import { catOf, categoryList, currentUnitGOf, deductFrozen, isStaple, stockBatches } from "../state/appState";
+import { catOf, categoryList, currentUnitGOf, deductFridge, deductFrozen, isStaple, stockBatches, stockFridgeG, stockTotalCubes } from "../state/appState";
 
-// "생선 빈도 제한" 프리셋 기본 대상 - 사용자가 규칙 화면에서 직접 이름을 더하거나 뺄 수 있음
-export const FISH_INGREDIENT_NAMES = ["연어", "고등어", "삼치", "장어", "대구살", "가자미", "조기", "참치"];
+// 재료 정보 화면에서 라벨 편집 시 "생선"류로 자주 분류되는 재료에 추천 칩으로만 쓰임(자동으로
+// 라벨을 붙이지는 않음 - 사용자가 직접 붙여야 "생선 빈도 제한" 규칙이 그 재료를 인식함)
+export const COMMON_FISH_NAMES = ["연어", "고등어", "삼치", "장어", "대구살", "가자미", "조기", "참치"];
 
 // 새로 도입(관찰중)된 재료 사이에 두는 최소 간격 - 스펙의 "2~3일"에서 2일로 확정
 const NEW_INGREDIENT_COOLDOWN_DAYS = 2;
+// 조합 반복 회피를 위해 카테고리 하나를 다른 후보로 바꿔보는 최대 시도 횟수
+const COMBO_RETRY_ATTEMPTS = 4;
 
 /* =====================================================================
    의학적 권고 프리셋 (ingredientRules의 preset 필드로 참조) - 근거 문구는 UI 툴팁용
@@ -35,7 +34,7 @@ export const INGREDIENT_RULE_PRESETS = [
     type: "maxPerWeek",
     label: "생선 빈도 제한",
     defaultEnabled: true,
-    rationale: "수은 노출 우려로 생선 섭취 빈도 제한 권고 (특히 대형 어류)",
+    rationale: "수은 노출 우려로 생선 섭취 빈도 제한 권고 (특히 대형 어류). 재료 정보 화면에서 '생선' 라벨을 붙인 재료끼리 묶어서 계산돼요",
   },
   {
     preset: "proteinEveryMeal",
@@ -70,15 +69,17 @@ export function defaultAutoGenRules(state) {
   set("유제품", 0, 1);
 
   return {
-    perMeal: { categoryCounts, targetTotalG: 150 },
+    // perIngredientG: 재료 풀 화면에서 재료별로 직접 지정한 1회 급여량(g) - 지정 안 한 재료는
+    // targetTotalG를 카테고리 슬롯 수로 나눈 값을 그대로 씀
+    perMeal: { categoryCounts, targetTotalG: 150, perIngredientG: {} },
     staple: { includeEveryMeal: true, defaultG: 80 },
     ingredientRules: [
       { id: uid(), preset: "ironSource", type: "requireDaily", ingredient: "소고기", enabled: true },
-      { id: uid(), preset: "fishLimit", type: "maxPerWeek", names: [...FISH_INGREDIENT_NAMES], value: 2, enabled: true },
+      { id: uid(), preset: "fishLimit", type: "maxPerWeek", label: "생선", value: 2, enabled: true },
       { id: uid(), preset: "proteinEveryMeal", type: "categoryFloor", categoryName: "단백질", value: 1, enabled: true },
       { id: uid(), preset: "newIngredientSpacing", type: "newIngredientSpacing", cooldownDays: NEW_INGREDIENT_COOLDOWN_DAYS, enabled: true },
     ],
-    variety: { noConsecutiveMeals: true, allowSameDayRepeat: false, stapleExemptFromVariety: true, comboRepeatGapDays: 3 },
+    variety: { noConsecutiveMeals: true, allowSameDayRepeat: false, stapleExemptFromVariety: true },
     stock: { mode: "stockFirst", preferExpiring: true, autoShopping: true },
     includeProducts: false,
   };
@@ -92,9 +93,9 @@ export function validateAutoGenRules(state, rules) {
   const cats = categoryList(state);
   const validIds = new Set(cats.map((c) => c.id));
   const oldCounts = (rules.perMeal && rules.perMeal.categoryCounts) || {};
+  const removedCount = Object.keys(oldCounts).filter((id) => !validIds.has(id)).length;
   const categoryCounts = {};
   cats.forEach((c) => { categoryCounts[c.id] = oldCounts[c.id] || { min: 0, max: 0 }; });
-  const removedCount = Object.keys(oldCounts).filter((id) => !validIds.has(id)).length;
   return {
     rules: {
       ...defaultAutoGenRules(state),
@@ -113,6 +114,9 @@ export function checkRuleConflicts(state, rules, pool) {
     if (!r.enabled) return;
     if (r.type === "requireDaily" && r.ingredient && !poolSet.has(r.ingredient)) {
       warnings.push(`'${(presetById(r.preset) || {}).label || "필수 규칙"}'의 재료(${r.ingredient})가 재료 풀에 없어요`);
+    }
+    if (r.type === "maxPerWeek" && r.label && !pool.some((n) => (state.ingredients[n]?.labels || []).includes(r.label))) {
+      warnings.push(`'${(presetById(r.preset) || {}).label || "빈도 제한"}' 규칙에 걸리는 '${r.label}' 라벨 재료가 아직 없어요 - 재료 정보에서 라벨을 붙여보세요`);
     }
   });
   if (rules.staple.includeEveryMeal && !pool.some((n) => isStaple(state, n))) {
@@ -162,17 +166,7 @@ function shuffle(arr, rng) {
   return a;
 }
 
-function makeItem(state, name, targetG) {
-  const unitG = currentUnitGOf(state, name) || 15;
-  const qty = Math.max(1, Math.round(targetG / unitG));
-  return { name, qty, unitG, gramsOverride: null };
-}
-
-// 가상 재고에서 시도해보고 실제로 채워진 양을 반환(부족하면 있는 만큼만, vStock이 null이면 항상 충분한 것으로 취급)
-function tryVirtualDeduct(vStock, name, cubes) {
-  if (!vStock) return cubes; // ignoreStock 모드
-  return deductFrozen(vStock, name, cubes, []);
-}
+const comboKeyOf = (state, items) => items.filter((it) => !isStaple(state, it.name)).map((it) => it.name).sort().join("+");
 
 /**
  * @param {object} state 앱 전체 상태(읽기 전용으로만 사용 - 이 함수는 state를 변형하지 않음)
@@ -194,6 +188,15 @@ export function generatePlan(state, opts) {
   const vStock = rules.stock.mode === "stockFirst" ? structuredClone(state.stock) : null;
   const warnings = [];
 
+  // 재료별 저장 형태 판단(냉동 큐브 vs 냉장 계량) - 지금 실제 재고 구성을 기준으로 생성 내내 고정.
+  // staple(무른밥 등)도 예외 없이 동일하게 판단 - 무른밥은 흔히 냉장 보관이라 실제 재고 형태를 따르는 게 맞음
+  const sourceTypeOf = {};
+  pool.forEach((name) => {
+    const hasFrozen = stockTotalCubes(state, name) > 0;
+    const hasFridge = stockFridgeG(state, name) > 0;
+    sourceTypeOf[name] = hasFrozen || !hasFridge ? "frozen" : "fridge";
+  });
+
   // 규칙 인덱싱
   const requireDailyRules = (rules.ingredientRules || []).filter((r) => r.enabled && r.type === "requireDaily");
   const maxPerWeekRules = (rules.ingredientRules || []).filter((r) => r.enabled && r.type === "maxPerWeek");
@@ -210,13 +213,15 @@ export function generatePlan(state, opts) {
   });
 
   const observingNames = new Set((state.intros || []).filter((it) => it.status === "관찰중").map((it) => it.name));
+  const perIngredientG = rules.perMeal.perIngredientG || {};
 
-  // 사용 이력 (다양성 스코어링 + 연속 금지 + 조합 반복 간격용)
+  // 사용 이력 (다양성 스코어링 + 연속 금지 + 주간 빈도 상한용) - 모두 "커밋된" 끼니 기준으로만 갱신됨
   const usageCount = {}; // name -> 누적 사용 횟수(스코어링)
   const lastUsedIdx = {}; // name -> 마지막 사용된 전체 끼니 순번(연속 금지 판정용)
   const weeklyUseDates = {}; // ruleId -> [dateIdx,...] (그룹 주간 빈도 제한용, 날짜 단위 1회만 카운트)
-  const comboHistory = []; // [{dateIdx, key}]
+  const todayCombos = {}; // dateIdx -> Set<comboKey> (같은 날 안에서만 조합 중복 검사)
   let lastNewIngredientDateIdx = -Infinity;
+  let lastNewIngredientNameUsed = null;
   let mealSeq = 0;
   let firstNoStockDateIdx = null;
 
@@ -228,7 +233,8 @@ export function generatePlan(state, opts) {
     if (!weeklyUseDates[rule.id]) weeklyUseDates[rule.id] = [];
     if (!weeklyUseDates[rule.id].includes(dateIdx)) weeklyUseDates[rule.id].push(dateIdx);
   };
-  const groupRuleFor = (name) => maxPerWeekRules.find((r) => (r.names || []).includes(name));
+  const labelsOf = (name) => (state.ingredients[name] && state.ingredients[name].labels) || [];
+  const groupRuleFor = (name) => maxPerWeekRules.find((r) => r.label && labelsOf(name).includes(r.label));
 
   const violatesGroupCap = (name, dateIdx) => {
     const rule = groupRuleFor(name);
@@ -240,7 +246,6 @@ export function generatePlan(state, opts) {
 
   // 신재료(관찰중) 배치 제약: 오전 첫 끼에만 + 다른 신재료와 최소 간격 - 이미 도입 중인 같은 재료를
   // 이어서 배치하는 건 새로 "도입"하는 게 아니므로 간격 제한에 걸리지 않음
-  let lastNewIngredientNameUsed = null;
   const violatesNewIngredientRule = (name, dateIdx, mealIdxInDay) => {
     if (!observingNames.has(name) || !newIngredientRule) return false;
     if (mealIdxInDay !== 0) return true;
@@ -249,9 +254,17 @@ export function generatePlan(state, opts) {
   };
 
   const scoreCandidate = (name) => {
+    const isFridge = sourceTypeOf[name] === "fridge";
     const batches = stockBatches(state, name);
-    const hasStock = vStock ? ((vStock[name] || {}).batches || []).some((b) => (b.frozen || 0) > 0) : true;
-    const soonestExp = batches.reduce((min, b) => (b.frozenExp && (!min || b.frozenExp < min) ? b.frozenExp : min), null);
+    const hasStock = vStock
+      ? ((vStock[name] || {}).batches || []).some((b) => (isFridge ? (b.fridgeG || 0) > 0 : (b.frozen || 0) > 0))
+      : true;
+    // 저장 형태에 맞는 유통기한 필드를 봐야 함 - 냉장 전용 재료를 frozenExp만 보고 스코어링하면
+    // "만료일이 없다"고 오판해서 항상 우선순위가 밀리는 문제가 있었음
+    const soonestExp = batches.reduce((min, b) => {
+      const exp = isFridge ? b.fridgeExp : b.frozenExp;
+      return exp && (!min || exp < min) ? exp : min;
+    }, null);
     return [
       hasStock ? 0 : 1, // 재고 있는 게 우선(오름차순 정렬 기준이라 작을수록 좋음)
       soonestExp || "9999-99-99",
@@ -265,12 +278,13 @@ export function generatePlan(state, opts) {
     return 0;
   });
 
-  // 다양성 제약(연속 금지·같은 날 반복)은 단계적으로 완화하되, 신재료 도입 제약과 주간 빈도 상한
-  // (생선 등 의학적 권고)은 안전 규칙이라 스펙의 완화 대상 목록에 없음 - base에 항상 포함시켜 절대 안 풀림.
-  // 완화 순서: 1) 전부 적용 2) 연속 금지만 해제 3) 같은 날 반복도 허용하되 "바로 직전 끼니와는 다르게"만 지킴
-  // 4) 그래도 안 되면 다 허용(그래도 신재료 제약·주간 상한은 base에서 계속 걸러짐)
-  const pickCandidates = (candidatesIn, count, dateIdx, mealIdxInDay, usedTodayNames) => {
-    const base = candidatesIn.filter((n) => !violatesNewIngredientRule(n, dateIdx, mealIdxInDay) && !violatesGroupCap(n, dateIdx));
+  // 같은 끼니 안에서 두 번 고르는 것은 항상 금지(usedThisMeal - 완화 대상 아님). 그 외 "오늘 다른 끼니와
+  // 반복"·"바로 직전 끼니와 반복"은 다양성 규칙이라 단계적으로 완화하되, 신재료 도입 제약과 주간 빈도
+  // 상한(생선 등 의학적 권고)은 안전 규칙이라 완화 대상이 아님 - base에 항상 포함시켜 절대 안 풀림.
+  // 완화 순서: 1) 전부 적용 2) 연속 금지만 해제 3) 같은 날 반복도 허용하되 "바로 직전 끼니와는 다르게"만
+  // 지킴 4) 그래도 안 되면 다 허용
+  const pickCandidates = (candidatesIn, count, dateIdx, mealIdxInDay, usedTodayNames, usedThisMeal) => {
+    const base = candidatesIn.filter((n) => !violatesNewIngredientRule(n, dateIdx, mealIdxInDay) && !violatesGroupCap(n, dateIdx) && !usedThisMeal.has(n));
     let candidates = base.filter((n) => {
       if (!rules.variety.allowSameDayRepeat && usedTodayNames.has(n)) return false;
       if (rules.variety.noConsecutiveMeals && lastUsedIdx[n] === mealSeq - 1) return false;
@@ -300,80 +314,87 @@ export function generatePlan(state, opts) {
     if (observingNames.has(name)) { lastNewIngredientDateIdx = dateIdx; lastNewIngredientNameUsed = name; }
   };
 
-  const placeItem = (items, name, targetG, dateIdx) => {
+  const buildItem = (name, targetG, dateIdx) => {
     const unitG = currentUnitGOf(state, name) || 15;
-    const requested = Math.max(1, Math.round(targetG / unitG));
-    const actual = tryVirtualDeduct(vStock, name, requested);
-    if (vStock && actual < requested && firstNoStockDateIdx === null) firstNoStockDateIdx = dateIdx;
-    items.push({ name, qty: requested, unitG, gramsOverride: null, _noStock: !!vStock && actual < requested });
+    const isFridge = sourceTypeOf[name] === "fridge";
+    const requestedAmount = isFridge ? Math.max(1, Math.round(targetG)) : Math.max(1, Math.round(targetG / unitG));
+    let actual = requestedAmount;
+    if (vStock) actual = isFridge ? deductFridge(vStock, name, requestedAmount, []) : deductFrozen(vStock, name, requestedAmount, []);
+    if (vStock && actual < requestedAmount && firstNoStockDateIdx === null) firstNoStockDateIdx = dateIdx;
+    return {
+      name,
+      qty: isFridge ? Math.max(1, Math.round(targetG / unitG)) : requestedAmount,
+      unitG,
+      gramsOverride: isFridge ? Math.round(targetG) : null,
+      _noStock: !!vStock && actual < requestedAmount,
+    };
   };
+
+  const targetGFor = (name, fallback) => (perIngredientG[name] != null ? perIngredientG[name] : fallback);
 
   const plansByDate = {};
 
   dates.forEach((date, dateIdx) => {
+    todayCombos[dateIdx] = new Set();
     const dayMeals = [];
-    const usedTodayNames = new Set();
+    const usedTodayNames = new Set(); // 오늘 이미 "커밋된" 끼니에서 쓰인 재료
     const requiredToday = new Set(requireDailyRules.map((r) => r.ingredient).filter((n) => pool.includes(n)));
     const satisfiedToday = new Set();
 
     slots.forEach((slot, mealIdxInDay) => {
-      const items = [];
       const perCatTarget = Object.values(categoryCounts).filter((r) => (r.max || 0) > 0);
       const totalSlots = perCatTarget.reduce((s, r) => s + r.max, 0) + (rules.staple.includeEveryMeal ? 1 : 0) || 1;
       const perItemG = Math.max(10, Math.round(rules.perMeal.targetTotalG / totalSlots));
 
-      // staple (다양성 규칙 면제 시에도 재고·유통기한 스코어링은 그대로 적용)
-      if (rules.staple.includeEveryMeal && stapleNames.length > 0) {
-        const { picked } = rules.variety.stapleExemptFromVariety
-          ? { picked: sortByScore(stapleNames).slice(0, 1) }
-          : pickCandidates(stapleNames, 1, dateIdx, mealIdxInDay, usedTodayNames);
-        picked.forEach((name) => {
-          placeItem(items, name, rules.staple.defaultG, dateIdx);
-          usedTodayNames.add(name);
-          markUsed(name, dateIdx);
-        });
-      }
+      // 조합이 오늘 다른 끼니와 겹치면, 카테고리 하나(가장 후보가 많은 곳)를 다른 재료로 바꿔서 재시도
+      let items = [];
+      let relaxedAny = false;
+      for (let attempt = 0; attempt <= COMBO_RETRY_ATTEMPTS; attempt++) {
+        items = [];
+        const usedThisMeal = new Set();
 
-      // 카테고리별 채우기
-      cats.forEach((cat) => {
-        const range = categoryCounts[cat.id] || { min: 0, max: 0 };
-        if ((range.max || 0) <= 0) return;
-        const count = range.min + Math.floor(rng() * (range.max - range.min + 1));
-        if (count <= 0) return;
-        const pooled = poolByCat[cat.id] || [];
-        const { picked, relaxed } = pickCandidates(pooled, count, dateIdx, mealIdxInDay, usedTodayNames);
-        if (picked.length < range.min) {
-          warnings.push(`${date} ${slot.label}: '${cat.name}' 카테고리를 채울 재료가 부족해요`);
-        } else if (relaxed) {
-          warnings.push(`${date} ${slot.label}: 다양성 규칙을 완화해서 재료를 배치했어요`);
+        if (rules.staple.includeEveryMeal && stapleNames.length > 0) {
+          const { picked } = rules.variety.stapleExemptFromVariety
+            ? { picked: sortByScore(stapleNames.filter((n) => !usedThisMeal.has(n))).slice(0, 1) }
+            : pickCandidates(stapleNames, 1, dateIdx, mealIdxInDay, usedTodayNames, usedThisMeal);
+          picked.forEach((name) => { items.push(buildItem(name, targetGFor(name, rules.staple.defaultG), dateIdx)); usedThisMeal.add(name); });
         }
-        picked.forEach((name) => {
-          placeItem(items, name, perItemG, dateIdx);
-          usedTodayNames.add(name);
-          markUsed(name, dateIdx);
-          if (requiredToday.has(name)) satisfiedToday.add(name);
+
+        cats.forEach((cat) => {
+          const range = categoryCounts[cat.id] || { min: 0, max: 0 };
+          if ((range.max || 0) <= 0) return;
+          const count = range.min + Math.floor(rng() * (range.max - range.min + 1));
+          if (count <= 0) return;
+          const pooled = poolByCat[cat.id] || [];
+          const { picked, relaxed } = pickCandidates(pooled, count, dateIdx, mealIdxInDay, usedTodayNames, usedThisMeal);
+          if (picked.length < range.min) {
+            if (attempt === COMBO_RETRY_ATTEMPTS) warnings.push(`${date} ${slot.label}: '${cat.name}' 카테고리를 채울 재료가 부족해요`);
+          } else if (relaxed) {
+            relaxedAny = true;
+          }
+          picked.forEach((name) => { items.push(buildItem(name, targetGFor(name, perItemG), dateIdx)); usedThisMeal.add(name); });
         });
-      });
+
+        const key = comboKeyOf(state, items);
+        if (!key || !todayCombos[dateIdx].has(key)) break; // 겹치지 않으면(또는 조합이 없으면) 이 결과로 확정
+        if (attempt === COMBO_RETRY_ATTEMPTS) warnings.push(`${date} ${slot.label}: 오늘 다른 끼니와 같은 조합이라 그대로 뒀어요`);
+      }
+      if (relaxedAny) warnings.push(`${date} ${slot.label}: 다양성 규칙을 완화해서 재료를 배치했어요`);
+
+      items.forEach((it) => { usedTodayNames.add(it.name); markUsed(it.name, dateIdx); if (requiredToday.has(it.name)) satisfiedToday.add(it.name); });
+      const finalKey = comboKeyOf(state, items);
+      if (finalKey) todayCombos[dateIdx].add(finalKey);
 
       dayMeals.push({ id: uid(), label: slot.label, time: slot.time, items, fromAutoGen: true });
       mealSeq++;
     });
 
     // requireDaily 후행 보정: 하루가 끝났는데도 필수 재료가 하나도 안 들어갔으면, 첫 끼니에 추가로
-    // 끼워 넣는다(카테고리 min/max를 넘겨서라도 - 의학적 권고가 다양성보다 우선)
+    // 끼워 넣는다(카테고리 min/max를 넘겨서라도, 조합 중복 검사도 건너뜀 - 의학적 권고가 다양성보다 우선)
     requiredToday.forEach((name) => {
       if (satisfiedToday.has(name) || dayMeals.length === 0) return;
-      placeItem(dayMeals[0].items, name, rules.perMeal.targetTotalG / 4, dateIdx);
+      dayMeals[0].items.push(buildItem(name, targetGFor(name, rules.perMeal.targetTotalG / 4), dateIdx));
       markUsed(name, dateIdx);
-    });
-
-    // 조합(끼니 내 비-staple 재료 조합) 반복 간격 체크 - 위반해도 되돌리진 않고 경고만(최종 완화 단계)
-    dayMeals.forEach((meal) => {
-      const key = meal.items.filter((it) => !isStaple(state, it.name)).map((it) => it.name).sort().join("+");
-      if (!key) return;
-      const dup = comboHistory.find((h) => h.key === key && dateIdx - h.dateIdx < rules.variety.comboRepeatGapDays);
-      if (dup) warnings.push(`${date} ${meal.label}: 최근에 나온 조합과 같아요 (반복 간격 규칙 완화됨)`);
-      comboHistory.push({ dateIdx, key });
     });
 
     plansByDate[date] = dayMeals;
