@@ -186,6 +186,13 @@ export function buildIngredientPool(state, { includeCaution = false, includeObse
   return [...names].sort((a, b) => a.localeCompare(b, "ko"));
 }
 
+// 재료 풀 화면 기본 노출용 - 후보 이름 목록 중 실제 냉동/냉장 재고가 조금이라도 있는 것만 남김.
+// 재고 없는 재료는 화면에 처음부터 죽 나열하는 대신 "재료 선택" 버튼(피커)으로만 추가하게 해서
+// 매번 재료 풀 전체를 훑어야 하는 부담을 줄임
+export function withStockOnly(state, names) {
+  return names.filter((n) => stockTotalCubes(state, n) > 0 || stockFridgeG(state, n) > 0);
+}
+
 // 재료 풀 화면에서 "1회 급여량"을 급여 기록 히스토리 기반으로 미리 채워주기 위한 평균 계산.
 // 시판 제품 항목은 재료 단위 함량을 알 수 없어 제외. 기록이 하나도 없으면 null(호출부가 기본값을 씀)
 export function avgServingGFromLogs(state, name) {

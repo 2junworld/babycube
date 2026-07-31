@@ -2,7 +2,7 @@
    실제 생성 알고리즘 실행·미리보기·확정저장은 PR C에서 이어서 구현. 여기서는 규칙을 확정해
    state.settings.autoGenRules에 저장(다음에 열 때 이어서 프리필)하는 데까지만 담당한다. */
 import React, { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Tag, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Refrigerator, Snowflake, Tag, X } from "lucide-react";
 import { C, primaryBtn } from "../theme";
 import { WD, addDaysISO, pad2, todayISO } from "../lib/dates";
 import { catOf, categoryList, currentUnitGOf, stockFridgeG, stockTotalCubes } from "../state/appState";
@@ -16,6 +16,7 @@ import {
   buildIngredientPool,
   checkRuleConflicts,
   validateAutoGenRules,
+  withStockOnly,
 } from "../lib/autoGen";
 
 /* =====================================================================
@@ -117,8 +118,9 @@ function PeriodStep({ range, setRange, onNext }) {
 }
 
 /* =====================================================================
-   ② 재료 풀 확인/편집 - intros 상태 기준 체크박스(카테고리별), 관찰중·주의 포함 토글(한 카드로 통합),
-   재료별 라벨(중복 가능) 편집, 재료별 1회 급여량(급여 기록 있으면 평균으로 프리필) + 냉동/냉장 유형 선택.
+   ② 재료 풀 확인/편집 - 재고가 있는 재료를 기본으로 보여주고(체크됨), 재고 없는 재료는
+   "재료 선택" 버튼(식단표 재료 추가와 동일한 피커)으로 필요할 때만 추가. 한 줄짜리 압축 카드로
+   냉동/냉장 유형(아이콘 토글) + 1회 급여량(급여 기록 있으면 평균으로 프리필) + 라벨을 다룸.
    ===================================================================== */
 function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, includeCaution, setIncludeCaution, perIngredientG, setPerIngredientG, perIngredientType, setPerIngredientType, onBack, onNext }) {
   const { state, dispatch } = useStore();
@@ -127,18 +129,13 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
   const [labelDraft, setLabelDraft] = useState("");
 
   const introOf = (name) => (state.intros || []).find((it) => it.name === name);
-  const availableNames = useMemo(
-    () => buildIngredientPool(state, { includeObserving: true, includeCaution: true }),
-    [state.intros]
+  // 기본 노출: 이상없음(+토글 켜면 관찰중·주의)이면서 실제 재고가 있는 재료만. 나머지는 아래
+  // "재료 선택" 버튼으로 필요할 때만 불러옴 - 그렇게 고른 재료(checked)는 재고가 없어도 계속 보여줌
+  const stockNames = useMemo(
+    () => withStockOnly(state, buildIngredientPool(state, { includeObserving, includeCaution })),
+    [state.intros, state.stock, includeObserving, includeCaution]
   );
-  const visibleNames = availableNames.filter((n) => {
-    const st = introOf(n)?.status;
-    if (st === "관찰중" && !includeObserving) return false;
-    if (st === "주의" && !includeCaution) return false;
-    return true;
-  });
-  const manualExtra = [...checked].filter((n) => !availableNames.includes(n));
-  const allVisible = [...visibleNames, ...manualExtra];
+  const allVisible = useMemo(() => [...new Set([...stockNames, ...checked])], [stockNames, checked]);
   const cats = categoryList(state);
   const grouped = cats.map((c) => ({ cat: c, names: allVisible.filter((n) => catOf(state, n) === c.name) })).filter((g) => g.names.length > 0);
 
@@ -155,25 +152,13 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleKey]);
 
-  const toggleObserving = (on) => {
-    setIncludeObserving(on);
-    const names = (state.intros || []).filter((it) => it.status === "관찰중").map((it) => it.name);
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (on) names.forEach((n) => next.add(n)); else names.forEach((n) => next.delete(n));
-      return next;
-    });
-  };
-  const toggleCaution = (on) => {
-    setIncludeCaution(on);
-    const names = (state.intros || []).filter((it) => it.status === "주의").map((it) => it.name);
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (on) names.forEach((n) => next.add(n)); else names.forEach((n) => next.delete(n));
-      return next;
-    });
-  };
   const toggleName = (n) => setChecked((prev) => { const next = new Set(prev); if (next.has(n)) next.delete(n); else next.add(n); return next; });
+  // 피커에서 고른 재료를 추가 - "중단" 상태 재료는 자동 생성에서 항상 제외되므로 안전하게 걸러냄
+  const addFromPicker = (names) => {
+    setPicker(false);
+    const blocked = new Set((state.intros || []).filter((it) => it.status === "중단").map((it) => it.name));
+    setChecked((p) => new Set([...p, ...names.filter((n) => !blocked.has(n))]));
+  };
 
   const addLabel = (name, label) => {
     const trimmed = (label || "").trim();
@@ -187,9 +172,14 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
     dispatch({ type: "INGREDIENT_SET_META", name, patch: { labels: cur.filter((l) => l !== label) } });
   };
 
-  // 재료 유형(냉동/냉장) - 기본 냉동. 유형에 따라 입력창 단위가 큐브 개수 ↔ 중량(g)으로 바뀌지만,
-  // 내부적으로는 항상 그램(perIngredientG)으로 환산해 저장(생성 알고리즘은 실제 재고에 따라 다시 판단함)
-  const typeOf = (n) => perIngredientType[n] || "frozen";
+  // 재료 유형(냉동/냉장) - 아직 사용자가 고르지 않았다면 실제 재고 구성을 보고 화면에서만 똑똑하게
+  // 기본값을 잡아줌(냉장 재고뿐이면 냉장, 그 외엔 냉동) - 저장은 사용자가 실제로 건드렸을 때만 됨.
+  // 유형에 따라 입력창 단위가 큐브 개수 ↔ 중량(g)으로 바뀌지만, 내부적으로는 항상 그램(perIngredientG)
+  // 으로 환산해 저장(생성 시점엔 resolveStorageType이 실제 재고를 기준으로 다시 판단함)
+  const typeOf = (n) => {
+    if (perIngredientType[n]) return perIngredientType[n];
+    return stockTotalCubes(state, n) === 0 && stockFridgeG(state, n) > 0 ? "fridge" : "frozen";
+  };
   const setType = (n, type) => setPerIngredientType((p) => ({ ...p, [n]: type }));
   const unitGOfName = (n) => currentUnitGOf(state, n) || 15;
   const displayQty = (n) => {
@@ -203,28 +193,21 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
     next[n] = typeOf(n) === "frozen" ? v * unitGOfName(n) : v;
     return next;
   });
-  const stockHint = (n) => {
-    const cubes = stockTotalCubes(state, n), fridgeG = stockFridgeG(state, n);
-    if (cubes > 0 && fridgeG > 0) return `재고 냉동 ${cubes} · 냉장 ${fridgeG}g`;
-    if (cubes > 0) return `재고 냉동 ${cubes}개`;
-    if (fridgeG > 0) return `재고 냉장 ${fridgeG}g`;
-    return "재고 없음";
-  };
 
   return (
     <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
-        체크한 재료만 자동 생성에 사용돼요. '이상없음' 재료는 기본으로 포함되고, '관찰중'·'주의' 재료는 필요할 때만 켜서 포함할 수 있어요.
+        재고가 있는 재료를 기본으로 보여드려요. 재고가 없는 재료를 쓰려면 아래 '재료 선택'으로 추가해 주세요.
       </div>
 
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
         <div className="flex items-center justify-between">
           <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>관찰중 재료 포함</span>
-          <Segmented value={includeObserving ? "on" : "off"} onChange={(v) => toggleObserving(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+          <Segmented value={includeObserving ? "on" : "off"} onChange={(v) => setIncludeObserving(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
         </div>
         <div className="flex items-center justify-between">
           <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>주의 재료 포함</span>
-          <Segmented value={includeCaution ? "on" : "off"} onChange={(v) => toggleCaution(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+          <Segmented value={includeCaution ? "on" : "off"} onChange={(v) => setIncludeCaution(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
         </div>
       </div>
 
@@ -234,51 +217,54 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
             <span style={{ width: 7, height: 7, borderRadius: 999, background: cat.color, display: "inline-block" }} />
             <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 700 }}>{cat.name}</span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
             {names.map((n) => {
               const st = introOf(n)?.status;
               const labels = state.ingredients[n]?.labels || [];
               const suggestFish = COMMON_FISH_NAMES.includes(n) && !labels.includes("생선");
               const type = typeOf(n);
+              const hasLabelUi = labels.length > 0 || labelInputFor === n || suggestFish;
               return (
-                <div key={n} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "6px 10px", display: "flex", flexDirection: "column", gap: 5 }}>
+                <div key={n} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, padding: "5px 8px" }}>
                   <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-                    <button onClick={() => toggleName(n)} style={{ width: 15, height: 15, borderRadius: 4, border: `1.5px solid ${checked.has(n) ? C.sage : C.border}`, background: checked.has(n) ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer", padding: 0 }}>
+                    <button onClick={() => toggleName(n)} style={{ width: 14, height: 14, borderRadius: 4, border: `1.5px solid ${checked.has(n) ? C.sage : C.border}`, background: checked.has(n) ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer", padding: 0 }}>
                       {checked.has(n) && <span style={{ width: 6, height: 6, background: "#fff", borderRadius: 1.5 }} />}
                     </button>
                     <span onClick={() => toggleName(n)} style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>{n}</span>
                     {(st === "관찰중" || st === "주의") && (
                       <span style={{ fontSize: 9, fontWeight: 700, color: st === "주의" ? C.apricot : C.sageDeep, background: st === "주의" ? C.apricotLight : C.sageLight, borderRadius: 999, padding: "1.5px 5px" }}>{st}</span>
                     )}
-                    {labels.map((l) => (
-                      <span key={l} className="flex items-center" style={{ gap: 2, fontSize: 9.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "2px 3px 2px 6px" }}>
-                        {l}
-                        <button onClick={() => removeLabel(n, l)} style={{ background: "none", border: "none", padding: 1, cursor: "pointer", display: "flex" }}><X size={8} color={C.sageDeep} /></button>
-                      </span>
-                    ))}
-                    {labelInputFor === n ? (
-                      <input autoFocus value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") { addLabel(n, labelDraft); setLabelDraft(""); setLabelInputFor(null); } if (e.key === "Escape") setLabelInputFor(null); }}
-                        onBlur={() => { addLabel(n, labelDraft); setLabelDraft(""); setLabelInputFor(null); }}
-                        placeholder="라벨 입력 후 Enter" style={{ width: 100, fontSize: 10.5, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px", outline: "none" }} />
-                    ) : (
-                      <button onClick={() => { setLabelInputFor(n); setLabelDraft(""); }} style={{ background: "transparent", border: `1px dashed ${C.border}`, borderRadius: 999, padding: "2px 5px", cursor: "pointer", display: "flex" }}>
-                        <Tag size={9} color={C.muted} />
-                      </button>
-                    )}
-                    {suggestFish && labelInputFor !== n && (
-                      <button onClick={() => addLabel(n, "생선")} style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, border: "none", borderRadius: 999, padding: "2px 6px", cursor: "pointer" }}>
-                        생선 라벨 +
-                      </button>
-                    )}
+                    <div style={{ flex: 1 }} />
+                    <button onClick={() => setType(n, type === "frozen" ? "fridge" : "frozen")} title={type === "frozen" ? "냉동" : "냉장"}
+                      style={{ width: 22, height: 22, borderRadius: 6, background: C.sageLight, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+                      {type === "frozen" ? <Snowflake size={12} color={C.sageDeep} /> : <Refrigerator size={12} color={C.sageDeep} />}
+                    </button>
+                    <NumInput value={displayQty(n)} onChange={(v) => setQty(n, v)} suffix={type === "frozen" ? "큐브" : "g"} width={34} />
+                    <button onClick={() => { setLabelInputFor(labelInputFor === n ? null : n); setLabelDraft(""); }} style={{ background: "transparent", border: "none", padding: 2, cursor: "pointer", display: "flex", flexShrink: 0 }}>
+                      <Tag size={12} color={labels.length > 0 ? C.sageDeep : C.muted} />
+                    </button>
                   </div>
-                  <div className="flex items-center justify-between" style={{ gap: 8 }}>
-                    <div className="flex items-center" style={{ gap: 6 }}>
-                      <Segmented value={type} onChange={(v) => setType(n, v)} options={[{ value: "frozen", label: "냉동" }, { value: "fridge", label: "냉장" }]} />
-                      <span style={{ fontSize: 9.5, color: C.muted }}>{stockHint(n)}</span>
+                  {hasLabelUi && (
+                    <div className="flex items-center" style={{ gap: 4, marginTop: 4, paddingLeft: 20, flexWrap: "wrap" }}>
+                      {labels.map((l) => (
+                        <span key={l} className="flex items-center" style={{ gap: 2, fontSize: 9.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "2px 3px 2px 6px" }}>
+                          {l}
+                          <button onClick={() => removeLabel(n, l)} style={{ background: "none", border: "none", padding: 1, cursor: "pointer", display: "flex" }}><X size={8} color={C.sageDeep} /></button>
+                        </span>
+                      ))}
+                      {labelInputFor === n && (
+                        <input autoFocus value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { addLabel(n, labelDraft); setLabelDraft(""); } if (e.key === "Escape") setLabelInputFor(null); }}
+                          onBlur={() => { addLabel(n, labelDraft); setLabelDraft(""); setLabelInputFor(null); }}
+                          placeholder="라벨 입력 후 Enter" style={{ width: 100, fontSize: 10.5, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px", outline: "none" }} />
+                      )}
+                      {suggestFish && labelInputFor !== n && (
+                        <button onClick={() => addLabel(n, "생선")} style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, border: "none", borderRadius: 999, padding: "2px 6px", cursor: "pointer" }}>
+                          생선 라벨 +
+                        </button>
+                      )}
                     </div>
-                    <NumInput value={displayQty(n)} onChange={(v) => setQty(n, v)} suffix={type === "frozen" ? "큐브" : "g"} width={38} />
-                  </div>
+                  )}
                 </div>
               );
             })}
@@ -287,7 +273,7 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
       ))}
 
       <button onClick={() => setPicker(true)} className="flex items-center justify-center" style={{ width: "100%", gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-        <Plus size={14} /> 재료 직접 추가
+        <Plus size={14} /> 재료 선택 (재고 없는 재료 추가)
       </button>
 
       <div className="flex items-center" style={{ gap: 8 }}>
@@ -297,7 +283,7 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
         </button>
       </div>
       {picker && (
-        <IngredientPicker multi onPick={(names) => { setChecked((p) => new Set([...p, ...names])); setPicker(false); }} alreadyAdded={[...checked]} onClose={() => setPicker(false)} />
+        <IngredientPicker multi onPick={addFromPicker} alreadyAdded={[...checked]} onClose={() => setPicker(false)} />
       )}
     </div>
   );
@@ -447,7 +433,7 @@ export function AutoGenFlowScreen({ onBack }) {
   const { state, dispatch, notify } = useStore();
   const [step, setStep] = useState("period");
   const [range, setRange] = useState({ start: null, end: null });
-  const [checked, setChecked] = useState(() => new Set(buildIngredientPool(state)));
+  const [checked, setChecked] = useState(() => new Set(withStockOnly(state, buildIngredientPool(state))));
   const [includeObserving, setIncludeObserving] = useState(false);
   const [includeCaution, setIncludeCaution] = useState(false);
   const [perIngredientGDraft, setPerIngredientGDraft] = useState({});
