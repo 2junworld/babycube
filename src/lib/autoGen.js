@@ -95,9 +95,11 @@ export function defaultAutoGenRules(state) {
       { id: uid(), preset: "proteinEveryMeal", type: "categoryFloor", categoryName: "단백질", value: 1, enabled: true },
       { id: uid(), preset: "newIngredientSpacing", type: "newIngredientSpacing", cooldownDays: NEW_INGREDIENT_COOLDOWN_DAYS, enabled: true },
     ],
-    // 주식은 항상 다양성 규칙에서 예외(같은 주식이 매 끼니 반복돼도 됨) - 예전엔 별도 토글이었는데
-    // "매 끼니 자동 포함"(staple.includeEveryMeal)과 개념이 겹쳐 헷갈린다는 피드백으로 토글을 없애고
-    // 항상 예외로 고정함(기본값이 이미 true였으므로 실사용 동작은 그대로)
+    // 주식도 카테고리 재료와 같은 다양성 규칙(연속 끼니 금지·같은 날 반복 허용 여부)을 그대로 적용받음 -
+    // 예전엔 "주식은 항상 다양성 예외"라는 별도 토글이 있었는데 "매 끼니 자동 포함"(staple.includeEveryMeal)과
+    // 개념이 겹쳐 헷갈린다는 피드백으로 토글을 없앰. 조합이 하나뿐이면 다른 후보가 없어 완화 사다리를
+    // 타고 내려가 결국 그대로 반복되므로(예전 "항상 예외" 동작과 결과가 같음) 실사용엔 차이 없고,
+    // 조합을 여러 개 등록하면 이제 서로 돌아가며 쓰임(pickStapleCombo 참고)
     variety: { noConsecutiveMeals: true, allowSameDayRepeat: false },
     stock: { mode: "stockFirst", preferExpiring: true, autoShopping: true },
     includeProducts: false,
@@ -301,11 +303,17 @@ export function generatePlan(state, opts) {
   const vStock = rules.stock.mode === "stockFirst" ? structuredClone(state.stock) : null;
   const warnings = [];
 
-  // 재료별 저장 형태 판단(냉동 큐브 vs 냉장 계량) - 지금 실제 재고 구성 + 사용자가 재료 풀 화면에서
-  // 고른 기본값을 기준으로 생성 내내 고정(resolveStorageType 참고). staple(무른밥 등)도 예외 없이
-  // 동일하게 판단 - 무른밥은 흔히 냉장 보관이라 실제 재고 형태를 따르는 게 맞음
+  // 재료별 저장 형태 판단(냉동 큐브 vs 냉장 계량) - 지금 실제 재고 구성 + 사용자가 고른 기본값을
+  // 기준으로 생성 내내 고정(resolveStorageType 참고). staple(무른밥 등)도 예외 없이 동일하게 판단 -
+  // 무른밥은 흔히 냉장 보관이라 실제 재고 형태를 따르는 게 맞음. staple 조합 재료는 재료 풀(pool)에
+  // 없으므로(주식은 규칙 화면에서 따로 구성) 별도로 챙겨서 넣어줘야 함 - 안 그러면 storageTypeOf가
+  // undefined가 되어 무조건 냉동 취급되고, 냉장 전용 재고인 재료도 냉동 재고를 찾다가 재고 부족으로
+  // 잘못 표시됨
   const storageTypeOf = {};
   pool.forEach((name) => { storageTypeOf[name] = resolveStorageType(state, name, rules); });
+  stapleCombos.forEach((combo) => combo.names.forEach((name) => {
+    if (!(name in storageTypeOf)) storageTypeOf[name] = resolveStorageType(state, name, rules);
+  }));
 
   // 규칙 인덱싱
   const requireDailyRules = (rules.ingredientRules || []).filter((r) => r.enabled && r.type === "requireDaily");
@@ -507,8 +515,7 @@ export function generatePlan(state, opts) {
     slots.forEach((slot, mealIdxInDay) => {
       const mealTargetG = (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[slot.label]) || rules.perMeal.targetTotalG;
       const perCatTarget = Object.values(categoryCounts).filter((r) => (r.max || 0) > 0);
-      const totalSlots = perCatTarget.reduce((s, r) => s + r.max, 0) + (rules.staple.includeEveryMeal ? 1 : 0) || 1;
-      const perItemG = Math.max(10, Math.round(mealTargetG / totalSlots));
+      const totalCatSlots = perCatTarget.reduce((s, r) => s + r.max, 0) || 1;
 
       // 조합이 오늘 다른 끼니와 겹치면, 카테고리 하나(가장 후보가 많은 곳)를 다른 재료로 바꿔서 재시도
       let items = [];
@@ -516,6 +523,7 @@ export function generatePlan(state, opts) {
       for (let attempt = 0; attempt <= COMBO_RETRY_ATTEMPTS; attempt++) {
         items = [];
         const usedThisMeal = new Set();
+        let stapleG = 0;
 
         if (rules.staple.includeEveryMeal && stapleCombos.length > 0) {
           const chosenCombo = pickStapleCombo(usedTodayNames);
@@ -524,11 +532,17 @@ export function generatePlan(state, opts) {
             const gramsByName = chosenCombo.gramsByName || {};
             chosenCombo.names.forEach((name) => {
               const comboG = gramsByName[name] > 0 ? gramsByName[name] : fallbackG;
+              stapleG += comboG;
               items.push(buildItem(name, targetGFor(name, comboG), dateIdx));
               usedThisMeal.add(name);
             });
           }
         }
+
+        // 주식이 실제로 차지한 양(stapleG)을 먼저 빼고 남은 예산만 카테고리 재료에 나눠서, 끼니
+        // 총량이 목표를 벗어나지 않게 함(예전엔 주식을 "슬롯 하나"로만 취급해 실제 주식 양과
+        // 무관하게 목표 총량을 훨씬 넘겨 배치되는 문제가 있었음)
+        const perItemG = Math.max(10, Math.round(Math.max(0, mealTargetG - stapleG) / totalCatSlots));
 
         cats.forEach((cat) => {
           const range = categoryCounts[cat.id] || { min: 0, max: 0 };

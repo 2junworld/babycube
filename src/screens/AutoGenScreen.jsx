@@ -354,6 +354,13 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
     ...r,
     staple: { ...r.staple, combos: r.staple.combos.map((c) => (c.id === comboId ? { ...c, gramsByName: { ...c.gramsByName, [name]: v } } : c)) },
   }));
+  // 주식 재료도 재료 풀과 같은 저장형태(냉동 큐브/냉장 계량) 선택을 공유(rules.perMeal.perIngredientType) -
+  // 아직 안 골랐으면 실제 재고 구성을 보고 화면에서만 기본값을 잡아줌(재료 풀 화면의 typeOf와 동일한 규칙)
+  const stapleTypeOf = (name) => {
+    if (rules.perMeal.perIngredientType[name]) return rules.perMeal.perIngredientType[name];
+    return stockTotalCubes(state, name) === 0 && stockFridgeG(state, name) > 0 ? "fridge" : "frozen";
+  };
+  const setStapleType = (name, type) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, perIngredientType: { ...r.perMeal.perIngredientType, [name]: type } } }));
   const canFinish = !rules.staple.includeEveryMeal || (rules.staple.combos || []).length > 0;
   // 조합 총 급여량이 어느 끼니의 목표 총량보다 많으면 그 끼니는 다른 재료가 들어갈 자리가 부족해짐 -
   // 재료별 급여량을 조정하는 동안 바로바로 알 수 있게 조합 카드에 인라인으로 표시
@@ -448,16 +455,30 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
                     <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{combo.names.join(" + ")}</span>
                     <button onClick={() => removeCombo(combo.id)} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", padding: "2px 4px" }}>삭제</button>
                   </div>
-                  {combo.names.map((name) => (
-                    <div key={name} className="flex items-center justify-between">
-                      <span style={{ fontSize: 11.5, color: C.inkSoft }}>{name}</span>
-                      <NumInput value={(combo.gramsByName || {})[name] ?? 0} onChange={(v) => setComboGram(combo.id, name, v)} suffix="g" width={44} />
-                    </div>
-                  ))}
+                  {combo.names.map((name) => {
+                    const type = stapleTypeOf(name);
+                    return (
+                      <div key={name} className="flex items-center justify-between" style={{ gap: 6 }}>
+                        <span style={{ fontSize: 11.5, color: C.inkSoft }}>{name}</span>
+                        <div className="flex items-center" style={{ gap: 6 }}>
+                          <button onClick={() => setStapleType(name, type === "frozen" ? "fridge" : "frozen")} title={type === "frozen" ? "냉동" : "냉장"}
+                            style={{ width: 22, height: 22, borderRadius: 6, background: C.surface, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+                            {type === "frozen" ? <Snowflake size={12} color={C.sageDeep} /> : <Refrigerator size={12} color={C.sageDeep} />}
+                          </button>
+                          <NumInput value={(combo.gramsByName || {})[name] ?? 0} onChange={(v) => setComboGram(combo.id, name, v)} suffix="g" width={44} />
+                        </div>
+                      </div>
+                    );
+                  })}
                   <div className="flex items-center justify-between" style={{ paddingTop: 4, borderTop: `1px dashed ${C.border}` }}>
                     <span style={{ fontSize: 10.5, color: C.muted }}>조합 합계</span>
                     <span style={{ fontSize: 11, fontWeight: 700, color: exceeded.length > 0 ? "#9A4A1E" : C.inkSoft }}>{comboTotal}g</span>
                   </div>
+                  {Math.abs(comboTotal - rules.staple.defaultG) > combo.names.length && (
+                    <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.4 }}>
+                      끼니당 급여량({rules.staple.defaultG}g)과 달라요 - 이 조합은 재료별로 지정한 값의 합({comboTotal}g)으로 생성돼요.
+                    </div>
+                  )}
                   {exceeded.length > 0 && (
                     <div style={{ fontSize: 10.5, color: "#9A4A1E", lineHeight: 1.4 }}>
                       ⚠ '{exceeded.reduce((a, b) => (a.g < b.g ? a : b)).label}' 목표 총량({exceeded.reduce((a, b) => (a.g < b.g ? a : b)).g}g)보다 많아요 - 다른 재료가 들어갈 자리가 부족해질 수 있어요.
