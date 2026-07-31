@@ -18,6 +18,7 @@ import {
   checkRuleConflicts,
   enumerateDates,
   generatePlan,
+  stapleComboTotalG,
   validateAutoGenRules,
   withStockOnly,
 } from "../lib/autoGen";
@@ -354,6 +355,15 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
     staple: { ...r.staple, combos: r.staple.combos.map((c) => (c.id === comboId ? { ...c, gramsByName: { ...c.gramsByName, [name]: v } } : c)) },
   }));
   const canFinish = !rules.staple.includeEveryMeal || (rules.staple.combos || []).length > 0;
+  // 조합 총 급여량이 어느 끼니의 목표 총량보다 많으면 그 끼니는 다른 재료가 들어갈 자리가 부족해짐 -
+  // 재료별 급여량을 조정하는 동안 바로바로 알 수 있게 조합 카드에 인라인으로 표시
+  const mealTargets = useMemo(
+    () => (state.mealSlots.length > 0 ? state.mealSlots : [{ label: "끼니" }]).map((s) => ({
+      label: s.label,
+      g: (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[s.label]) || rules.perMeal.targetTotalG,
+    })),
+    [state.mealSlots, rules.perMeal.targetGByLabel, rules.perMeal.targetTotalG]
+  );
 
   return (
     <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -429,20 +439,33 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
             <NumInput value={rules.staple.defaultG} onChange={(v) => setRules((r) => ({ ...r, staple: { ...r.staple, defaultG: v } }))} suffix="g" width={44} />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: (rules.staple.combos || []).length > 0 ? 4 : 0, borderTop: (rules.staple.combos || []).length > 0 ? `1px dashed ${C.border}` : "none" }}>
-            {(rules.staple.combos || []).map((combo) => (
-              <div key={combo.id} style={{ background: C.sageLight, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
-                <div className="flex items-center justify-between">
-                  <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{combo.names.join(" + ")}</span>
-                  <button onClick={() => removeCombo(combo.id)} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", padding: "2px 4px" }}>삭제</button>
-                </div>
-                {combo.names.map((name) => (
-                  <div key={name} className="flex items-center justify-between">
-                    <span style={{ fontSize: 11.5, color: C.inkSoft }}>{name}</span>
-                    <NumInput value={(combo.gramsByName || {})[name] ?? 0} onChange={(v) => setComboGram(combo.id, name, v)} suffix="g" width={44} />
+            {(rules.staple.combos || []).map((combo) => {
+              const comboTotal = stapleComboTotalG(rules, combo);
+              const exceeded = mealTargets.filter((t) => comboTotal > t.g);
+              return (
+                <div key={combo.id} style={{ background: C.sageLight, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div className="flex items-center justify-between">
+                    <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{combo.names.join(" + ")}</span>
+                    <button onClick={() => removeCombo(combo.id)} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", padding: "2px 4px" }}>삭제</button>
                   </div>
-                ))}
-              </div>
-            ))}
+                  {combo.names.map((name) => (
+                    <div key={name} className="flex items-center justify-between">
+                      <span style={{ fontSize: 11.5, color: C.inkSoft }}>{name}</span>
+                      <NumInput value={(combo.gramsByName || {})[name] ?? 0} onChange={(v) => setComboGram(combo.id, name, v)} suffix="g" width={44} />
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between" style={{ paddingTop: 4, borderTop: `1px dashed ${C.border}` }}>
+                    <span style={{ fontSize: 10.5, color: C.muted }}>조합 합계</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: exceeded.length > 0 ? "#9A4A1E" : C.inkSoft }}>{comboTotal}g</span>
+                  </div>
+                  {exceeded.length > 0 && (
+                    <div style={{ fontSize: 10.5, color: "#9A4A1E", lineHeight: 1.4 }}>
+                      ⚠ '{exceeded.reduce((a, b) => (a.g < b.g ? a : b)).label}' 목표 총량({exceeded.reduce((a, b) => (a.g < b.g ? a : b)).g}g)보다 많아요 - 다른 재료가 들어갈 자리가 부족해질 수 있어요.
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           <button onClick={() => setComboPicker(true)} style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep, background: "none", border: `1px dashed ${C.sage}`, borderRadius: 8, padding: "8px 0" }}>+ 조합 추가</button>
         </div>

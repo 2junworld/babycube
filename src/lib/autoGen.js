@@ -166,6 +166,16 @@ export function rulesReferenceDeletedCategory(state, rules) {
   return Object.entries(counts).some(([id, r]) => !validIds.has(id) && ((r.min || 0) > 0 || (r.max || 0) > 0));
 }
 
+// 주식 조합 하나의 총 급여량(g) - 재료별로 직접 지정한 값(gramsByName)을 우선 쓰고,
+// 지정 안 한 재료는 끼니당 급여량(defaultG)을 조합 구성원 수로 균등 분배한 값을 씀.
+// generatePlan()의 실제 배치 로직과 반드시 같은 계산이어야 함(화면에 보여줄 총량이 실제 생성 결과와 어긋나면 안 되므로).
+export function stapleComboTotalG(rules, combo) {
+  if (!combo || !combo.names || combo.names.length === 0) return 0;
+  const fallbackG = Math.max(10, Math.round(rules.staple.defaultG / combo.names.length));
+  const gramsByName = combo.gramsByName || {};
+  return combo.names.reduce((s, n) => s + (gramsByName[n] > 0 ? gramsByName[n] : fallbackG), 0);
+}
+
 // 생성 전 규칙 화면에서 보여줄 충돌 경고 (필수 규칙 재료가 재료 풀에서 빠진 경우 등)
 export function checkRuleConflicts(state, rules, pool) {
   const poolSet = new Set(pool);
@@ -181,6 +191,24 @@ export function checkRuleConflicts(state, rules, pool) {
   });
   if (rules.staple.includeEveryMeal && (!rules.staple.combos || rules.staple.combos.length === 0)) {
     warnings.push("주식 조합이 하나도 없어서 자동 포함 규칙을 건너뜁니다 - 주식 설정에서 조합을 추가해 주세요");
+  }
+  // 주식 조합의 총 급여량이 끼니당 목표 총량을 넘으면, 그 조합이 배치되는 끼니는 다른 재료가
+  // 들어갈 자리(무게)가 부족해져서 목표 총량을 크게 초과하게 됨 - 미리 경고
+  if (rules.staple.includeEveryMeal) {
+    const mealSlots = state.mealSlots && state.mealSlots.length > 0 ? state.mealSlots : [{ label: "끼니" }];
+    const targets = mealSlots.map((s) => ({
+      label: s.label,
+      g: (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[s.label]) || rules.perMeal.targetTotalG,
+    }));
+    (rules.staple.combos || []).forEach((combo) => {
+      const total = stapleComboTotalG(rules, combo);
+      const exceeded = targets.filter((t) => total > t.g);
+      if (exceeded.length > 0) {
+        const worst = exceeded.reduce((a, b) => (a.g < b.g ? a : b));
+        const label = combo.names.join(" + ");
+        warnings.push(`주식 조합 '${label}'의 총 급여량(${total}g)이 '${worst.label}' 목표 총량(${worst.g}g)보다 많아요 - 다른 재료가 들어갈 자리가 부족해질 수 있어요`);
+      }
+    });
   }
   return warnings;
 }
