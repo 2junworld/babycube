@@ -115,9 +115,11 @@ export function MealItemList({ items, fontSize = 11, wrap = false, empty = "-" }
   return (
     <div style={{ display: "flex", flexDirection: wrap ? "row" : "column", flexWrap: wrap ? "wrap" : "nowrap", gap: wrap ? "3px 12px" : 2 }}>
       {sorted.map((it) => (
-        <span key={it.productId || it.name} className="flex items-center" style={{ fontSize, color: C.inkSoft, lineHeight: 1.3 }}>
+        <span key={it.productId || it.name} className="flex items-center" style={{ gap: 2, fontSize, color: C.inkSoft, lineHeight: 1.3 }}>
           {it.source === "product" ? <ProductDot size={Math.max(5, fontSize - 4)} /> : <CatDot name={it.name} size={Math.max(5, fontSize - 4)} />}
           {it.source === "product" ? `${it.productName} ${it.qty}팩` : it.name}
+          {/* 자동 생성 미리보기에서 재고 시뮬레이션 결과 재고가 모자란 항목에만 붙는 표시(_noStock) - 다른 화면의 일반 항목엔 이 필드가 없어 평소엔 아무 영향 없음 */}
+          {it._noStock && <span style={{ color: C.apricot }} title="재고 부족">⚠</span>}
         </span>
       ))}
     </div>

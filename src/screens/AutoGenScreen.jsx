@@ -2,19 +2,22 @@
    실제 생성 알고리즘 실행·미리보기·확정저장은 PR C에서 이어서 구현. 여기서는 규칙을 확정해
    state.settings.autoGenRules에 저장(다음에 열 때 이어서 프리필)하는 데까지만 담당한다. */
 import React, { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Refrigerator, Snowflake, Tag, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Pencil, Plus, Refrigerator, Snowflake, Tag, X } from "lucide-react";
 import { C, primaryBtn } from "../theme";
 import { WD, addDaysISO, pad2, todayISO } from "../lib/dates";
-import { catOf, categoryList, currentUnitGOf, stockFridgeG, stockTotalCubes } from "../state/appState";
+import { catOf, categoryList, currentUnitGOf, stockFridgeG, stockTotalCubes, totalG } from "../state/appState";
 import { useStore } from "../store";
-import { NumInput, Segmented, SubHeader } from "../components/common";
+import { MealItemList, NumInput, Segmented, SubHeader, BottomSheet } from "../components/common";
 import { IngredientPicker } from "../components/pickers";
+import { PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
 import {
   COMMON_FISH_NAMES,
   INGREDIENT_RULE_PRESETS,
   avgServingGFromLogs,
   buildIngredientPool,
   checkRuleConflicts,
+  enumerateDates,
+  generatePlan,
   validateAutoGenRules,
   withStockOnly,
 } from "../lib/autoGen";
@@ -450,10 +453,126 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
 }
 
 /* =====================================================================
+   ④ 미리보기 - 생성 결과를 날짜별로 보여줌. 재고가 모자란 항목엔 배지(MealItemList의
+   _noStock 처리)가 붙고, 재고 소진 시작일엔 별도 안내가 뜸. 이미 같은 이름의 끼니가 있는
+   날짜는 "건너뜀"으로 표시하고 저장 대상에서 제외(기존 계획은 안 건드림).
+   ===================================================================== */
+function PreviewStep({ dates, genResult, editedPlans, onEditMeal, onRegenerate, onBack, onConfirm }) {
+  const { state } = useStore();
+  const [showWarnings, setShowWarnings] = useState(false);
+  const alreadyExists = (date, label) => (state.plans[date] || []).some((m) => m.label === label);
+  const saveCount = dates.reduce((s, d) => s + (editedPlans[d] || []).filter((m) => !alreadyExists(d, m.label)).length, 0);
+
+  return (
+    <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
+        생성된 식단을 확인하고 필요하면 끼니별로 수정한 뒤 저장해 주세요. 이미 같은 이름의 끼니가 있는 날짜는 건드리지 않고 건너뛰어요.
+      </div>
+
+      {genResult.firstNoStockDate && (
+        <div style={{ background: C.apricotLight, borderRadius: 10, padding: "10px 12px", fontSize: 11.5, color: "#9A4A1E", lineHeight: 1.5 }}>
+          {genResult.firstNoStockDate}부터는 일부 재료의 재고가 모자라요. 그래도 계속 생성은 되고, ⚠ 표시된 재료가 그 대상이에요.
+        </div>
+      )}
+      {genResult.warnings.length > 0 && (
+        <div style={{ background: C.sageLight, borderRadius: 10, padding: "10px 12px" }}>
+          <button onClick={() => setShowWarnings((v) => !v)} className="flex items-center justify-between" style={{ width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer" }}>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep }}>참고할 내용 {genResult.warnings.length}개</span>
+            <span style={{ fontSize: 11, color: C.sageDeep }}>{showWarnings ? "접기" : "펼치기"}</span>
+          </button>
+          {showWarnings && (
+            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+              {genResult.warnings.map((w, i) => (
+                <div key={i} style={{ fontSize: 10.5, color: C.inkSoft, lineHeight: 1.4 }}>· {w}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {dates.map((date) => {
+        const meals = editedPlans[date] || [];
+        return (
+          <div key={date}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 6, padding: "0 2px" }}>
+              {date} ({WD[new Date(date + "T00:00:00").getDay()]})
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {meals.map((meal) => {
+                const already = alreadyExists(date, meal.label);
+                const mT = totalG(state, meal.items);
+                return (
+                  <div key={meal.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", opacity: already ? 0.55 : 1 }}>
+                    <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+                      <div className="flex items-center" style={{ gap: 6 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{meal.label}</span>
+                        <span style={{ fontSize: 11, color: C.muted }}>{meal.time}</span>
+                      </div>
+                      {already ? (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, background: C.sageLight, borderRadius: 999, padding: "2px 7px" }}>이미 있음 - 건너뜀</span>
+                      ) : (
+                        <button onClick={() => onEditMeal(date, meal)} className="flex items-center" style={{ gap: 3, background: "none", border: "none", padding: 0, cursor: "pointer" }}>
+                          <Pencil size={12} color={C.muted} /><span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>수정</span>
+                        </button>
+                      )}
+                    </div>
+                    <MealItemList items={meal.items} fontSize={12} wrap />
+                    <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 700, marginTop: 6 }}>{mT}g</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      <button onClick={onRegenerate} className="flex items-center justify-center" style={{ width: "100%", gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+        다시 생성
+      </button>
+
+      <div className="flex items-center" style={{ gap: 8 }}>
+        <button onClick={onBack} style={{ ...primaryBtn, flex: 1, background: C.sageLight, color: C.inkSoft }}>이전</button>
+        <button onClick={onConfirm} disabled={saveCount === 0} style={{ ...primaryBtn, flex: 2, background: saveCount > 0 ? C.sage : C.sageLight, color: saveCount > 0 ? "#fff" : C.muted, cursor: saveCount > 0 ? "pointer" : "default" }}>
+          {saveCount > 0 ? `확정 저장 (${saveCount}개 끼니)` : "저장할 끼니가 없어요"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// 미리보기 화면에서 끼니 하나를 부분 수정 - 식단표 끼니 편집과 같은 PlanItemsEditor를 재사용
+function MealEditOverlay({ date, meal, onSave, onCancel }) {
+  const { state } = useStore();
+  const editor = usePlanItemsEditor(meal.items);
+  const [picker, setPicker] = useState(false);
+  const total = totalG(state, editor.items);
+  const addItems = (names) => { setPicker(false); editor.addNames(names); };
+
+  return (
+    <BottomSheet title={`${meal.label} 수정 (${date.slice(5)})`} onClose={onCancel} maxHeight="85%">
+      <div style={{ padding: "0 18px 18px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="flex items-center justify-between" style={{ padding: "0 2px" }}>
+          <span style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>끼니 총량</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{total}g</span>
+        </div>
+        <PlanItemsEditor editor={editor} />
+        <button onClick={() => { setPicker(true); }} className="flex items-center justify-center" style={{ width: "100%", gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 12, padding: "10px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+          <Plus size={14} /> 재료 추가
+        </button>
+        <button onClick={() => onSave(editor.items)} style={primaryBtn}>이 끼니 수정 완료</button>
+      </div>
+      {picker && (
+        <IngredientPicker multi onPick={addItems} alreadyAdded={editor.items.filter((it) => it.source !== "product").map((it) => it.name)} onClose={() => setPicker(false)} />
+      )}
+    </BottomSheet>
+  );
+}
+
+/* =====================================================================
    전체 플로우
    ===================================================================== */
 export function AutoGenFlowScreen({ onBack }) {
-  const { state, dispatch, notify } = useStore();
+  const { state, dispatch } = useStore();
   const [step, setStep] = useState("period");
   const [range, setRange] = useState({ start: null, end: null });
   const [checked, setChecked] = useState(() => new Set(withStockOnly(state, buildIngredientPool(state))));
@@ -463,6 +582,12 @@ export function AutoGenFlowScreen({ onBack }) {
   const [perIngredientTypeDraft, setPerIngredientTypeDraft] = useState({});
   const [rulesState, setRulesState] = useState(null);
   const [removedNotice, setRemovedNotice] = useState(0);
+  const [genResult, setGenResult] = useState(null); // { plansByDate, firstNoStockDate, warnings }
+  const [editedPlans, setEditedPlans] = useState(null); // date -> meals[] (미리보기에서 부분 수정한 결과)
+  const [editingMeal, setEditingMeal] = useState(null); // { date, meal }
+  const [saveResult, setSaveResult] = useState(null); // { applied, skipped }
+
+  const dates = useMemo(() => (range.start && range.end ? enumerateDates(range.start, range.end) : []), [range.start, range.end]);
 
   const enterRules = () => {
     const { rules, removedCount } = validateAutoGenRules(state, state.settings.autoGenRules);
@@ -478,17 +603,61 @@ export function AutoGenFlowScreen({ onBack }) {
     setStep("rules");
   };
 
-  const finish = () => {
-    dispatch({ type: "AUTOGEN_RULES_SAVE", rules: rulesState });
-    notify("자동 생성 규칙을 저장했어요. 생성·미리보기는 다음 업데이트에서 제공될 예정이에요.");
-    onBack();
+  const runGenerate = (rules) => {
+    const result = generatePlan(state, { dates, pool: [...checked], rules });
+    setGenResult(result);
+    setEditedPlans(structuredClone(result.plansByDate));
   };
 
-  const titles = { period: "자동 생성 - 기간 선택", pool: "자동 생성 - 재료 풀", rules: "자동 생성 - 규칙 확인" };
+  const finish = () => {
+    dispatch({ type: "AUTOGEN_RULES_SAVE", rules: rulesState });
+    runGenerate(rulesState);
+    setStep("preview");
+  };
+
+  const saveMealEdit = (items) => {
+    setEditedPlans((p) => ({
+      ...p,
+      [editingMeal.date]: p[editingMeal.date].map((m) => (m.id === editingMeal.meal.id ? { ...m, items } : m)),
+    }));
+    setEditingMeal(null);
+  };
+
+  const confirmSave = () => {
+    let applied = 0, skipped = 0;
+    dates.forEach((date) => {
+      (editedPlans[date] || []).forEach((meal) => {
+        if ((state.plans[date] || []).some((m) => m.label === meal.label)) { skipped++; return; }
+        const items = meal.items.map((it) => ({ name: it.name, qty: it.qty, unitG: it.unitG, gramsOverride: it.gramsOverride != null ? it.gramsOverride : null }));
+        dispatch({ type: "PLAN_SAVE_MEAL", date, meal: { id: meal.id, label: meal.label, time: meal.time, items, fromAutoGen: true } });
+        applied++;
+      });
+    });
+    setSaveResult({ applied, skipped });
+    setStep("done");
+  };
+
+  const titles = { period: "자동 생성 - 기간 선택", pool: "자동 생성 - 재료 풀", rules: "자동 생성 - 규칙 확인", preview: "자동 생성 - 미리보기", done: "자동 생성 완료" };
+  const backOf = { period: onBack, pool: () => setStep("period"), rules: () => setStep("pool"), preview: () => setStep("rules"), done: onBack };
+
+  if (step === "done" && saveResult) {
+    return (
+      <div style={{ paddingBottom: 90 }}>
+        <SubHeader title={titles.done} onBack={onBack} />
+        <div style={{ padding: "30px 24px", display: "flex", flexDirection: "column", gap: 14, alignItems: "center", textAlign: "center" }}>
+          <Check size={34} color={C.sage} />
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, lineHeight: 1.5 }}>
+            {saveResult.applied}개 끼니를 저장했어요{saveResult.skipped > 0 ? `\n(${saveResult.skipped}개는 이미 있는 끼니라 건너뜀)` : ""}
+          </div>
+          <button onClick={onBack} style={{ ...primaryBtn, maxWidth: 200 }}>확인</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ position: "relative" }}>
-      <SubHeader title={titles[step]} onBack={step === "period" ? onBack : () => setStep(step === "rules" ? "pool" : "period")} />
+      <SubHeader title={titles[step]} onBack={backOf[step]} />
       {step === "period" && <PeriodStep range={range} setRange={setRange} onNext={() => setStep("pool")} />}
       {step === "pool" && (
         <PoolStep
@@ -502,6 +671,17 @@ export function AutoGenFlowScreen({ onBack }) {
       )}
       {step === "rules" && rulesState && (
         <RulesStep rules={rulesState} setRules={setRulesState} pool={[...checked]} removedNotice={removedNotice} onBack={() => setStep("pool")} onFinish={finish} />
+      )}
+      {step === "preview" && genResult && editedPlans && (
+        <PreviewStep
+          dates={dates} genResult={genResult} editedPlans={editedPlans}
+          onEditMeal={(date, meal) => setEditingMeal({ date, meal })}
+          onRegenerate={() => runGenerate(rulesState)}
+          onBack={() => setStep("rules")} onConfirm={confirmSave}
+        />
+      )}
+      {editingMeal && (
+        <MealEditOverlay date={editingMeal.date} meal={editingMeal.meal} onSave={saveMealEdit} onCancel={() => setEditingMeal(null)} />
       )}
     </div>
   );
