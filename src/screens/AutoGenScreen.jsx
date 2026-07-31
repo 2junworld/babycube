@@ -4,7 +4,7 @@
 import React, { useMemo, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Pencil, Plus, Refrigerator, Snowflake, Tag, X } from "lucide-react";
 import { C, primaryBtn } from "../theme";
-import { WD, addDaysISO, pad2, todayISO } from "../lib/dates";
+import { WD, addDaysISO, pad2, todayISO, uid } from "../lib/dates";
 import { catOf, categoryList, currentUnitGOf, stockFridgeG, stockTotalCubes, totalG } from "../state/appState";
 import { useStore } from "../store";
 import { MealItemList, NumInput, Segmented, SubHeader, BottomSheet } from "../components/common";
@@ -133,21 +133,23 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
 
   const introOf = (name) => (state.intros || []).find((it) => it.name === name);
   // 기본 노출: 이상없음(+토글 켜면 관찰중·주의)이면서 실제 재고가 있는 재료만. 나머지는 아래
-  // "재료 선택" 버튼으로 필요할 때만 불러옴 - 그렇게 고른 재료(checked)는 재고가 없어도 계속 보여줌
+  // "재료 선택" 버튼으로 필요할 때만 불러옴 - 그렇게 고른 재료(checked)는 재고가 없어도 계속 보여줌.
+  // 탄수화물(주식) 재료는 여기서 다루지 않음 - 주식은 다음 단계(규칙 확인)에서 조합으로 따로 구성함
   const stockNames = useMemo(
-    () => withStockOnly(state, buildIngredientPool(state, { includeObserving, includeCaution })),
+    () => withStockOnly(state, buildIngredientPool(state, { includeObserving, includeCaution })).filter((n) => catOf(state, n) !== "탄수화물"),
     [state.intros, state.stock, includeObserving, includeCaution]
   );
-  const allVisible = useMemo(() => [...new Set([...stockNames, ...checked])], [stockNames, checked]);
-  const cats = categoryList(state);
+  const allVisible = useMemo(() => [...new Set([...stockNames, ...checked])].filter((n) => catOf(state, n) !== "탄수화물"), [stockNames, checked]);
+  const cats = categoryList(state).filter((c) => c.name !== "탄수화물");
   const grouped = cats.map((c) => ({ cat: c, names: allVisible.filter((n) => catOf(state, n) === c.name) })).filter((g) => g.names.length > 0);
 
   const toggleName = (n) => setChecked((prev) => { const next = new Set(prev); if (next.has(n)) next.delete(n); else next.add(n); return next; });
-  // 피커에서 고른 재료를 추가 - "중단" 상태 재료는 자동 생성에서 항상 제외되므로 안전하게 걸러냄
+  // 피커에서 고른 재료를 추가 - "중단" 상태 재료는 자동 생성에서 항상 제외되므로 안전하게 걸러내고,
+  // 탄수화물(주식)은 이 화면에서 다루지 않으므로 함께 걸러냄(다음 단계에서 조합으로 설정)
   const addFromPicker = (names) => {
     setPicker(false);
     const blocked = new Set((state.intros || []).filter((it) => it.status === "중단").map((it) => it.name));
-    setChecked((p) => new Set([...p, ...names.filter((n) => !blocked.has(n))]));
+    setChecked((p) => new Set([...p, ...names.filter((n) => !blocked.has(n) && catOf(state, n) !== "탄수화물")]));
   };
 
   const addLabel = (name, label) => {
@@ -209,6 +211,9 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
       <div style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
         재고가 있는 재료를 기본으로 보여드려요. 재고가 없는 재료를 쓰려면 아래 '재료 선택'으로 추가해 주세요.
         1회 급여량은 비워두면 다음 단계에서 정할 '끼니당 목표 총량'을 재료 수만큼 나눠서 쓰고, 직접 입력하면 그 재료는 항상 그 양으로 고정돼요(급여 기록이 있으면 회색 숫자로 평균치를 참고만 보여드려요).
+      </div>
+      <div style={{ background: C.sageLight, borderRadius: 10, padding: "10px 12px", fontSize: 11.5, color: C.sageDeep, lineHeight: 1.5 }}>
+        밥·죽 같은 주식(탄수화물)은 여기서 고르지 않아요 - 다음 단계인 '규칙 확인'에서 따로 설정할 수 있어요.
       </div>
 
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -317,9 +322,10 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
    다양성 규칙, 재고 우선순위, 시판 제품 포함 여부. 확인 시 settings.autoGenRules에 저장.
    ===================================================================== */
 function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
-  const { state } = useStore();
-  const cats = categoryList(state);
+  const { state, notify } = useStore();
+  const cats = categoryList(state).filter((c) => c.name !== "탄수화물"); // 탄수화물은 카테고리 슬롯이 아니라 아래 주식 조합으로 따로 다룸
   const conflicts = useMemo(() => checkRuleConflicts(state, rules, pool), [state, rules, pool]);
+  const [comboPicker, setComboPicker] = useState(false);
 
   const setCatRange = (id, patch) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, categoryCounts: { ...r.perMeal.categoryCounts, [id]: { ...r.perMeal.categoryCounts[id], ...patch } } } }));
   const setIngredientRule = (id, patch) => setRules((r) => ({ ...r, ingredientRules: r.ingredientRules.map((ir) => (ir.id === id ? { ...ir, ...patch } : ir)) }));
@@ -329,6 +335,17 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
     return { ...r, perMeal: { ...r.perMeal, targetGByLabel: next } };
   });
   const ruleFor = (preset) => rules.ingredientRules.find((ir) => ir.preset === preset);
+
+  // 주식 조합 추가/삭제 - 여러 재료를 하나의 조합으로 묶어 쓰는 경우(예: 잡곡밥+오트밀)를 지원.
+  // 피커에서 고른 재료 중 탄수화물이 아닌 게 섞여 있으면 조용히 걸러내고 안내(주식 조합은 탄수화물 재료로만 구성)
+  const addCombo = (names) => {
+    setComboPicker(false);
+    const carbNames = names.filter((n) => catOf(state, n) === "탄수화물");
+    if (carbNames.length === 0) { notify("주식 조합은 탄수화물 카테고리 재료로만 구성할 수 있어요"); return; }
+    if (carbNames.length < names.length) notify("탄수화물이 아닌 재료는 조합에서 제외했어요");
+    setRules((r) => ({ ...r, staple: { ...r.staple, combos: [...(r.staple.combos || []), { id: uid(), names: carbNames }] } }));
+  };
+  const removeCombo = (comboId) => setRules((r) => ({ ...r, staple: { ...r.staple, combos: r.staple.combos.filter((c) => c.id !== comboId) } }));
 
   return (
     <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -384,16 +401,26 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
       </div>
 
       <div>
-        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 8 }}>주식(탄수화물)</div>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 4 }}>주식 설정</div>
+        <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 8, lineHeight: 1.4 }}>밥·죽 같은 주식 재료(들)를 조합으로 등록해두면, 끼니마다 그중 하나를 골라 함께 넣어요. 예: 잡곡밥+오트밀처럼 여러 재료를 묶어 하나의 조합으로 쓸 수 있어요.</div>
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="flex items-center justify-between">
             <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>매 끼니 자동 포함</span>
             <Segmented value={rules.staple.includeEveryMeal ? "on" : "off"} onChange={(v) => setRules((r) => ({ ...r, staple: { ...r.staple, includeEveryMeal: v === "on" } }))} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
           </div>
           <div className="flex items-center justify-between">
-            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>기본 급여량</span>
+            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>조합당 급여량</span>
             <NumInput value={rules.staple.defaultG} onChange={(v) => setRules((r) => ({ ...r, staple: { ...r.staple, defaultG: v } }))} suffix="g" width={44} />
           </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: (rules.staple.combos || []).length > 0 ? 4 : 0, borderTop: (rules.staple.combos || []).length > 0 ? `1px dashed ${C.border}` : "none" }}>
+            {(rules.staple.combos || []).map((combo) => (
+              <div key={combo.id} className="flex items-center justify-between" style={{ background: C.sageLight, borderRadius: 8, padding: "6px 10px" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{combo.names.join(" + ")}</span>
+                <button onClick={() => removeCombo(combo.id)} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", padding: "2px 4px" }}>삭제</button>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => setComboPicker(true)} style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep, background: "none", border: `1px dashed ${C.sage}`, borderRadius: 8, padding: "8px 0" }}>+ 조합 추가</button>
         </div>
       </div>
 
@@ -471,6 +498,9 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
         <button onClick={onBack} style={{ ...primaryBtn, flex: 1, background: C.sageLight, color: C.inkSoft }}>이전</button>
         <button onClick={onFinish} style={{ ...primaryBtn, flex: 2 }}>규칙 확인 완료</button>
       </div>
+      {comboPicker && (
+        <IngredientPicker multi onPick={addCombo} onClose={() => setComboPicker(false)} />
+      )}
     </div>
   );
 }
@@ -598,7 +628,7 @@ export function AutoGenFlowScreen({ onBack }) {
   const { state, dispatch } = useStore();
   const [step, setStep] = useState("period");
   const [range, setRange] = useState({ start: null, end: null });
-  const [checked, setChecked] = useState(() => new Set(withStockOnly(state, buildIngredientPool(state))));
+  const [checked, setChecked] = useState(() => new Set(withStockOnly(state, buildIngredientPool(state)).filter((n) => catOf(state, n) !== "탄수화물")));
   const [includeObserving, setIncludeObserving] = useState(false);
   const [includeCaution, setIncludeCaution] = useState(false);
   const [perIngredientGDraft, setPerIngredientGDraft] = useState({});

@@ -84,7 +84,9 @@ export function defaultAutoGenRules(state) {
     // 모드에서는 resolveStorageType()이 실제 재고 구성을 우선함(냉장 재고가 있으면 사용자 선택과 무관하게 냉장부터)
     // targetGByLabel: 끼니 이름(아침/점심/저녁 등)별 목표 총량 오버라이드 - 지정 안 한 끼니는 targetTotalG(기본값)를 씀
     perMeal: { categoryCounts, targetTotalG: 150, targetGByLabel: {}, perIngredientG: {}, perIngredientType: {} },
-    staple: { includeEveryMeal: true, defaultG: 80 },
+    // combos: 주식으로 쓸 재료 조합 목록(각 조합은 재료 이름 배열 - 예: ["잡곡밥"], ["잡곡밥","오트밀"]처럼
+    // 여러 재료를 함께 묶어 하나의 주식으로 쓰는 경우도 지원). 규칙 확인 화면에서 직접 구성하므로 기본값은 빈 배열
+    staple: { includeEveryMeal: true, defaultG: 80, combos: [] },
     ingredientRules: [
       { id: uid(), preset: "ironSource", type: "requireDaily", ingredient: "소고기", enabled: true },
       { id: uid(), preset: "fishLimit", type: "maxPerWeek", label: "생선", value: 2, enabled: true },
@@ -175,8 +177,8 @@ export function checkRuleConflicts(state, rules, pool) {
       warnings.push(`'${(presetById(r.preset) || {}).label || "빈도 제한"}' 규칙에 걸리는 '${r.label}' 라벨 재료가 아직 없어요 - 재료 정보에서 라벨을 붙여보세요`);
     }
   });
-  if (rules.staple.includeEveryMeal && !pool.some((n) => isCarbStaple(state, n))) {
-    warnings.push("주식(탄수화물) 재료가 재료 풀에 없어서 자동 포함 규칙을 건너뜁니다");
+  if (rules.staple.includeEveryMeal && (!rules.staple.combos || rules.staple.combos.length === 0)) {
+    warnings.push("주식 조합이 하나도 없어서 자동 포함 규칙을 건너뜁니다 - 주식 설정에서 조합을 추가해 주세요");
   }
   return warnings;
 }
@@ -262,7 +264,9 @@ export function generatePlan(state, opts) {
   const cats = categoryList(state);
   const poolByCat = {};
   cats.forEach((c) => { poolByCat[c.id] = pool.filter((n) => !isCarbStaple(state, n) && catOf(state, n) === c.name); });
-  const stapleNames = pool.filter((n) => isCarbStaple(state, n));
+  // 주식은 이제 재료 풀이 아니라 규칙 화면에서 직접 구성한 조합 목록을 씀(재료 하나짜리 조합도,
+  // "잡곡밥+오트밀"처럼 여러 재료를 함께 쓰는 조합도 가능) - 재료 풀 체크 여부와 무관하게 항상 사용
+  const stapleCombos = (rules.staple.combos || []).filter((c) => c.names && c.names.length > 0);
 
   const vStock = rules.stock.mode === "stockFirst" ? structuredClone(state.stock) : null;
   const warnings = [];
@@ -369,6 +373,44 @@ export function generatePlan(state, opts) {
     return 0;
   });
 
+  // 주식 조합("잡곡밥+오트밀"처럼 여러 재료를 한 조합으로 묶어 쓰는 경우 포함) 스코어링 -
+  // 재고는 조합 구성원 전원이 있어야 "재고 있음"으로 치고(하나라도 없으면 그 조합은 후순위),
+  // 유통기한은 구성원 중 가장 임박한 값, 사용 횟수는 구성원 전체 합산으로 비교
+  const comboHasStock = (combo) => combo.names.every((n) => {
+    const isFridge = storageTypeOf[n] === "fridge";
+    return vStock ? ((vStock[n] || {}).batches || []).some((b) => (isFridge ? (b.fridgeG || 0) > 0 : (b.frozen || 0) > 0)) : true;
+  });
+  const comboSoonestExp = (combo) => combo.names.reduce((min, n) => {
+    const isFridge = storageTypeOf[n] === "fridge";
+    return stockBatches(state, n).reduce((m, b) => {
+      const exp = isFridge ? b.fridgeExp : b.frozenExp;
+      return exp && (!m || exp < m) ? exp : m;
+    }, min);
+  }, null);
+  const comboUsageSum = (combo) => combo.names.reduce((s, n) => s + (usageCount[n] || 0), 0);
+
+  // 매 끼니 주식 하나를 고름 - 다른 카테고리와 같은 4단계 완화 사다리를 적용해서, 조합이 하나뿐이면
+  // 사실상 매번 그대로 반복되고(예전의 "항상 다양성 예외"와 동일한 결과), 여러 조합을 등록해두면
+  // 서로 돌아가며 쓰이게 됨(예: 잡곡밥 / 잡곡밥+오트밀 / 무른밥을 번갈아 사용)
+  const pickStapleCombo = (usedTodayNamesArg) => {
+    const base = stapleCombos;
+    let candidates = base.filter((c) => {
+      if (!rules.variety.allowSameDayRepeat && c.names.some((n) => usedTodayNamesArg.has(n))) return false;
+      if (rules.variety.noConsecutiveMeals && c.names.some((n) => lastUsedIdx[n] === mealSeq - 1)) return false;
+      return true;
+    });
+    if (candidates.length === 0) candidates = base.filter((c) => rules.variety.allowSameDayRepeat || !c.names.some((n) => usedTodayNamesArg.has(n)));
+    if (candidates.length === 0) candidates = base.filter((c) => !c.names.some((n) => lastUsedIdx[n] === mealSeq - 1));
+    if (candidates.length === 0) candidates = base;
+    if (candidates.length === 0) return null;
+    return shuffle(candidates, rng).sort((a, b) => {
+      const sa = [comboHasStock(a) ? 0 : 1, comboSoonestExp(a) || "9999-99-99", comboUsageSum(a)];
+      const sb = [comboHasStock(b) ? 0 : 1, comboSoonestExp(b) || "9999-99-99", comboUsageSum(b)];
+      for (let i = 0; i < sa.length; i++) { if (sa[i] !== sb[i]) return sa[i] < sb[i] ? -1 : 1; }
+      return 0;
+    })[0];
+  };
+
   // 같은 끼니 안에서 두 번 고르는 것은 항상 금지(usedThisMeal - 완화 대상 아님). 그 외 "오늘 다른 끼니와
   // 반복"·"바로 직전 끼니와 반복"은 다양성 규칙이라 단계적으로 완화하되, 신재료 도입 제약과 주간 빈도
   // 상한(생선 등 의학적 권고)은 안전 규칙이라 완화 대상이 아님 - base에 항상 포함시켜 절대 안 풀림.
@@ -445,10 +487,12 @@ export function generatePlan(state, opts) {
         items = [];
         const usedThisMeal = new Set();
 
-        if (rules.staple.includeEveryMeal && stapleNames.length > 0) {
-          // 주식은 항상 다양성 규칙 예외 - 같은 주식이 매 끼니 반복돼도 됨(밥/죽류는 반복이 자연스러움)
-          const picked = sortByScore(stapleNames.filter((n) => !usedThisMeal.has(n)), [...usedThisMeal]).slice(0, 1);
-          picked.forEach((name) => { items.push(buildItem(name, targetGFor(name, rules.staple.defaultG), dateIdx)); usedThisMeal.add(name); });
+        if (rules.staple.includeEveryMeal && stapleCombos.length > 0) {
+          const chosenCombo = pickStapleCombo(usedTodayNames);
+          if (chosenCombo) {
+            const perMemberG = Math.max(10, Math.round(rules.staple.defaultG / chosenCombo.names.length));
+            chosenCombo.names.forEach((name) => { items.push(buildItem(name, targetGFor(name, perMemberG), dateIdx)); usedThisMeal.add(name); });
+          }
         }
 
         cats.forEach((cat) => {
