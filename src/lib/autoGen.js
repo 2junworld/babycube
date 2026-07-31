@@ -111,11 +111,19 @@ export function validateAutoGenRules(state, rules) {
   const removedCount = Object.keys(oldCounts).filter((id) => !validIds.has(id)).length;
   const categoryCounts = {};
   cats.forEach((c) => { categoryCounts[c.id] = oldCounts[c.id] || { min: 0, max: 0 }; });
+  const defaults = defaultAutoGenRules(state);
+  // perMeal/staple/variety/stock는 중첩 객체라 얕은 스프레드(...rules)만으로는 과거에 저장된 규칙에
+  // 없던 새 하위 필드(예: 나중에 추가된 targetGByLabel)가 통째로 빠져버림 - 화면 코드가 그 필드를
+  // 곧바로 읽다가(예: rules.perMeal.targetGByLabel[label]) undefined 접근으로 죽는 사고가 실제로 있었음.
+  // 기본값을 먼저 깔고 저장된 값으로 덮어써서, 새 필드는 기본값으로 채워지고 기존에 저장해둔 값은 유지되게 함
   return {
     rules: {
-      ...defaultAutoGenRules(state),
+      ...defaults,
       ...rules,
-      perMeal: { ...(rules.perMeal || {}), categoryCounts },
+      perMeal: { ...defaults.perMeal, ...(rules.perMeal || {}), categoryCounts },
+      staple: { ...defaults.staple, ...(rules.staple || {}) },
+      variety: { ...defaults.variety, ...(rules.variety || {}) },
+      stock: { ...defaults.stock, ...(rules.stock || {}) },
     },
     removedCount,
   };
