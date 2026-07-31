@@ -171,6 +171,17 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
     const cur = state.ingredients[name]?.labels || [];
     dispatch({ type: "INGREDIENT_SET_META", name, patch: { labels: cur.filter((l) => l !== label) } });
   };
+  // 앱 전체 재료에 이미 쓰인 라벨 목록 - 새 라벨을 매번 새로 타이핑하지 않고 골라 쓸 수 있게
+  const allLabels = useMemo(() => {
+    const s = new Set();
+    Object.values(state.ingredients || {}).forEach((ing) => (ing?.labels || []).forEach((l) => s.add(l)));
+    return [...s].sort((a, b) => a.localeCompare(b, "ko"));
+  }, [state.ingredients]);
+  const suggestionsFor = (n) => {
+    const cur = state.ingredients[n]?.labels || [];
+    const q = labelDraft.trim();
+    return allLabels.filter((l) => !cur.includes(l) && (!q || l.includes(q))).slice(0, 8);
+  };
 
   // 재료 유형(냉동/냉장) - 아직 사용자가 고르지 않았다면 실제 재고 구성을 보고 화면에서만 똑똑하게
   // 기본값을 잡아줌(냉장 재고뿐이면 냉장, 그 외엔 냉동) - 저장은 사용자가 실제로 건드렸을 때만 됨.
@@ -245,23 +256,35 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
                     </button>
                   </div>
                   {hasLabelUi && (
-                    <div className="flex items-center" style={{ gap: 4, marginTop: 4, paddingLeft: 20, flexWrap: "wrap" }}>
-                      {labels.map((l) => (
-                        <span key={l} className="flex items-center" style={{ gap: 2, fontSize: 9.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "2px 3px 2px 6px" }}>
-                          {l}
-                          <button onClick={() => removeLabel(n, l)} style={{ background: "none", border: "none", padding: 1, cursor: "pointer", display: "flex" }}><X size={8} color={C.sageDeep} /></button>
-                        </span>
-                      ))}
-                      {labelInputFor === n && (
-                        <input autoFocus value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") { addLabel(n, labelDraft); setLabelDraft(""); } if (e.key === "Escape") setLabelInputFor(null); }}
-                          onBlur={() => { addLabel(n, labelDraft); setLabelDraft(""); setLabelInputFor(null); }}
-                          placeholder="라벨 입력 후 Enter" style={{ width: 100, fontSize: 10.5, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px", outline: "none" }} />
-                      )}
-                      {suggestFish && labelInputFor !== n && (
-                        <button onClick={() => addLabel(n, "생선")} style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, border: "none", borderRadius: 999, padding: "2px 6px", cursor: "pointer" }}>
-                          생선 라벨 +
-                        </button>
+                    <div style={{ marginTop: 4, paddingLeft: 20 }}>
+                      <div className="flex items-center" style={{ gap: 4, flexWrap: "wrap" }}>
+                        {labels.map((l) => (
+                          <span key={l} className="flex items-center" style={{ gap: 2, fontSize: 9.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "2px 3px 2px 6px" }}>
+                            {l}
+                            <button onClick={() => removeLabel(n, l)} style={{ background: "none", border: "none", padding: 1, cursor: "pointer", display: "flex" }}><X size={8} color={C.sageDeep} /></button>
+                          </span>
+                        ))}
+                        {labelInputFor === n && (
+                          <input autoFocus value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") { addLabel(n, labelDraft); setLabelDraft(""); } if (e.key === "Escape") setLabelInputFor(null); }}
+                            onBlur={() => { addLabel(n, labelDraft); setLabelDraft(""); setLabelInputFor(null); }}
+                            placeholder="라벨 입력 또는 아래에서 선택" style={{ width: 140, fontSize: 10.5, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px", outline: "none" }} />
+                        )}
+                        {suggestFish && labelInputFor !== n && (
+                          <button onClick={() => addLabel(n, "생선")} style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, border: "none", borderRadius: 999, padding: "2px 6px", cursor: "pointer" }}>
+                            생선 라벨 +
+                          </button>
+                        )}
+                      </div>
+                      {labelInputFor === n && suggestionsFor(n).length > 0 && (
+                        <div className="flex items-center" style={{ gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                          {suggestionsFor(n).map((l) => (
+                            <button key={l} onMouseDown={(e) => e.preventDefault()} onClick={() => { addLabel(n, l); setLabelDraft(""); }}
+                              style={{ fontSize: 9.5, fontWeight: 600, color: C.inkSoft, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px", cursor: "pointer" }}>
+                              {l}
+                            </button>
+                          ))}
+                        </div>
                       )}
                     </div>
                   )}
