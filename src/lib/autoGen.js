@@ -118,6 +118,19 @@ export function validateAutoGenRules(state, rules) {
   const categoryCounts = {};
   cats.forEach((c) => { categoryCounts[c.id] = oldCounts[c.id] || { min: 0, max: 0 }; });
   const defaults = defaultAutoGenRules(state);
+  // 주식(탄수화물)은 예전엔 재료 풀 화면에서 perIngredientG로 직접 급여량을 지정할 수 있었는데,
+  // 지금은 주식이 규칙 확인 화면의 조합(gramsByName)으로만 설정됨. 그때 남겨진 값이 지워지지 않고
+  // 그대로 남아있으면 화면에는 이 재료가 더 이상 안 보이는데도 예전 값이 조합 설정을 계속 덮어써
+  // 버리는 문제가 있었음(사용자가 실제로 겪은 문제 - 조합에서 다시 설정해도 예전 재료 풀 값이 그대로
+  // 반영됨) - 여기서 한 번에 걸러내서 낡은 값이 더는 남아있지 않게 함. perIngredientType은 그대로
+  // 둠 - 주식 조합의 냉동/냉장 선택도 이 맵을 그대로 재사용하므로(stapleTypeOf/stapleStorageTypeOf
+  // 참고) 탄수화물 항목을 걸러내면 방금 고른 주식 저장형태까지 같이 지워져 버림
+  const mergedPerMeal = { ...defaults.perMeal, ...(rules.perMeal || {}), categoryCounts };
+  const cleanedPerIngredientG = {};
+  Object.entries(mergedPerMeal.perIngredientG || {}).forEach(([name, v]) => {
+    if (catOf(state, name) !== "탄수화물") cleanedPerIngredientG[name] = v;
+  });
+  mergedPerMeal.perIngredientG = cleanedPerIngredientG;
   // perMeal/staple/variety/stock는 중첩 객체라 얕은 스프레드(...rules)만으로는 과거에 저장된 규칙에
   // 없던 새 하위 필드(예: 나중에 추가된 targetGByLabel)가 통째로 빠져버림 - 화면 코드가 그 필드를
   // 곧바로 읽다가(예: rules.perMeal.targetGByLabel[label]) undefined 접근으로 죽는 사고가 실제로 있었음.
@@ -126,7 +139,7 @@ export function validateAutoGenRules(state, rules) {
     rules: {
       ...defaults,
       ...rules,
-      perMeal: { ...defaults.perMeal, ...(rules.perMeal || {}), categoryCounts },
+      perMeal: mergedPerMeal,
       staple: { ...defaults.staple, ...(rules.staple || {}) },
       variety: { ...defaults.variety, ...(rules.variety || {}) },
       stock: { ...defaults.stock, ...(rules.stock || {}) },
@@ -555,7 +568,12 @@ export function generatePlan(state, opts) {
             chosenCombo.names.forEach((name) => {
               const comboG = gramsByName[name] > 0 ? gramsByName[name] : fallbackG;
               stapleG += comboG;
-              items.push(buildItem(name, targetGFor(name, comboG), dateIdx));
+              // targetGFor(perIngredientG)를 거치지 않고 comboG를 그대로 씀 - 주식이 예전엔 재료 풀
+              // 화면에서 다뤄지던 시절 perIngredientG에 남겨진 값이 있으면(예: 74g), 화면에서
+              // 이 재료가 빠진 지금도 그 낡은 값이 조합 설정을 조용히 덮어써 버렸음(사용자가 실제로
+              // 겪은 문제 - 조합에서 아무리 다시 설정해도 예전 값이 계속 반영됨). 주식 급여량은
+              // 이제 조합 설정(gramsByName/defaultG)이 유일한 출처여야 함
+              items.push(buildItem(name, comboG, dateIdx));
               usedThisMeal.add(name);
             });
           }
