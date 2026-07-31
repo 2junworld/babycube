@@ -84,8 +84,10 @@ export function defaultAutoGenRules(state) {
     // 모드에서는 resolveStorageType()이 실제 재고 구성을 우선함(냉장 재고가 있으면 사용자 선택과 무관하게 냉장부터)
     // targetGByLabel: 끼니 이름(아침/점심/저녁 등)별 목표 총량 오버라이드 - 지정 안 한 끼니는 targetTotalG(기본값)를 씀
     perMeal: { categoryCounts, targetTotalG: 150, targetGByLabel: {}, perIngredientG: {}, perIngredientType: {} },
-    // combos: 주식으로 쓸 재료 조합 목록(각 조합은 재료 이름 배열 - 예: ["잡곡밥"], ["잡곡밥","오트밀"]처럼
-    // 여러 재료를 함께 묶어 하나의 주식으로 쓰는 경우도 지원). 규칙 확인 화면에서 직접 구성하므로 기본값은 빈 배열
+    // combos: 주식으로 쓸 재료 조합 목록. 각 조합은 {id, names, gramsByName} - names는 함께 쓰는 재료 이름 배열
+    // (예: ["잡곡밥"], ["잡곡밥","오트밀"]처럼 여러 재료를 묶어 하나의 주식으로 쓰는 경우도 지원), gramsByName은
+    // 재료별로 직접 지정한 급여량(g). 지정 안 한 재료는 defaultG(끼니당 급여량)를 조합 구성원 수로 나눈 값을 씀.
+    // 규칙 확인 화면에서 직접 구성하므로 기본값은 빈 배열
     staple: { includeEveryMeal: true, defaultG: 80, combos: [] },
     ingredientRules: [
       { id: uid(), preset: "ironSource", type: "requireDaily", ingredient: "소고기", enabled: true },
@@ -490,8 +492,13 @@ export function generatePlan(state, opts) {
         if (rules.staple.includeEveryMeal && stapleCombos.length > 0) {
           const chosenCombo = pickStapleCombo(usedTodayNames);
           if (chosenCombo) {
-            const perMemberG = Math.max(10, Math.round(rules.staple.defaultG / chosenCombo.names.length));
-            chosenCombo.names.forEach((name) => { items.push(buildItem(name, targetGFor(name, perMemberG), dateIdx)); usedThisMeal.add(name); });
+            const fallbackG = Math.max(10, Math.round(rules.staple.defaultG / chosenCombo.names.length));
+            const gramsByName = chosenCombo.gramsByName || {};
+            chosenCombo.names.forEach((name) => {
+              const comboG = gramsByName[name] > 0 ? gramsByName[name] : fallbackG;
+              items.push(buildItem(name, targetGFor(name, comboG), dateIdx));
+              usedThisMeal.add(name);
+            });
           }
         }
 

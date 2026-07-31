@@ -343,9 +343,17 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
     const carbNames = names.filter((n) => catOf(state, n) === "탄수화물");
     if (carbNames.length === 0) { notify("주식 조합은 탄수화물 카테고리 재료로만 구성할 수 있어요"); return; }
     if (carbNames.length < names.length) notify("탄수화물이 아닌 재료는 조합에서 제외했어요");
-    setRules((r) => ({ ...r, staple: { ...r.staple, combos: [...(r.staple.combos || []), { id: uid(), names: carbNames }] } }));
+    const perMemberG = Math.max(10, Math.round(rules.staple.defaultG / carbNames.length));
+    const gramsByName = {};
+    carbNames.forEach((n) => { gramsByName[n] = perMemberG; });
+    setRules((r) => ({ ...r, staple: { ...r.staple, combos: [...(r.staple.combos || []), { id: uid(), names: carbNames, gramsByName }] } }));
   };
   const removeCombo = (comboId) => setRules((r) => ({ ...r, staple: { ...r.staple, combos: r.staple.combos.filter((c) => c.id !== comboId) } }));
+  const setComboGram = (comboId, name, v) => setRules((r) => ({
+    ...r,
+    staple: { ...r.staple, combos: r.staple.combos.map((c) => (c.id === comboId ? { ...c, gramsByName: { ...c.gramsByName, [name]: v } } : c)) },
+  }));
+  const canFinish = !rules.staple.includeEveryMeal || (rules.staple.combos || []).length > 0;
 
   return (
     <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -401,22 +409,38 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
       </div>
 
       <div>
-        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 4 }}>주식 설정</div>
-        <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 8, lineHeight: 1.4 }}>밥·죽 같은 주식 재료(들)를 조합으로 등록해두면, 끼니마다 그중 하나를 골라 함께 넣어요. 예: 잡곡밥+오트밀처럼 여러 재료를 묶어 하나의 조합으로 쓸 수 있어요.</div>
+        <div className="flex items-center" style={{ gap: 4, marginBottom: 4 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 800, color: C.ink }}>주식 설정</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: C.apricot }}>*필수</span>
+        </div>
+        <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 8, lineHeight: 1.4 }}>밥·죽 같은 주식 재료(들)를 조합으로 등록해두면, 끼니마다 그중 하나를 골라 함께 넣어요. 예: 잡곡밥+오트밀처럼 여러 재료를 묶어 하나의 조합으로 쓸 수 있어요. 조합 추가 시 재료별 급여량은 끼니당 급여량을 구성원 수로 나눠 채워지며, 필요하면 재료별로 직접 조정할 수 있어요.</div>
+        {!canFinish && (
+          <div style={{ background: C.apricotLight, borderRadius: 10, padding: "8px 10px", fontSize: 11, color: "#9A4A1E", lineHeight: 1.5, marginBottom: 8 }}>
+            '매 끼니 자동 포함'이 켜져 있으면 주식 조합을 최소 1개 등록해야 다음으로 진행할 수 있어요. (필요 없으면 자동 포함을 꺼주세요)
+          </div>
+        )}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="flex items-center justify-between">
             <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>매 끼니 자동 포함</span>
             <Segmented value={rules.staple.includeEveryMeal ? "on" : "off"} onChange={(v) => setRules((r) => ({ ...r, staple: { ...r.staple, includeEveryMeal: v === "on" } }))} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
           </div>
           <div className="flex items-center justify-between">
-            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>조합당 급여량</span>
+            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>끼니당 급여량</span>
             <NumInput value={rules.staple.defaultG} onChange={(v) => setRules((r) => ({ ...r, staple: { ...r.staple, defaultG: v } }))} suffix="g" width={44} />
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: (rules.staple.combos || []).length > 0 ? 4 : 0, borderTop: (rules.staple.combos || []).length > 0 ? `1px dashed ${C.border}` : "none" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: (rules.staple.combos || []).length > 0 ? 4 : 0, borderTop: (rules.staple.combos || []).length > 0 ? `1px dashed ${C.border}` : "none" }}>
             {(rules.staple.combos || []).map((combo) => (
-              <div key={combo.id} className="flex items-center justify-between" style={{ background: C.sageLight, borderRadius: 8, padding: "6px 10px" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{combo.names.join(" + ")}</span>
-                <button onClick={() => removeCombo(combo.id)} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", padding: "2px 4px" }}>삭제</button>
+              <div key={combo.id} style={{ background: C.sageLight, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{combo.names.join(" + ")}</span>
+                  <button onClick={() => removeCombo(combo.id)} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", padding: "2px 4px" }}>삭제</button>
+                </div>
+                {combo.names.map((name) => (
+                  <div key={name} className="flex items-center justify-between">
+                    <span style={{ fontSize: 11.5, color: C.inkSoft }}>{name}</span>
+                    <NumInput value={(combo.gramsByName || {})[name] ?? 0} onChange={(v) => setComboGram(combo.id, name, v)} suffix="g" width={44} />
+                  </div>
+                ))}
               </div>
             ))}
           </div>
@@ -496,7 +520,7 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
 
       <div className="flex items-center" style={{ gap: 8 }}>
         <button onClick={onBack} style={{ ...primaryBtn, flex: 1, background: C.sageLight, color: C.inkSoft }}>이전</button>
-        <button onClick={onFinish} style={{ ...primaryBtn, flex: 2 }}>규칙 확인 완료</button>
+        <button onClick={onFinish} disabled={!canFinish} style={{ ...primaryBtn, flex: 2, background: canFinish ? C.sage : C.sageLight, color: canFinish ? "#fff" : C.muted, cursor: canFinish ? "pointer" : "default" }}>규칙 확인 완료</button>
       </div>
       {comboPicker && (
         <IngredientPicker multi onPick={addCombo} onClose={() => setComboPicker(false)} />
