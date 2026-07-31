@@ -48,7 +48,7 @@ export const INGREDIENT_RULE_PRESETS = [
     type: "categoryFloor",
     label: "단백질 분산",
     defaultEnabled: true,
-    rationale: "후기 이유식 시기 단백질을 세 끼에 분산 공급 권장 - 매 끼니 '단백질' 카테고리 최소 개수를 아래 카테고리 구성보다 낮게 설정할 수 없게, 위 '끼니당 카테고리 구성'의 단백질 최소값을 자동으로 끌어올려요",
+    rationale: "후기 이유식 시기엔 단백질을 매 끼니 고르게 나눠주는 게 좋아요. 켜두면 위 '끼니당 카테고리 구성'에서 단백질 최소 개수가 자동으로 1종 이상으로 맞춰져요.",
   },
   {
     preset: "newIngredientSpacing",
