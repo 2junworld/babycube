@@ -168,14 +168,22 @@ export function rulesReferenceDeletedCategory(state, rules) {
   return Object.entries(counts).some(([id, r]) => !validIds.has(id) && ((r.min || 0) > 0 || (r.max || 0) > 0));
 }
 
-// 주식 조합 하나의 총 급여량(g) - 재료별로 직접 지정한 값(gramsByName)을 우선 쓰고,
-// 지정 안 한 재료는 끼니당 급여량(defaultG)을 조합 구성원 수로 균등 분배한 값을 씀.
-// generatePlan()의 실제 배치 로직과 반드시 같은 계산이어야 함(화면에 보여줄 총량이 실제 생성 결과와 어긋나면 안 되므로).
-export function stapleComboTotalG(rules, combo) {
+// 주식 조합 하나의 총 급여량(g) - 재료별로 직접 지정한 값(gramsByName)을 우선 쓰고, 지정 안 한 재료는
+// 끼니당 급여량(defaultG)을 조합 구성원 수로 균등 분배한 값을 씀. 냉동(큐브) 재료는 실제 생성 시점에
+// buildItem()이 큐브 개수로 반올림해서 배치하므로(예: 80g을 넣어도 큐브 중량이 37g이면 2개(74g)로만
+// 배치됨), 여기서도 같은 반올림을 적용해서 화면에 보여줄 합계가 실제 생성 결과와 항상 일치하게 함
+// (그렇지 않으면 "설정한 양과 실제 반영된 양이 다르다"처럼 사용자가 혼란스러워할 수 있음).
+export function stapleComboTotalG(state, rules, combo) {
   if (!combo || !combo.names || combo.names.length === 0) return 0;
   const fallbackG = Math.max(10, Math.round(rules.staple.defaultG / combo.names.length));
   const gramsByName = combo.gramsByName || {};
-  return combo.names.reduce((s, n) => s + (gramsByName[n] > 0 ? gramsByName[n] : fallbackG), 0);
+  return combo.names.reduce((s, n) => {
+    const targetG = gramsByName[n] > 0 ? gramsByName[n] : fallbackG;
+    const isFridge = resolveStorageType(state, n, rules) === "fridge";
+    if (isFridge) return s + Math.round(targetG);
+    const unitG = currentUnitGOf(state, n) || 15;
+    return s + Math.max(1, Math.round(targetG / unitG)) * unitG;
+  }, 0);
 }
 
 // 생성 전 규칙 화면에서 보여줄 충돌 경고 (필수 규칙 재료가 재료 풀에서 빠진 경우 등)
@@ -203,7 +211,7 @@ export function checkRuleConflicts(state, rules, pool) {
       g: (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[s.label]) || rules.perMeal.targetTotalG,
     }));
     (rules.staple.combos || []).forEach((combo) => {
-      const total = stapleComboTotalG(rules, combo);
+      const total = stapleComboTotalG(state, rules, combo);
       const exceeded = targets.filter((t) => total > t.g);
       if (exceeded.length > 0) {
         const worst = exceeded.reduce((a, b) => (a.g < b.g ? a : b));

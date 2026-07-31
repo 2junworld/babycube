@@ -337,6 +337,20 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
   });
   const ruleFor = (preset) => rules.ingredientRules.find((ir) => ir.preset === preset);
 
+  // 주식 재료도 재료 풀과 같은 저장형태(냉동 큐브/냉장 계량) 선택을 공유(rules.perMeal.perIngredientType) -
+  // 아직 안 골랐으면 실제 재고 구성을 보고 화면에서만 기본값을 잡아줌(재료 풀 화면의 typeOf와 동일한 규칙)
+  const stapleTypeOf = (name) => {
+    if (rules.perMeal.perIngredientType[name]) return rules.perMeal.perIngredientType[name];
+    return stockTotalCubes(state, name) === 0 && stockFridgeG(state, name) > 0 ? "fridge" : "frozen";
+  };
+  const setStapleType = (name, type) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, perIngredientType: { ...r.perMeal.perIngredientType, [name]: type } } }));
+  const comboUnitGOf = (name) => currentUnitGOf(state, name) || 15;
+  // 냉동(큐브) 재료는 실제로는 항상 "큐브 개수 x 큐브 중량"으로만 배치될 수 있어서, 여기서 그램을
+  // 그대로 저장해두면 생성 시점에 큐브 개수로 반올림되면서 화면에 입력한 값과 실제 생성된 양이
+  // 달라 보이는 문제가 있었음(예: 80g을 넣었는데 큐브 중량이 37g이면 2개(74g)로만 배치됨).
+  // 큐브 단위로 딱 맞게 미리 반올림해서 저장하면 입력값 = 실제 생성값이 항상 일치함
+  const alignToStorageUnit = (name, g) => (stapleTypeOf(name) === "frozen" ? Math.max(1, Math.round(g / comboUnitGOf(name))) * comboUnitGOf(name) : g);
+
   // 주식 조합 추가/삭제 - 여러 재료를 하나의 조합으로 묶어 쓰는 경우(예: 잡곡밥+오트밀)를 지원.
   // 피커에서 고른 재료 중 탄수화물이 아닌 게 섞여 있으면 조용히 걸러내고 안내(주식 조합은 탄수화물 재료로만 구성)
   const addCombo = (names) => {
@@ -346,7 +360,7 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
     if (carbNames.length < names.length) notify("탄수화물이 아닌 재료는 조합에서 제외했어요");
     const perMemberG = Math.max(10, Math.round(rules.staple.defaultG / carbNames.length));
     const gramsByName = {};
-    carbNames.forEach((n) => { gramsByName[n] = perMemberG; });
+    carbNames.forEach((n) => { gramsByName[n] = alignToStorageUnit(n, perMemberG); });
     setRules((r) => ({ ...r, staple: { ...r.staple, combos: [...(r.staple.combos || []), { id: uid(), names: carbNames, gramsByName }] } }));
   };
   const removeCombo = (comboId) => setRules((r) => ({ ...r, staple: { ...r.staple, combos: r.staple.combos.filter((c) => c.id !== comboId) } }));
@@ -354,13 +368,14 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
     ...r,
     staple: { ...r.staple, combos: r.staple.combos.map((c) => (c.id === comboId ? { ...c, gramsByName: { ...c.gramsByName, [name]: v } } : c)) },
   }));
-  // 주식 재료도 재료 풀과 같은 저장형태(냉동 큐브/냉장 계량) 선택을 공유(rules.perMeal.perIngredientType) -
-  // 아직 안 골랐으면 실제 재고 구성을 보고 화면에서만 기본값을 잡아줌(재료 풀 화면의 typeOf와 동일한 규칙)
-  const stapleTypeOf = (name) => {
-    if (rules.perMeal.perIngredientType[name]) return rules.perMeal.perIngredientType[name];
-    return stockTotalCubes(state, name) === 0 && stockFridgeG(state, name) > 0 ? "fridge" : "frozen";
+  // 재료 풀 화면과 동일하게, 냉동(큐브) 재료는 입력창에 그램이 아니라 큐브 개수를 보여주고 그 개수를
+  // 그대로 저장(내부적으로는 항상 그램으로 환산해 gramsByName에 저장) - 이러면 입력창에 보이는 숫자와
+  // 실제 생성 결과가 항상 정확히 일치함(중간에 그램->큐브 반올림이 안 보이는 곳에서 몰래 끼어들지 않음)
+  const comboDisplayQty = (name, g) => {
+    if (g == null) return 0;
+    return stapleTypeOf(name) === "frozen" ? Math.round(g / comboUnitGOf(name)) : g;
   };
-  const setStapleType = (name, type) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, perIngredientType: { ...r.perMeal.perIngredientType, [name]: type } } }));
+  const setComboQty = (comboId, name, v) => setComboGram(comboId, name, stapleTypeOf(name) === "frozen" ? v * comboUnitGOf(name) : v);
   const canFinish = !rules.staple.includeEveryMeal || (rules.staple.combos || []).length > 0;
   // 조합 총 급여량이 어느 끼니의 목표 총량보다 많으면 그 끼니는 다른 재료가 들어갈 자리가 부족해짐 -
   // 재료별 급여량을 조정하는 동안 바로바로 알 수 있게 조합 카드에 인라인으로 표시
@@ -447,7 +462,7 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: (rules.staple.combos || []).length > 0 ? 4 : 0, borderTop: (rules.staple.combos || []).length > 0 ? `1px dashed ${C.border}` : "none" }}>
             {(rules.staple.combos || []).map((combo) => {
-              const comboTotal = stapleComboTotalG(rules, combo);
+              const comboTotal = stapleComboTotalG(state, rules, combo);
               const exceeded = mealTargets.filter((t) => comboTotal > t.g);
               return (
                 <div key={combo.id} style={{ background: C.sageLight, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
@@ -457,15 +472,24 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
                   </div>
                   {combo.names.map((name) => {
                     const type = stapleTypeOf(name);
+                    const curG = (combo.gramsByName || {})[name] ?? 0;
                     return (
                       <div key={name} className="flex items-center justify-between" style={{ gap: 6 }}>
                         <span style={{ fontSize: 11.5, color: C.inkSoft }}>{name}</span>
                         <div className="flex items-center" style={{ gap: 6 }}>
-                          <button onClick={() => setStapleType(name, type === "frozen" ? "fridge" : "frozen")} title={type === "frozen" ? "냉동" : "냉장"}
+                          <button
+                            onClick={() => {
+                              const nextType = type === "frozen" ? "fridge" : "frozen";
+                              setStapleType(name, nextType);
+                              // 냉동으로 바꾸면 지금 그램 값을 큐브 개수에 딱 맞게 다시 맞춰서, 입력창에
+                              // 보이는 숫자와 실제 생성 결과가 어긋나지 않게 함
+                              if (nextType === "frozen") setComboGram(combo.id, name, Math.max(1, Math.round(curG / comboUnitGOf(name))) * comboUnitGOf(name));
+                            }}
+                            title={type === "frozen" ? "냉동" : "냉장"}
                             style={{ width: 22, height: 22, borderRadius: 6, background: C.surface, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
                             {type === "frozen" ? <Snowflake size={12} color={C.sageDeep} /> : <Refrigerator size={12} color={C.sageDeep} />}
                           </button>
-                          <NumInput value={(combo.gramsByName || {})[name] ?? 0} onChange={(v) => setComboGram(combo.id, name, v)} suffix="g" width={44} />
+                          <NumInput value={comboDisplayQty(name, curG)} onChange={(v) => setComboQty(combo.id, name, v)} suffix={type === "frozen" ? "큐브" : "g"} width={44} />
                         </div>
                       </div>
                     );
