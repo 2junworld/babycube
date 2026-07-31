@@ -228,14 +228,14 @@ export function checkRuleConflicts(state, rules, pool) {
   if (rules.staple.includeEveryMeal && (!rules.staple.combos || rules.staple.combos.length === 0)) {
     warnings.push("주식 조합이 하나도 없어서 자동 포함 규칙을 건너뜁니다 - 주식 설정에서 조합을 추가해 주세요");
   }
+  const mealSlots = state.mealSlots && state.mealSlots.length > 0 ? state.mealSlots : [{ label: "끼니" }];
+  const targets = mealSlots.map((s) => ({
+    label: s.label,
+    g: (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[s.label]) || rules.perMeal.targetTotalG,
+  }));
   // 주식 조합의 총 급여량이 끼니당 목표 총량을 넘으면, 그 조합이 배치되는 끼니는 다른 재료가
   // 들어갈 자리(무게)가 부족해져서 목표 총량을 크게 초과하게 됨 - 미리 경고
   if (rules.staple.includeEveryMeal) {
-    const mealSlots = state.mealSlots && state.mealSlots.length > 0 ? state.mealSlots : [{ label: "끼니" }];
-    const targets = mealSlots.map((s) => ({
-      label: s.label,
-      g: (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[s.label]) || rules.perMeal.targetTotalG,
-    }));
     (rules.staple.combos || []).forEach((combo) => {
       const total = stapleComboTotalG(state, rules, combo);
       const exceeded = targets.filter((t) => total > t.g);
@@ -245,6 +245,27 @@ export function checkRuleConflicts(state, rules, pool) {
         warnings.push(`주식 조합 '${label}'의 총 급여량(${total}g)이 '${worst.label}' 목표 총량(${worst.g}g)보다 많아요 - 다른 재료가 들어갈 자리가 부족해질 수 있어요`);
       }
     });
+  }
+  // 냉동(큐브) 재료는 실제로 최소 1큐브 단위로만 배치될 수 있어서(그램을 아무리 작게 잡아도 그
+  // 밑으로 못 내려감), 매 끼니 항상 채워지는 최소 개수(min - max는 무작위라 매번 나온다는 보장이 없어
+  // 최소 기준으로만 계산, 안 그러면 기본 설정에서도 경고가 떠서 너무 시끄러움)만 큐브 최소 단위로
+  // 잡아도 목표 총량을 넘는 경우가 있음 - 이때는 목표 총량을 아무리 낮게 잡아도(예: 120g) 실제로는
+  // 그보다 훨씬 크게 생성되고, 오히려 다른(더 큰 목표의) 끼니보다도 커 보일 수 있어 혼란스러움(사용자가
+  // 실제로 겪은 문제). 정확한 큐브 중량은 어떤 재료가 뽑힐지 몰라 알 수 없으므로 흔히 쓰는 기본 큐브
+  // 중량(15g, currentUnitGOf의 기본값과 동일)으로 대략 추정해서 미리 경고
+  const ASSUMED_MIN_CUBE_G = 15;
+  const perCatTarget = Object.values(rules.perMeal.categoryCounts || {}).filter((r) => (r.max || 0) > 0);
+  const guaranteedCatSlots = perCatTarget.reduce((s, r) => s + (r.min || 0), 0);
+  if (guaranteedCatSlots > 0) {
+    const worstStapleG = rules.staple.includeEveryMeal
+      ? (rules.staple.combos || []).reduce((max, c) => Math.max(max, stapleComboTotalG(state, rules, c)), 0)
+      : 0;
+    const minGuaranteedTotal = worstStapleG + guaranteedCatSlots * ASSUMED_MIN_CUBE_G;
+    const tooLow = targets.filter((t) => minGuaranteedTotal > t.g);
+    if (tooLow.length > 0) {
+      const labels = tooLow.map((t) => `'${t.label}'(${t.g}g)`).join(", ");
+      warnings.push(`${labels} 목표 총량이 너무 낮아서 실제로는 최소 약 ${minGuaranteedTotal}g 이상으로 생성될 수 있어요 - 냉동 재료는 최소 1큐브 단위라 그램을 작게 잡아도 그 밑으로 못 내려가요. 목표 총량을 늘리거나 카테고리 최소 개수·주식 급여량을 줄여보세요`);
+    }
   }
   return warnings;
 }
@@ -581,8 +602,13 @@ export function generatePlan(state, opts) {
 
         // 주식이 실제로 차지한 양(stapleG)을 먼저 빼고 남은 예산만 카테고리 재료에 나눠서, 끼니
         // 총량이 목표를 벗어나지 않게 함(예전엔 주식을 "슬롯 하나"로만 취급해 실제 주식 양과
-        // 무관하게 목표 총량을 훨씬 넘겨 배치되는 문제가 있었음)
-        const perItemG = Math.max(10, Math.round(Math.max(0, mealTargetG - stapleG) / totalCatSlots));
+        // 무관하게 목표 총량을 훨씬 넘겨 배치되는 문제가 있었음).
+        // 카테고리 재료 1개당 최소 10g을 강제로 보장하던 바닥값은 없앰 - 주식이 목표 총량의 상당
+        // 부분을 차지하는 설정에서는 (목표-주식)/슬롯 수가 10g 밑으로 떨어지는 경우가 흔했는데,
+        // 그때마다 10g 바닥이 목표 총량과 무관하게 우선해버려서 목표를 낮게 잡아도(예: 120g) 오히려
+        // 더 크게(150~165g) 생성되는 역전 현상이 있었음(사용자가 실제로 겪은 문제). 냉동(큐브) 재료는
+        // buildItem이 최소 1큐브를 보장하므로 여기서 억지로 10g을 얹지 않아도 너무 작아지지 않음
+        const perItemG = Math.max(1, Math.round(Math.max(0, mealTargetG - stapleG) / totalCatSlots));
 
         cats.forEach((cat) => {
           const range = categoryCounts[cat.id] || { min: 0, max: 0 };
