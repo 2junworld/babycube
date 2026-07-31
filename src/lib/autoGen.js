@@ -7,7 +7,14 @@
      몇 차례 하고, 그래도 안 되면 경고만 남기고 그대로 둠.
 */
 import { addDaysISO, uid } from "./dates";
-import { catOf, categoryList, currentUnitGOf, deductFridge, deductFrozen, isStaple, stockBatches, stockFridgeG, stockTotalCubes } from "../state/appState";
+import { catOf, categoryList, currentUnitGOf, deductFridge, deductFrozen, gOf, stockBatches, stockFridgeG, stockTotalCubes } from "../state/appState";
+
+// 자동 생성에서 "주식(탄수화물)"은 재료의 isStaple 플래그(장보기 자동등록·여행계산 제외 용도로 쓰이는
+// 별개 설정)가 아니라 카테고리로 판단한다 - 재료 풀 화면이 카테고리별로 묶여 있어서 사용자는
+// "탄수화물 카테고리에 있으면 주식으로 쓰이겠구나"라고 자연스럽게 기대하는데, isStaple 플래그 기준으로
+// 판단하면 그 기대와 어긋나 "재료 풀에 있는데도 없다고 뜬다" 같은 혼란스러운 경고가 생겼음
+const CARB_CATEGORY_NAME = "탄수화물";
+const isCarbStaple = (state, name) => catOf(state, name) === CARB_CATEGORY_NAME;
 
 // 재료 정보 화면에서 라벨 편집 시 "생선"류로 자주 분류되는 재료에 추천 칩으로만 쓰임(자동으로
 // 라벨을 붙이지는 않음 - 사용자가 직접 붙여야 "생선 빈도 제한" 규칙이 그 재료를 인식함)
@@ -41,7 +48,7 @@ export const INGREDIENT_RULE_PRESETS = [
     type: "categoryFloor",
     label: "단백질 분산",
     defaultEnabled: true,
-    rationale: "후기 이유식 시기 단백질을 세 끼에 분산 공급 권장",
+    rationale: "후기 이유식 시기 단백질을 세 끼에 분산 공급 권장 - 매 끼니 '단백질' 카테고리 최소 개수를 아래 카테고리 구성보다 낮게 설정할 수 없게, 위 '끼니당 카테고리 구성'의 단백질 최소값을 자동으로 끌어올려요",
   },
   {
     preset: "newIngredientSpacing",
@@ -69,9 +76,12 @@ export function defaultAutoGenRules(state) {
   set("유제품", 0, 1);
 
   return {
-    // perIngredientG: 재료 풀 화면에서 재료별로 직접 지정한 1회 급여량(g) - 지정 안 한 재료는
-    // targetTotalG를 카테고리 슬롯 수로 나눈 값을 그대로 씀
-    perMeal: { categoryCounts, targetTotalG: 150, perIngredientG: {} },
+    // perIngredientG: 재료 풀 화면에서 재료별로 직접 지정한 1회 급여량(g, 냉동 큐브 입력도 내부적으로는
+    // 이 그램 값으로 환산해 저장) - 지정 안 한 재료는 targetTotalG를 카테고리 슬롯 수로 나눈 값을 씀.
+    // perIngredientType: 재료 풀 화면에서 사용자가 고른 기본 재료 유형("frozen"|"fridge", 기본 frozen) -
+    // 입력창 단위(큐브 개수 vs 중량) 선택 및 실제 재고가 전혀 없을 때의 대체값으로만 쓰이고, 재고 우선
+    // 모드에서는 resolveStorageType()이 실제 재고 구성을 우선함(냉장 재고가 있으면 사용자 선택과 무관하게 냉장부터)
+    perMeal: { categoryCounts, targetTotalG: 150, perIngredientG: {}, perIngredientType: {} },
     staple: { includeEveryMeal: true, defaultG: 80 },
     ingredientRules: [
       { id: uid(), preset: "ironSource", type: "requireDaily", ingredient: "소고기", enabled: true },
@@ -79,7 +89,10 @@ export function defaultAutoGenRules(state) {
       { id: uid(), preset: "proteinEveryMeal", type: "categoryFloor", categoryName: "단백질", value: 1, enabled: true },
       { id: uid(), preset: "newIngredientSpacing", type: "newIngredientSpacing", cooldownDays: NEW_INGREDIENT_COOLDOWN_DAYS, enabled: true },
     ],
-    variety: { noConsecutiveMeals: true, allowSameDayRepeat: false, stapleExemptFromVariety: true },
+    // 주식은 항상 다양성 규칙에서 예외(같은 주식이 매 끼니 반복돼도 됨) - 예전엔 별도 토글이었는데
+    // "매 끼니 자동 포함"(staple.includeEveryMeal)과 개념이 겹쳐 헷갈린다는 피드백으로 토글을 없애고
+    // 항상 예외로 고정함(기본값이 이미 true였으므로 실사용 동작은 그대로)
+    variety: { noConsecutiveMeals: true, allowSameDayRepeat: false },
     stock: { mode: "stockFirst", preferExpiring: true, autoShopping: true },
     includeProducts: false,
   };
@@ -106,13 +119,17 @@ export function validateAutoGenRules(state, rules) {
   };
 }
 
-// 재료의 현재 실제 재고 구성을 보고 냉동 큐브 vs 냉장 계량 중 어느 쪽으로 다룰지 판단(재고가
-// 아예 없으면 냉동으로 간주 - 대부분의 재료가 냉동 위주라 안전한 기본값). 재료 풀 화면(라벨·급여량
-// UI)과 생성 알고리즘이 항상 같은 기준으로 판단하도록 공유 함수로 뺌.
-export function sourceTypeOf(state, name) {
-  const hasFrozen = stockTotalCubes(state, name) > 0;
-  const hasFridge = stockFridgeG(state, name) > 0;
-  return hasFrozen || !hasFridge ? "frozen" : "fridge";
+// 재료 하나를 냉동 큐브 vs 냉장 계량 중 어느 쪽으로 다룰지 최종 결정.
+// - 재고 무시 모드: 실제 재고를 아예 보지 않고 사용자가 재료 풀 화면에서 고른 기본값을 그대로 따름.
+// - 재고 우선 모드: 실제 재고 구성이 사용자의 선택보다 우선함 - 냉장 재고가 남아있으면(유통기한이
+//   짧아 먼저 소진해야 하므로) 사용자 선택과 무관하게 냉장부터, 냉장이 없고 냉동만 있으면 냉동으로.
+//   그 재료 재고가 아예 없으면 역시 사용자가 고른 기본값(기본 냉동)으로 대체함.
+export function resolveStorageType(state, name, rules) {
+  const preferred = (rules.perMeal.perIngredientType && rules.perMeal.perIngredientType[name]) || "frozen";
+  if (rules.stock.mode === "ignoreStock") return preferred;
+  if (stockFridgeG(state, name) > 0) return "fridge";
+  if (stockTotalCubes(state, name) > 0) return "frozen";
+  return preferred;
 }
 
 // 카테고리 관리 화면에서 삭제 전에 확인하는 용도 - 이 카테고리가 자동 생성 규칙에서 실제로(0,0이 아니게)
@@ -148,7 +165,7 @@ export function checkRuleConflicts(state, rules, pool) {
       warnings.push(`'${(presetById(r.preset) || {}).label || "빈도 제한"}' 규칙에 걸리는 '${r.label}' 라벨 재료가 아직 없어요 - 재료 정보에서 라벨을 붙여보세요`);
     }
   });
-  if (rules.staple.includeEveryMeal && !pool.some((n) => isStaple(state, n))) {
+  if (rules.staple.includeEveryMeal && !pool.some((n) => isCarbStaple(state, n))) {
     warnings.push("주식(탄수화물) 재료가 재료 풀에 없어서 자동 포함 규칙을 건너뜁니다");
   }
   return warnings;
@@ -167,6 +184,22 @@ export function buildIngredientPool(state, { includeCaution = false, includeObse
     // "중단"은 항상 제외
   });
   return [...names].sort((a, b) => a.localeCompare(b, "ko"));
+}
+
+// 재료 풀 화면에서 "1회 급여량"을 급여 기록 히스토리 기반으로 미리 채워주기 위한 평균 계산.
+// 시판 제품 항목은 재료 단위 함량을 알 수 없어 제외. 기록이 하나도 없으면 null(호출부가 기본값을 씀)
+export function avgServingGFromLogs(state, name) {
+  let sum = 0, count = 0;
+  Object.values(state.logs || {}).forEach((dayLogs) => {
+    (dayLogs || []).forEach((log) => {
+      (log.items || []).forEach((it) => {
+        if (it.source === "product" || it.name !== name) return;
+        sum += gOf(state, it);
+        count++;
+      });
+    });
+  });
+  return count > 0 ? Math.round(sum / count) : null;
 }
 
 /* =====================================================================
@@ -195,7 +228,7 @@ function shuffle(arr, rng) {
   return a;
 }
 
-const comboKeyOf = (state, items) => items.filter((it) => !isStaple(state, it.name)).map((it) => it.name).sort().join("+");
+const comboKeyOf = (state, items) => items.filter((it) => !isCarbStaple(state, it.name)).map((it) => it.name).sort().join("+");
 
 /**
  * @param {object} state 앱 전체 상태(읽기 전용으로만 사용 - 이 함수는 state를 변형하지 않음)
@@ -211,16 +244,17 @@ export function generatePlan(state, opts) {
   const slots = [...(state.mealSlots || [])].sort((a, b) => a.time.localeCompare(b.time));
   const cats = categoryList(state);
   const poolByCat = {};
-  cats.forEach((c) => { poolByCat[c.id] = pool.filter((n) => !isStaple(state, n) && catOf(state, n) === c.name); });
-  const stapleNames = pool.filter((n) => isStaple(state, n));
+  cats.forEach((c) => { poolByCat[c.id] = pool.filter((n) => !isCarbStaple(state, n) && catOf(state, n) === c.name); });
+  const stapleNames = pool.filter((n) => isCarbStaple(state, n));
 
   const vStock = rules.stock.mode === "stockFirst" ? structuredClone(state.stock) : null;
   const warnings = [];
 
-  // 재료별 저장 형태 판단(냉동 큐브 vs 냉장 계량) - 지금 실제 재고 구성을 기준으로 생성 내내 고정.
-  // staple(무른밥 등)도 예외 없이 동일하게 판단 - 무른밥은 흔히 냉장 보관이라 실제 재고 형태를 따르는 게 맞음
+  // 재료별 저장 형태 판단(냉동 큐브 vs 냉장 계량) - 지금 실제 재고 구성 + 사용자가 재료 풀 화면에서
+  // 고른 기본값을 기준으로 생성 내내 고정(resolveStorageType 참고). staple(무른밥 등)도 예외 없이
+  // 동일하게 판단 - 무른밥은 흔히 냉장 보관이라 실제 재고 형태를 따르는 게 맞음
   const storageTypeOf = {};
-  pool.forEach((name) => { storageTypeOf[name] = sourceTypeOf(state, name); });
+  pool.forEach((name) => { storageTypeOf[name] = resolveStorageType(state, name, rules); });
 
   // 규칙 인덱싱
   const requireDailyRules = (rules.ingredientRules || []).filter((r) => r.enabled && r.type === "requireDaily");
@@ -379,9 +413,8 @@ export function generatePlan(state, opts) {
         const usedThisMeal = new Set();
 
         if (rules.staple.includeEveryMeal && stapleNames.length > 0) {
-          const { picked } = rules.variety.stapleExemptFromVariety
-            ? { picked: sortByScore(stapleNames.filter((n) => !usedThisMeal.has(n))).slice(0, 1) }
-            : pickCandidates(stapleNames, 1, dateIdx, mealIdxInDay, usedTodayNames, usedThisMeal);
+          // 주식은 항상 다양성 규칙 예외 - 같은 주식이 매 끼니 반복돼도 됨(밥/죽류는 반복이 자연스러움)
+          const picked = sortByScore(stapleNames.filter((n) => !usedThisMeal.has(n))).slice(0, 1);
           picked.forEach((name) => { items.push(buildItem(name, targetGFor(name, rules.staple.defaultG), dateIdx)); usedThisMeal.add(name); });
         }
 

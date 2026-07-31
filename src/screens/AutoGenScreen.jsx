@@ -1,31 +1,32 @@
 /* 식단 자동 생성 - 생성 플로우 UI (PR B: ① 기간 선택 → ② 재료 풀 확인/편집 → ③ 규칙 확인/조정)
    실제 생성 알고리즘 실행·미리보기·확정저장은 PR C에서 이어서 구현. 여기서는 규칙을 확정해
    state.settings.autoGenRules에 저장(다음에 열 때 이어서 프리필)하는 데까지만 담당한다. */
-import React, { useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, Plus, Tag, X } from "lucide-react";
 import { C, primaryBtn } from "../theme";
 import { WD, addDaysISO, pad2, todayISO } from "../lib/dates";
-import { catOf, categoryList } from "../state/appState";
+import { catOf, categoryList, currentUnitGOf, stockFridgeG, stockTotalCubes } from "../state/appState";
 import { useStore } from "../store";
 import { NumInput, Segmented, SubHeader } from "../components/common";
 import { IngredientPicker } from "../components/pickers";
 import {
   COMMON_FISH_NAMES,
   INGREDIENT_RULE_PRESETS,
+  avgServingGFromLogs,
   buildIngredientPool,
   checkRuleConflicts,
-  sourceTypeOf,
   validateAutoGenRules,
 } from "../lib/autoGen";
 
-const QUICK_RANGES = [{ label: "3일", days: 3 }, { label: "1주", days: 7 }, { label: "2주", days: 14 }];
-
 /* =====================================================================
-   ① 기간 선택 - 범위(시작~끝) 캘린더 + 빠른 칩. 과거 날짜는 선택 불가.
+   ① 기간 선택 - 범위(시작~끝) 캘린더 + N일/N주 빠른 선택. 과거 날짜는 선택 불가.
+   캘린더는 두 번 클릭으로 시작~종료를 지정(첫 클릭=시작, 두 번째 클릭=종료 - 시작보다 이르면 스왑)
    ===================================================================== */
 function PeriodStep({ range, setRange, onNext }) {
   const { state } = useStore();
   const [monthCursor, setMonthCursor] = useState(new Date());
+  const [quickN, setQuickN] = useState(1);
+  const [quickUnit, setQuickUnit] = useState("week"); // "day" | "week"
   const t = todayISO();
   const year = monthCursor.getFullYear(), month = monthCursor.getMonth();
   const first = new Date(year, month, 1);
@@ -35,13 +36,19 @@ function PeriodStep({ range, setRange, onNext }) {
   const isoOf = (d) => `${year}-${pad2(month + 1)}-${pad2(d)}`;
   const shiftMonth = (n) => setMonthCursor(new Date(year, month + n, 1));
 
+  // 첫 클릭은 시작일(종료일 미확정 상태로), 두 번째 클릭이 종료일을 확정(시작일보다 이르면 서로 바꿈).
+  // 이미 시작~종료가 다 정해진 상태에서 또 클릭하면 그 날짜로 새로 시작
   const pickDate = (iso) => {
     if (iso < t) return; // 과거 선택 불가
-    if (!range.start || (range.start && range.end)) { setRange({ start: iso, end: iso }); return; }
+    if (!range.start || range.end) { setRange({ start: iso, end: null }); return; }
     if (iso < range.start) { setRange({ start: iso, end: range.start }); return; }
     setRange({ start: range.start, end: iso });
   };
-  const pickQuick = (days) => setRange({ start: t, end: addDaysISO(t, days - 1) });
+  const applyQuick = () => {
+    const n = Math.max(1, Number(quickN) || 1);
+    const days = quickUnit === "week" ? n * 7 : n;
+    setRange({ start: t, end: addDaysISO(t, days - 1) });
+  };
   const inRange = (iso) => range.start && range.end && iso >= range.start && iso <= range.end;
   const dayCount = range.start && range.end ? (Math.round((new Date(range.end) - new Date(range.start)) / 86400000) + 1) : 0;
 
@@ -51,12 +58,15 @@ function PeriodStep({ range, setRange, onNext }) {
         식단을 자동으로 채울 기간을 골라주세요. 이미 계획이 있는 날짜에도 새로 생성할 수 있어요(기존 끼니는 그대로 두고 채워지지 않은 끼니만 추가돼요).
       </div>
 
-      <div className="flex items-center" style={{ gap: 8 }}>
-        {QUICK_RANGES.map((q) => (
-          <button key={q.label} onClick={() => pickQuick(q.days)} style={{ flex: 1, background: C.sageLight, border: "none", borderRadius: 10, padding: "9px 0", fontSize: 12.5, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>
-            {q.label}
+      <div style={{ background: C.sageLight, borderRadius: 12, padding: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>오늘부터 빠른 선택</div>
+        <div className="flex items-center" style={{ gap: 8 }}>
+          <NumInput value={quickN} onChange={setQuickN} width={44} min={1} />
+          <Segmented value={quickUnit} onChange={setQuickUnit} options={[{ value: "day", label: "일" }, { value: "week", label: "주" }]} />
+          <button onClick={applyQuick} style={{ flex: 1, background: C.sage, border: "none", borderRadius: 10, padding: "9px 0", fontSize: 12.5, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+            적용
           </button>
-        ))}
+        </div>
       </div>
 
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
@@ -94,12 +104,12 @@ function PeriodStep({ range, setRange, onNext }) {
 
       {range.start && (
         <div style={{ background: C.sageLight, borderRadius: 12, padding: "10px 14px", fontSize: 12.5, fontWeight: 700, color: C.sageDeep, textAlign: "center" }}>
-          {range.start === range.end ? range.start : `${range.start} ~ ${range.end}`} ({dayCount}일)
+          {!range.end ? `${range.start} 선택됨 - 종료일을 눌러주세요` : range.start === range.end ? `${range.start} (1일)` : `${range.start} ~ ${range.end} (${dayCount}일)`}
         </div>
       )}
 
-      <button onClick={onNext} disabled={!range.start} style={{ ...primaryBtn,
-        background: range.start ? C.sage : C.sageLight, color: range.start ? "#fff" : C.muted, cursor: range.start ? "pointer" : "default" }}>
+      <button onClick={onNext} disabled={!range.start || !range.end} style={{ ...primaryBtn,
+        background: range.start && range.end ? C.sage : C.sageLight, color: range.start && range.end ? "#fff" : C.muted, cursor: range.start && range.end ? "pointer" : "default" }}>
         다음
       </button>
     </div>
@@ -107,10 +117,10 @@ function PeriodStep({ range, setRange, onNext }) {
 }
 
 /* =====================================================================
-   ② 재료 풀 확인/편집 - intros 상태 기준 체크박스(카테고리별), 관찰중·주의 토글,
-   재료별 라벨(중복 가능) 편집, 재료별 1회 급여량(g) 직접 입력, 직접 추가.
+   ② 재료 풀 확인/편집 - intros 상태 기준 체크박스(카테고리별), 관찰중·주의 포함 토글(한 카드로 통합),
+   재료별 라벨(중복 가능) 편집, 재료별 1회 급여량(급여 기록 있으면 평균으로 프리필) + 냉동/냉장 유형 선택.
    ===================================================================== */
-function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, includeCaution, setIncludeCaution, perIngredientG, setPerIngredientG, onBack, onNext }) {
+function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, includeCaution, setIncludeCaution, perIngredientG, setPerIngredientG, perIngredientType, setPerIngredientType, onBack, onNext }) {
   const { state, dispatch } = useStore();
   const [picker, setPicker] = useState(false);
   const [labelInputFor, setLabelInputFor] = useState(null);
@@ -131,6 +141,19 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
   const allVisible = [...visibleNames, ...manualExtra];
   const cats = categoryList(state);
   const grouped = cats.map((c) => ({ cat: c, names: allVisible.filter((n) => catOf(state, n) === c.name) })).filter((g) => g.names.length > 0);
+
+  // 급여 기록이 있는 재료는 그 평균값으로 1회 급여량을 미리 채워줌(사용자가 이미 손댄 값은 안 건드림)
+  const visibleKey = useMemo(() => allVisible.slice().sort().join(","), [allVisible]);
+  useEffect(() => {
+    const additions = {};
+    allVisible.forEach((n) => {
+      if (perIngredientG[n] != null) return;
+      const avg = avgServingGFromLogs(state, n);
+      if (avg != null) additions[n] = avg;
+    });
+    if (Object.keys(additions).length > 0) setPerIngredientG((p) => ({ ...additions, ...p }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey]);
 
   const toggleObserving = (on) => {
     setIncludeObserving(on);
@@ -164,73 +187,97 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
     dispatch({ type: "INGREDIENT_SET_META", name, patch: { labels: cur.filter((l) => l !== label) } });
   };
 
+  // 재료 유형(냉동/냉장) - 기본 냉동. 유형에 따라 입력창 단위가 큐브 개수 ↔ 중량(g)으로 바뀌지만,
+  // 내부적으로는 항상 그램(perIngredientG)으로 환산해 저장(생성 알고리즘은 실제 재고에 따라 다시 판단함)
+  const typeOf = (n) => perIngredientType[n] || "frozen";
+  const setType = (n, type) => setPerIngredientType((p) => ({ ...p, [n]: type }));
+  const unitGOfName = (n) => currentUnitGOf(state, n) || 15;
+  const displayQty = (n) => {
+    const g = perIngredientG[n];
+    if (g == null) return 0;
+    return typeOf(n) === "frozen" ? Math.round(g / unitGOfName(n)) : g;
+  };
+  const setQty = (n, v) => setPerIngredientG((p) => {
+    const next = { ...p };
+    if (!v) { delete next[n]; return next; }
+    next[n] = typeOf(n) === "frozen" ? v * unitGOfName(n) : v;
+    return next;
+  });
+  const stockHint = (n) => {
+    const cubes = stockTotalCubes(state, n), fridgeG = stockFridgeG(state, n);
+    if (cubes > 0 && fridgeG > 0) return `재고 냉동 ${cubes} · 냉장 ${fridgeG}g`;
+    if (cubes > 0) return `재고 냉동 ${cubes}개`;
+    if (fridgeG > 0) return `재고 냉장 ${fridgeG}g`;
+    return "재고 없음";
+  };
+
   return (
-    <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
         체크한 재료만 자동 생성에 사용돼요. '이상없음' 재료는 기본으로 포함되고, '관찰중'·'주의' 재료는 필요할 때만 켜서 포함할 수 있어요.
       </div>
 
-      <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px" }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>관찰중 재료 포함</span>
-        <Segmented value={includeObserving ? "on" : "off"} onChange={(v) => toggleObserving(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
-      </div>
-      <div className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px" }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>주의 재료 포함</span>
-        <Segmented value={includeCaution ? "on" : "off"} onChange={(v) => toggleCaution(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="flex items-center justify-between">
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>관찰중 재료 포함</span>
+          <Segmented value={includeObserving ? "on" : "off"} onChange={(v) => toggleObserving(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+        </div>
+        <div className="flex items-center justify-between">
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>주의 재료 포함</span>
+          <Segmented value={includeCaution ? "on" : "off"} onChange={(v) => toggleCaution(v === "on")} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+        </div>
       </div>
 
       {grouped.map(({ cat, names }) => (
         <div key={cat.id}>
-          <div className="flex items-center" style={{ gap: 6, marginBottom: 6, padding: "0 2px" }}>
+          <div className="flex items-center" style={{ gap: 6, marginBottom: 4, padding: "0 2px" }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: cat.color, display: "inline-block" }} />
             <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 700 }}>{cat.name}</span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {names.map((n) => {
               const st = introOf(n)?.status;
               const labels = state.ingredients[n]?.labels || [];
-              const isFridge = sourceTypeOf(state, n) === "fridge";
               const suggestFish = COMMON_FISH_NAMES.includes(n) && !labels.includes("생선");
+              const type = typeOf(n);
               return (
-                <div key={n} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 12px" }}>
-                  <button onClick={() => toggleName(n)} className="flex items-center justify-between" style={{ width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer" }}>
-                    <div className="flex items-center" style={{ gap: 8 }}>
-                      <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${checked.has(n) ? C.sage : C.border}`, background: checked.has(n) ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        {checked.has(n) && <span style={{ width: 7, height: 7, background: "#fff", borderRadius: 2 }} />}
-                      </span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{n}</span>
-                      {(st === "관찰중" || st === "주의") && (
-                        <span style={{ fontSize: 10, fontWeight: 700, color: st === "주의" ? C.apricot : C.sageDeep, background: st === "주의" ? C.apricotLight : C.sageLight, borderRadius: 999, padding: "2px 6px" }}>{st}</span>
-                      )}
-                    </div>
-                    <span style={{ fontSize: 10.5, color: C.muted }}>{isFridge ? "냉장" : "냉동"}</span>
-                  </button>
-                  <div className="flex items-center" style={{ gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                <div key={n} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "6px 10px", display: "flex", flexDirection: "column", gap: 5 }}>
+                  <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => toggleName(n)} style={{ width: 15, height: 15, borderRadius: 4, border: `1.5px solid ${checked.has(n) ? C.sage : C.border}`, background: checked.has(n) ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer", padding: 0 }}>
+                      {checked.has(n) && <span style={{ width: 6, height: 6, background: "#fff", borderRadius: 1.5 }} />}
+                    </button>
+                    <span onClick={() => toggleName(n)} style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>{n}</span>
+                    {(st === "관찰중" || st === "주의") && (
+                      <span style={{ fontSize: 9, fontWeight: 700, color: st === "주의" ? C.apricot : C.sageDeep, background: st === "주의" ? C.apricotLight : C.sageLight, borderRadius: 999, padding: "1.5px 5px" }}>{st}</span>
+                    )}
                     {labels.map((l) => (
-                      <span key={l} className="flex items-center" style={{ gap: 3, fontSize: 10.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "3px 4px 3px 8px" }}>
+                      <span key={l} className="flex items-center" style={{ gap: 2, fontSize: 9.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "2px 3px 2px 6px" }}>
                         {l}
-                        <button onClick={() => removeLabel(n, l)} style={{ background: "none", border: "none", padding: 2, cursor: "pointer", display: "flex" }}><X size={10} color={C.sageDeep} /></button>
+                        <button onClick={() => removeLabel(n, l)} style={{ background: "none", border: "none", padding: 1, cursor: "pointer", display: "flex" }}><X size={8} color={C.sageDeep} /></button>
                       </span>
                     ))}
                     {labelInputFor === n ? (
                       <input autoFocus value={labelDraft} onChange={(e) => setLabelDraft(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter") { addLabel(n, labelDraft); setLabelDraft(""); setLabelInputFor(null); } if (e.key === "Escape") setLabelInputFor(null); }}
                         onBlur={() => { addLabel(n, labelDraft); setLabelDraft(""); setLabelInputFor(null); }}
-                        placeholder="라벨 입력 후 Enter" style={{ width: 110, fontSize: 11, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 10px", outline: "none" }} />
+                        placeholder="라벨 입력 후 Enter" style={{ width: 100, fontSize: 10.5, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px", outline: "none" }} />
                     ) : (
-                      <button onClick={() => { setLabelInputFor(n); setLabelDraft(""); }} className="flex items-center" style={{ gap: 2, fontSize: 10.5, fontWeight: 700, color: C.muted, background: "transparent", border: `1px dashed ${C.border}`, borderRadius: 999, padding: "3px 8px", cursor: "pointer" }}>
-                        <Plus size={10} /> 라벨
+                      <button onClick={() => { setLabelInputFor(n); setLabelDraft(""); }} style={{ background: "transparent", border: `1px dashed ${C.border}`, borderRadius: 999, padding: "2px 5px", cursor: "pointer", display: "flex" }}>
+                        <Tag size={9} color={C.muted} />
                       </button>
                     )}
                     {suggestFish && labelInputFor !== n && (
-                      <button onClick={() => addLabel(n, "생선")} style={{ fontSize: 10.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, border: "none", borderRadius: 999, padding: "3px 8px", cursor: "pointer" }}>
-                        '생선' 라벨 추천 +
+                      <button onClick={() => addLabel(n, "생선")} style={{ fontSize: 9.5, fontWeight: 700, color: C.apricot, background: C.apricotLight, border: "none", borderRadius: 999, padding: "2px 6px", cursor: "pointer" }}>
+                        생선 라벨 +
                       </button>
                     )}
                   </div>
-                  <div className="flex items-center justify-between" style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
-                    <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>1회 급여량</span>
-                    <NumInput value={perIngredientG[n] ?? 0} onChange={(v) => setPerIngredientG((p) => { const next = { ...p }; if (!v) delete next[n]; else next[n] = v; return next; })} suffix="g (비우면 균등 배분)" width={44} />
+                  <div className="flex items-center justify-between" style={{ gap: 8 }}>
+                    <div className="flex items-center" style={{ gap: 6 }}>
+                      <Segmented value={type} onChange={(v) => setType(n, v)} options={[{ value: "frozen", label: "냉동" }, { value: "fridge", label: "냉장" }]} />
+                      <span style={{ fontSize: 9.5, color: C.muted }}>{stockHint(n)}</span>
+                    </div>
+                    <NumInput value={displayQty(n)} onChange={(v) => setQty(n, v)} suffix={type === "frozen" ? "큐브" : "g"} width={38} />
                   </div>
                 </div>
               );
@@ -336,8 +383,17 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
                 )}
                 {rule.enabled && rule.type === "maxPerWeek" && (
                   <div className="flex items-center justify-between" style={{ marginTop: 6 }}>
-                    <span style={{ fontSize: 11, color: C.muted }}>대상 라벨 '{rule.label}' · 주당</span>
-                    <NumInput value={rule.value} onChange={(v) => setIngredientRule(rule.id, { value: v })} suffix="회" width={34} />
+                    <span style={{ fontSize: 11, color: C.muted }}>대상 라벨 '{rule.label}'</span>
+                    <div className="flex items-center" style={{ gap: 5 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>주당 최대</span>
+                      <NumInput value={rule.value} onChange={(v) => setIngredientRule(rule.id, { value: v })} suffix="회" width={34} />
+                    </div>
+                  </div>
+                )}
+                {rule.enabled && rule.type === "categoryFloor" && (
+                  <div className="flex items-center justify-between" style={{ marginTop: 6 }}>
+                    <span style={{ fontSize: 11, color: C.muted }}>끼니당 '{rule.categoryName}' 최소 개수</span>
+                    <NumInput value={rule.value} onChange={(v) => setIngredientRule(rule.id, { value: v })} suffix="종" width={34} />
                   </div>
                 )}
               </div>
@@ -348,18 +404,20 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
 
       <div>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 8 }}>다양성</div>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div className="flex items-center justify-between">
-            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>연속 끼니 반복 금지</span>
-            <Segmented value={rules.variety.noConsecutiveMeals ? "on" : "off"} onChange={(v) => setRules((r) => ({ ...r, variety: { ...r.variety, noConsecutiveMeals: v === "on" } }))} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>연속 끼니 반복 금지</span>
+              <Segmented value={rules.variety.noConsecutiveMeals ? "on" : "off"} onChange={(v) => setRules((r) => ({ ...r, variety: { ...r.variety, noConsecutiveMeals: v === "on" } }))} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+            </div>
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 3, lineHeight: 1.4 }}>바로 이전 끼니에 나온 재료는 이번 끼니에서 피해요(주식 제외)</div>
           </div>
-          <div className="flex items-center justify-between">
-            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>같은 날 반복 허용</span>
-            <Segmented value={rules.variety.allowSameDayRepeat ? "on" : "off"} onChange={(v) => setRules((r) => ({ ...r, variety: { ...r.variety, allowSameDayRepeat: v === "on" } }))} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
-          </div>
-          <div className="flex items-center justify-between">
-            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>주식은 다양성 규칙 예외</span>
-            <Segmented value={rules.variety.stapleExemptFromVariety ? "on" : "off"} onChange={(v) => setRules((r) => ({ ...r, variety: { ...r.variety, stapleExemptFromVariety: v === "on" } }))} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+          <div>
+            <div className="flex items-center justify-between">
+              <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>같은 날 반복 허용</span>
+              <Segmented value={rules.variety.allowSameDayRepeat ? "on" : "off"} onChange={(v) => setRules((r) => ({ ...r, variety: { ...r.variety, allowSameDayRepeat: v === "on" } }))} options={[{ value: "off", label: "끔" }, { value: "on", label: "켬" }]} />
+            </div>
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 3, lineHeight: 1.4 }}>켜면 같은 날 안에서 같은 재료가 여러 끼니에 반복될 수 있어요(꺼두면 하루 안에서는 최대한 안 겹치게 배치)</div>
           </div>
         </div>
       </div>
@@ -393,12 +451,20 @@ export function AutoGenFlowScreen({ onBack }) {
   const [includeObserving, setIncludeObserving] = useState(false);
   const [includeCaution, setIncludeCaution] = useState(false);
   const [perIngredientGDraft, setPerIngredientGDraft] = useState({});
+  const [perIngredientTypeDraft, setPerIngredientTypeDraft] = useState({});
   const [rulesState, setRulesState] = useState(null);
   const [removedNotice, setRemovedNotice] = useState(0);
 
   const enterRules = () => {
     const { rules, removedCount } = validateAutoGenRules(state, state.settings.autoGenRules);
-    setRulesState({ ...rules, perMeal: { ...rules.perMeal, perIngredientG: { ...rules.perMeal.perIngredientG, ...perIngredientGDraft } } });
+    setRulesState({
+      ...rules,
+      perMeal: {
+        ...rules.perMeal,
+        perIngredientG: { ...rules.perMeal.perIngredientG, ...perIngredientGDraft },
+        perIngredientType: { ...rules.perMeal.perIngredientType, ...perIngredientTypeDraft },
+      },
+    });
     setRemovedNotice(removedCount);
     setStep("rules");
   };
@@ -421,6 +487,7 @@ export function AutoGenFlowScreen({ onBack }) {
           includeObserving={includeObserving} setIncludeObserving={setIncludeObserving}
           includeCaution={includeCaution} setIncludeCaution={setIncludeCaution}
           perIngredientG={perIngredientGDraft} setPerIngredientG={setPerIngredientGDraft}
+          perIngredientType={perIngredientTypeDraft} setPerIngredientType={setPerIngredientTypeDraft}
           onBack={() => setStep("period")} onNext={enterRules}
         />
       )}
