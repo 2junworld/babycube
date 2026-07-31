@@ -326,6 +326,11 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
 
   const setCatRange = (id, patch) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, categoryCounts: { ...r.perMeal.categoryCounts, [id]: { ...r.perMeal.categoryCounts[id], ...patch } } } }));
   const setIngredientRule = (id, patch) => setRules((r) => ({ ...r, ingredientRules: r.ingredientRules.map((ir) => (ir.id === id ? { ...ir, ...patch } : ir)) }));
+  const setMealTargetG = (label, v) => setRules((r) => {
+    const next = { ...r.perMeal.targetGByLabel };
+    if (!v) delete next[label]; else next[label] = v;
+    return { ...r, perMeal: { ...r.perMeal, targetGByLabel: next } };
+  });
   const ruleFor = (preset) => rules.ingredientRules.find((ir) => ir.preset === preset);
 
   return (
@@ -338,6 +343,26 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
       {conflicts.map((w, i) => (
         <div key={i} style={{ background: C.apricotLight, borderRadius: 10, padding: "10px 12px", fontSize: 11.5, color: "#9A4A1E", lineHeight: 1.5 }}>{w}</div>
       ))}
+
+      <div style={{ background: C.sageLight, borderRadius: 10, padding: "10px 12px", fontSize: 11, color: C.sageDeep, lineHeight: 1.5 }}>
+        재료 선택 시 앱의 궁합 정보(예: 철분+비타민C)도 함께 고려해요 - 궁합 좋은 재료를 우선 배치하고, 주의가 필요한 조합은 최대한 피해요.
+      </div>
+
+      <div>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 8 }}>끼니당 목표 총량</div>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="flex items-center justify-between">
+            <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>기본값</span>
+            <NumInput value={rules.perMeal.targetTotalG} onChange={(v) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, targetTotalG: v } }))} suffix="g" width={44} />
+          </div>
+          {state.mealSlots.map((slot) => (
+            <div key={slot.id} className="flex items-center justify-between" style={{ paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
+              <span style={{ fontSize: 12, color: C.inkSoft }}>{slot.label}</span>
+              <NumInput value={rules.perMeal.targetGByLabel[slot.label] ?? 0} onChange={(v) => setMealTargetG(slot.label, v)} suffix="g (비우면 기본값)" width={44} />
+            </div>
+          ))}
+        </div>
+      </div>
 
       <div>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 8 }}>끼니당 카테고리 구성</div>

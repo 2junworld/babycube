@@ -8,6 +8,7 @@
 */
 import { addDaysISO, uid } from "./dates";
 import { catOf, categoryList, currentUnitGOf, deductFridge, deductFrozen, gOf, stockBatches, stockFridgeG, stockTotalCubes } from "../state/appState";
+import { pairingInfoFor, pairingRankFor } from "./pairing";
 
 // 자동 생성에서 "주식(탄수화물)"은 재료의 isStaple 플래그(장보기 자동등록·여행계산 제외 용도로 쓰이는
 // 별개 설정)가 아니라 카테고리로 판단한다 - 재료 풀 화면이 카테고리별로 묶여 있어서 사용자는
@@ -77,11 +78,12 @@ export function defaultAutoGenRules(state) {
 
   return {
     // perIngredientG: 재료 풀 화면에서 재료별로 직접 지정한 1회 급여량(g, 냉동 큐브 입력도 내부적으로는
-    // 이 그램 값으로 환산해 저장) - 지정 안 한 재료는 targetTotalG를 카테고리 슬롯 수로 나눈 값을 씀.
+    // 이 그램 값으로 환산해 저장) - 지정 안 한 재료는 그 끼니의 목표 총량을 카테고리 슬롯 수로 나눈 값을 씀.
     // perIngredientType: 재료 풀 화면에서 사용자가 고른 기본 재료 유형("frozen"|"fridge", 기본 frozen) -
     // 입력창 단위(큐브 개수 vs 중량) 선택 및 실제 재고가 전혀 없을 때의 대체값으로만 쓰이고, 재고 우선
     // 모드에서는 resolveStorageType()이 실제 재고 구성을 우선함(냉장 재고가 있으면 사용자 선택과 무관하게 냉장부터)
-    perMeal: { categoryCounts, targetTotalG: 150, perIngredientG: {}, perIngredientType: {} },
+    // targetGByLabel: 끼니 이름(아침/점심/저녁 등)별 목표 총량 오버라이드 - 지정 안 한 끼니는 targetTotalG(기본값)를 씀
+    perMeal: { categoryCounts, targetTotalG: 150, targetGByLabel: {}, perIngredientG: {}, perIngredientType: {} },
     staple: { includeEveryMeal: true, defaultG: 80 },
     ingredientRules: [
       { id: uid(), preset: "ironSource", type: "requireDaily", ingredient: "소고기", enabled: true },
@@ -319,7 +321,21 @@ export function generatePlan(state, opts) {
     return dateIdx - lastNewIngredientDateIdx < (newIngredientRule.cooldownDays ?? NEW_INGREDIENT_COOLDOWN_DAYS);
   };
 
-  const scoreCandidate = (name) => {
+  // 이미 이번 끼니에 담긴 재료들과의 궁합 등급 - 0/1(좋은 궁합, 등급 A/B) < 2(중립) < 3(주의 조합).
+  // 완전히 막지는 않고 순위만 뒤로 미룸(재고·다양성 제약으로 다른 후보가 없으면 그래도 주의 조합이 선택될 수 있음 -
+  // 기존 앱의 "주의 조합" 개념도 경고일 뿐 차단은 아니므로 같은 정책을 따름)
+  const pairingTier = (name, alreadyInMeal) => {
+    if (!alreadyInMeal || alreadyInMeal.length === 0) return 2;
+    const { goodWith, avoidWith } = pairingInfoFor(state, alreadyInMeal, name);
+    if (avoidWith.length > 0) return 3;
+    if (goodWith.length > 0) {
+      const rank = pairingRankFor(state, alreadyInMeal, name);
+      return rank === null ? 1 : rank;
+    }
+    return 2;
+  };
+
+  const scoreCandidate = (name, alreadyInMeal = []) => {
     const isFridge = storageTypeOf[name] === "fridge";
     const batches = stockBatches(state, name);
     const hasStock = vStock
@@ -333,13 +349,14 @@ export function generatePlan(state, opts) {
     }, null);
     return [
       hasStock ? 0 : 1, // 재고 있는 게 우선(오름차순 정렬 기준이라 작을수록 좋음)
+      pairingTier(name, alreadyInMeal), // 이미 담긴 재료와 궁합 좋으면 우대, 주의 조합이면 최대한 뒤로
       soonestExp || "9999-99-99",
       usageCount[name] || 0,
     ];
   };
 
-  const sortByScore = (names) => shuffle(names, rng).sort((a, b) => {
-    const sa = scoreCandidate(a), sb = scoreCandidate(b);
+  const sortByScore = (names, alreadyInMeal = []) => shuffle(names, rng).sort((a, b) => {
+    const sa = scoreCandidate(a, alreadyInMeal), sb = scoreCandidate(b, alreadyInMeal);
     for (let i = 0; i < sa.length; i++) { if (sa[i] !== sb[i]) return sa[i] < sb[i] ? -1 : 1; }
     return 0;
   });
@@ -369,7 +386,7 @@ export function generatePlan(state, opts) {
       candidates = base;
       relaxed = candidates.length > 0;
     }
-    return { picked: sortByScore(candidates).slice(0, count), relaxed };
+    return { picked: sortByScore(candidates, [...usedThisMeal]).slice(0, count), relaxed };
   };
 
   const markUsed = (name, dateIdx) => {
@@ -408,9 +425,10 @@ export function generatePlan(state, opts) {
     const satisfiedToday = new Set();
 
     slots.forEach((slot, mealIdxInDay) => {
+      const mealTargetG = (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[slot.label]) || rules.perMeal.targetTotalG;
       const perCatTarget = Object.values(categoryCounts).filter((r) => (r.max || 0) > 0);
       const totalSlots = perCatTarget.reduce((s, r) => s + r.max, 0) + (rules.staple.includeEveryMeal ? 1 : 0) || 1;
-      const perItemG = Math.max(10, Math.round(rules.perMeal.targetTotalG / totalSlots));
+      const perItemG = Math.max(10, Math.round(mealTargetG / totalSlots));
 
       // 조합이 오늘 다른 끼니와 겹치면, 카테고리 하나(가장 후보가 많은 곳)를 다른 재료로 바꿔서 재시도
       let items = [];
@@ -421,7 +439,7 @@ export function generatePlan(state, opts) {
 
         if (rules.staple.includeEveryMeal && stapleNames.length > 0) {
           // 주식은 항상 다양성 규칙 예외 - 같은 주식이 매 끼니 반복돼도 됨(밥/죽류는 반복이 자연스러움)
-          const picked = sortByScore(stapleNames.filter((n) => !usedThisMeal.has(n))).slice(0, 1);
+          const picked = sortByScore(stapleNames.filter((n) => !usedThisMeal.has(n)), [...usedThisMeal]).slice(0, 1);
           picked.forEach((name) => { items.push(buildItem(name, targetGFor(name, rules.staple.defaultG), dateIdx)); usedThisMeal.add(name); });
         }
 
@@ -458,7 +476,8 @@ export function generatePlan(state, opts) {
     // 끼워 넣는다(카테고리 min/max를 넘겨서라도, 조합 중복 검사도 건너뜀 - 의학적 권고가 다양성보다 우선)
     requiredToday.forEach((name) => {
       if (satisfiedToday.has(name) || dayMeals.length === 0) return;
-      dayMeals[0].items.push(buildItem(name, targetGFor(name, rules.perMeal.targetTotalG / 4), dateIdx));
+      const firstMealTargetG = (rules.perMeal.targetGByLabel && rules.perMeal.targetGByLabel[dayMeals[0].label]) || rules.perMeal.targetTotalG;
+      dayMeals[0].items.push(buildItem(name, targetGFor(name, firstMealTargetG / 4), dateIdx));
       markUsed(name, dateIdx);
     });
 
