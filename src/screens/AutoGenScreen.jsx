@@ -19,6 +19,7 @@ import {
   enumerateDates,
   generatePlan,
   stapleComboTotalG,
+  stapleStorageTypeOf,
   validateAutoGenRules,
   withStockOnly,
 } from "../lib/autoGen";
@@ -337,12 +338,12 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
   });
   const ruleFor = (preset) => rules.ingredientRules.find((ir) => ir.preset === preset);
 
-  // 주식 재료도 재료 풀과 같은 저장형태(냉동 큐브/냉장 계량) 선택을 공유(rules.perMeal.perIngredientType) -
-  // 아직 안 골랐으면 실제 재고 구성을 보고 화면에서만 기본값을 잡아줌(재료 풀 화면의 typeOf와 동일한 규칙)
-  const stapleTypeOf = (name) => {
-    if (rules.perMeal.perIngredientType[name]) return rules.perMeal.perIngredientType[name];
-    return stockTotalCubes(state, name) === 0 && stockFridgeG(state, name) > 0 ? "fridge" : "frozen";
-  };
+  // 주식 재료도 재료 풀과 같은 저장형태(냉동 큐브/냉장 계량) 선택을 공유(rules.perMeal.perIngredientType).
+  // generatePlan()이 실제 생성 시점에 쓰는 stapleStorageTypeOf()와 반드시 같은 판단을 써야 함 - 예전엔
+  // 화면은 이 로직을 따로 복제해서 쓰고 generatePlan은 resolveStorageType(재고가 사용자 선택을 덮어씀)을
+  // 써서, 화면엔 "냉장"으로 보여도 실제로는 남아있는 냉동 재고 때문에 큐브로 반올림돼 생성되는
+  // 불일치가 있었음(사용자가 실제로 겪은 문제)
+  const stapleTypeOf = (name) => stapleStorageTypeOf(state, name, rules);
   const setStapleType = (name, type) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, perIngredientType: { ...r.perMeal.perIngredientType, [name]: type } } }));
   const comboUnitGOf = (name) => currentUnitGOf(state, name) || 15;
   // 냉동(큐브) 재료는 실제로는 항상 "큐브 개수 x 큐브 중량"으로만 배치될 수 있어서, 여기서 그램을

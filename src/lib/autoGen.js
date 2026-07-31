@@ -148,6 +148,19 @@ export function resolveStorageType(state, name, rules) {
   return preferred;
 }
 
+// 주식 조합 재료 전용 저장형태 판단 - resolveStorageType()과 달리 실제 재고 구성이 사용자의 명시적
+// 선택을 절대 덮어쓰지 않음. 규칙 확인 화면에서 재료별로 냉동/냉장을 직접 골랐다면(perIngredientType에
+// 값이 있으면) 그 재료에 예전에 냉동으로 등록해둔 재고가 남아있어도 그대로 존중해서 계산 - 그렇지
+// 않으면(resolveStorageType처럼 재고 우선으로 판단해버리면) 화면에는 "냉장 45g"이라고 입력해놓고도
+// 실제 생성 결과는 남아있는 냉동 재고 때문에 큐브 단위로 반올림돼 화면 숫자와 완전히 달라져 버림
+// (사용자가 실제로 겪은 문제 - 냉장/45g으로 설정했는데 냉동 취급되어 2큐브=40g으로 생성됨).
+// 아직 선택한 적 없는 재료는 화면(RulesStep의 stapleTypeOf)과 동일하게 실제 재고를 보고 추정.
+export function stapleStorageTypeOf(state, name, rules) {
+  const preferred = rules.perMeal.perIngredientType && rules.perMeal.perIngredientType[name];
+  if (preferred) return preferred;
+  return stockTotalCubes(state, name) === 0 && stockFridgeG(state, name) > 0 ? "fridge" : "frozen";
+}
+
 // 카테고리 관리 화면에서 삭제 전에 확인하는 용도 - 이 카테고리가 자동 생성 규칙에서 실제로(0,0이 아니게)
 // 쓰이고 있는지. categoryFloor(예: "단백질 분산")는 카테고리 이름으로 참조하므로 이름으로도 확인
 export function categoryUsedInAutoGenRules(rules, category) {
@@ -179,7 +192,7 @@ export function stapleComboTotalG(state, rules, combo) {
   const gramsByName = combo.gramsByName || {};
   return combo.names.reduce((s, n) => {
     const targetG = gramsByName[n] > 0 ? gramsByName[n] : fallbackG;
-    const isFridge = resolveStorageType(state, n, rules) === "fridge";
+    const isFridge = stapleStorageTypeOf(state, n, rules) === "fridge";
     if (isFridge) return s + Math.round(targetG);
     const unitG = currentUnitGOf(state, n) || 15;
     return s + Math.max(1, Math.round(targetG / unitG)) * unitG;
@@ -312,15 +325,16 @@ export function generatePlan(state, opts) {
   const warnings = [];
 
   // 재료별 저장 형태 판단(냉동 큐브 vs 냉장 계량) - 지금 실제 재고 구성 + 사용자가 고른 기본값을
-  // 기준으로 생성 내내 고정(resolveStorageType 참고). staple(무른밥 등)도 예외 없이 동일하게 판단 -
-  // 무른밥은 흔히 냉장 보관이라 실제 재고 형태를 따르는 게 맞음. staple 조합 재료는 재료 풀(pool)에
-  // 없으므로(주식은 규칙 화면에서 따로 구성) 별도로 챙겨서 넣어줘야 함 - 안 그러면 storageTypeOf가
-  // undefined가 되어 무조건 냉동 취급되고, 냉장 전용 재고인 재료도 냉동 재고를 찾다가 재고 부족으로
-  // 잘못 표시됨
+  // 기준으로 생성 내내 고정(resolveStorageType 참고). staple 조합 재료는 일반 카테고리 재료와 달리
+  // 사용자가 규칙 확인 화면에서 명시적으로 고른 냉동/냉장을 재고 구성이 덮어쓰지 않아야 함(그래서
+  // resolveStorageType이 아니라 stapleStorageTypeOf를 씀 - 아래 함수 정의 참고). 주식 조합 재료는
+  // pool에 절대 안 들어있는 게 정상(재료 풀 화면이 항상 탄수화물을 걸러냄)이지만, 혹시라도 들어있는
+  // 경우까지 대비해서 staple 판단을 pool 루프보다 나중에·항상 덮어쓰게 함 - 조합에 속한 재료는 항상
+  // stapleStorageTypeOf가 최종 결정권을 갖도록 보장
   const storageTypeOf = {};
   pool.forEach((name) => { storageTypeOf[name] = resolveStorageType(state, name, rules); });
   stapleCombos.forEach((combo) => combo.names.forEach((name) => {
-    if (!(name in storageTypeOf)) storageTypeOf[name] = resolveStorageType(state, name, rules);
+    storageTypeOf[name] = stapleStorageTypeOf(state, name, rules);
   }));
 
   // 규칙 인덱싱
