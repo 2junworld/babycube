@@ -1,7 +1,7 @@
 /* 식단 자동 생성 - 생성 플로우 UI (PR B: ① 기간 선택 → ② 재료 풀 확인/편집 → ③ 규칙 확인/조정)
    실제 생성 알고리즘 실행·미리보기·확정저장은 PR C에서 이어서 구현. 여기서는 규칙을 확정해
    state.settings.autoGenRules에 저장(다음에 열 때 이어서 프리필)하는 데까지만 담당한다. */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Pencil, Plus, Refrigerator, Snowflake, Tag, X } from "lucide-react";
 import { C, primaryBtn } from "../theme";
 import { WD, addDaysISO, pad2, todayISO } from "../lib/dates";
@@ -142,19 +142,6 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
   const cats = categoryList(state);
   const grouped = cats.map((c) => ({ cat: c, names: allVisible.filter((n) => catOf(state, n) === c.name) })).filter((g) => g.names.length > 0);
 
-  // 급여 기록이 있는 재료는 그 평균값으로 1회 급여량을 미리 채워줌(사용자가 이미 손댄 값은 안 건드림)
-  const visibleKey = useMemo(() => allVisible.slice().sort().join(","), [allVisible]);
-  useEffect(() => {
-    const additions = {};
-    allVisible.forEach((n) => {
-      if (perIngredientG[n] != null) return;
-      const avg = avgServingGFromLogs(state, n);
-      if (avg != null) additions[n] = avg;
-    });
-    if (Object.keys(additions).length > 0) setPerIngredientG((p) => ({ ...additions, ...p }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleKey]);
-
   const toggleName = (n) => setChecked((prev) => { const next = new Set(prev); if (next.has(n)) next.delete(n); else next.add(n); return next; });
   // 피커에서 고른 재료를 추가 - "중단" 상태 재료는 자동 생성에서 항상 제외되므로 안전하게 걸러냄
   const addFromPicker = (names) => {
@@ -207,11 +194,21 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
     next[n] = typeOf(n) === "frozen" ? v * unitGOfName(n) : v;
     return next;
   });
+  // 급여 기록이 있으면 평균값을 "입력해두는" 대신 회색 placeholder 힌트로만 보여줌 - 예전엔 실제
+  // 입력값으로 채워 넣었는데, 그러면 재료 대부분이 이 값으로 강제 고정돼서(재료별 값이 끼니별 목표
+  // 총량보다 항상 우선함) 다음 단계에서 끼니별 목표 총량을 바꿔도 반영되는 게 거의 없었음(제보 확인).
+  // 참고만 하고 싶으면 그대로 두고, 이 재료만 특별히 고정하고 싶을 때만 직접 입력하면 됨
+  const hintQty = (n) => {
+    const avg = avgServingGFromLogs(state, n);
+    if (avg == null) return undefined;
+    return String(typeOf(n) === "frozen" ? Math.max(1, Math.round(avg / unitGOfName(n))) : avg);
+  };
 
   return (
     <div style={{ padding: "10px 18px 100px", display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5 }}>
         재고가 있는 재료를 기본으로 보여드려요. 재고가 없는 재료를 쓰려면 아래 '재료 선택'으로 추가해 주세요.
+        1회 급여량은 비워두면 다음 단계에서 정할 '끼니당 목표 총량'을 재료 수만큼 나눠서 쓰고, 직접 입력하면 그 재료는 항상 그 양으로 고정돼요(급여 기록이 있으면 회색 숫자로 평균치를 참고만 보여드려요).
       </div>
 
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -253,7 +250,7 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
                       style={{ width: 22, height: 22, borderRadius: 6, background: C.sageLight, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
                       {type === "frozen" ? <Snowflake size={12} color={C.sageDeep} /> : <Refrigerator size={12} color={C.sageDeep} />}
                     </button>
-                    <NumInput value={displayQty(n)} onChange={(v) => setQty(n, v)} suffix={type === "frozen" ? "큐브" : "g"} width={34} />
+                    <NumInput value={displayQty(n)} onChange={(v) => setQty(n, v)} placeholder={hintQty(n) || "0"} suffix={type === "frozen" ? "큐브" : "g"} width={34} />
                     <button onClick={() => { setLabelInputFor(labelInputFor === n ? null : n); setLabelDraft(""); }} style={{ background: "transparent", border: "none", padding: 2, cursor: "pointer", display: "flex", flexShrink: 0 }}>
                       <Tag size={12} color={labels.length > 0 ? C.sageDeep : C.muted} />
                     </button>
@@ -349,7 +346,8 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
       </div>
 
       <div>
-        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 8 }}>끼니당 목표 총량</div>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, marginBottom: 4 }}>끼니당 목표 총량</div>
+        <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 8, lineHeight: 1.4 }}>재료 풀 화면에서 직접 양을 지정한 재료는 여기 목표 총량과 무관하게 그 양 그대로 들어가요. 여기 값은 양을 따로 지정 안 한 재료에만 적용돼요.</div>
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="flex items-center justify-between">
             <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>기본값</span>
