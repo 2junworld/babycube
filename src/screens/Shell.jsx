@@ -12,6 +12,20 @@ import { FeedingCompareScreen, RecordHistoryScreen, RecordTab } from "./RecordTa
 import { ActivityScreen, CategoriesScreen, ChangelogHistoryScreen, FeedbackScreen, HistoryScreen, MealSlotsScreen, MembersScreen, MoreTab, SettingsScreen, TravelScreen } from "./MoreTab";
 import { GO_TO_CHANGELOG_EVENT, UI_STATE } from "./uiPrefs";
 
+// 개발 브랜치 프리뷰 배포(vite.config.js가 VERCEL_ENV로 판단)에서만 화면 한쪽에 작게 표시 -
+// 정식 배포와 헷갈리지 않게 항상 눈에 보이는 곳에 두되, 탭·버튼을 가리지 않도록 pointerEvents: none
+function DevBuildBadge() {
+  const isDevBuild = typeof __DEPLOY_ENV__ !== "undefined" && __DEPLOY_ENV__ !== "production";
+  if (!isDevBuild) return null;
+  return (
+    <div style={{ position: "fixed", top: "calc(6px + env(safe-area-inset-top))", right: 8, zIndex: 40, pointerEvents: "none" }}>
+      <span style={{ fontSize: 9.5, fontWeight: 800, color: "#fff", background: "#E07A3F", borderRadius: 999, padding: "3px 8px", letterSpacing: 0.4, boxShadow: "0 2px 6px rgba(0,0,0,0.15)" }}>
+        DEV
+      </span>
+    </div>
+  );
+}
+
 /* =====================================================================
    앱 셸 (탭 + 라우팅)
    ===================================================================== */
@@ -84,6 +98,7 @@ export function Shell() {
   return (
     <div style={{ minHeight: "100dvh", background: C.bg, fontFamily: "'Noto Sans KR', sans-serif", zoom: fontScale }}>
       <style>{FONT_IMPORT}</style>
+      <DevBuildBadge />
       <div style={{ maxWidth: 480, margin: "0 auto", minHeight: "100dvh", position: "relative" }}>
         {content}
 
