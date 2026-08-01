@@ -67,7 +67,7 @@ function PeriodStep({ range, setRange, onNext }) {
       <div style={{ background: C.sageLight, borderRadius: 12, padding: 12 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>오늘부터 빠른 선택</div>
         <div className="flex items-center" style={{ gap: 8 }}>
-          <NumInput value={quickN} onChange={setQuickN} width={44} min={1} />
+          <NumInput value={quickN} onChange={setQuickN} width={44} min={1} max={52} />
           <Segmented value={quickUnit} onChange={setQuickUnit} options={[{ value: "day", label: "일" }, { value: "week", label: "주" }]} />
           <button onClick={applyQuick} style={{ flex: 1, background: C.sage, border: "none", borderRadius: 10, padding: "9px 0", fontSize: 12.5, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
             적용
@@ -257,7 +257,7 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
                       style={{ width: 22, height: 22, borderRadius: 6, background: C.sageLight, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
                       {type === "frozen" ? <Snowflake size={12} color={C.sageDeep} /> : <Refrigerator size={12} color={C.sageDeep} />}
                     </button>
-                    <NumInput value={displayQty(n)} onChange={(v) => setQty(n, v)} placeholder={hintQty(n) || "0"} suffix={type === "frozen" ? "큐브" : "g"} width={34} />
+                    <NumInput value={displayQty(n)} onChange={(v) => setQty(n, v)} placeholder={hintQty(n) || "0"} suffix={type === "frozen" ? "큐브" : "g"} width={34} max={type === "frozen" ? 50 : 2000} />
                     <button onClick={() => { setLabelInputFor(labelInputFor === n ? null : n); setLabelDraft(""); }} style={{ background: "transparent", border: "none", padding: 2, cursor: "pointer", display: "flex", flexShrink: 0 }}>
                       <Tag size={12} color={labels.length > 0 ? C.sageDeep : C.muted} />
                     </button>
@@ -409,12 +409,12 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="flex items-center justify-between">
             <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>기본값</span>
-            <NumInput value={rules.perMeal.targetTotalG} onChange={(v) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, targetTotalG: v } }))} suffix="g" width={44} />
+            <NumInput value={rules.perMeal.targetTotalG} onChange={(v) => setRules((r) => ({ ...r, perMeal: { ...r.perMeal, targetTotalG: v } }))} suffix="g" width={44} max={2000} />
           </div>
           {state.mealSlots.map((slot) => (
             <div key={slot.id} className="flex items-center justify-between" style={{ paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
               <span style={{ fontSize: 12, color: C.inkSoft }}>{slot.label}</span>
-              <NumInput value={rules.perMeal.targetGByLabel[slot.label] ?? 0} onChange={(v) => setMealTargetG(slot.label, v)} suffix="g (비우면 기본값)" width={44} />
+              <NumInput value={rules.perMeal.targetGByLabel[slot.label] ?? 0} onChange={(v) => setMealTargetG(slot.label, v)} suffix="g (비우면 기본값)" width={44} max={2000} />
             </div>
           ))}
         </div>
@@ -432,8 +432,8 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{c.name}</span>
                 </div>
                 <div className="flex items-center" style={{ gap: 10 }}>
-                  <NumInput value={r.min} onChange={(v) => setCatRange(c.id, { min: v, max: Math.max(v, r.max) })} suffix="최소" width={34} />
-                  <NumInput value={r.max} onChange={(v) => setCatRange(c.id, { max: v, min: Math.min(v, r.min) })} suffix="최대" width={34} />
+                  <NumInput value={r.min} onChange={(v) => setCatRange(c.id, { min: v, max: Math.max(v, r.max) })} suffix="최소" width={34} max={20} />
+                  <NumInput value={r.max} onChange={(v) => setCatRange(c.id, { max: v, min: Math.min(v, r.min) })} suffix="최대" width={34} max={20} />
                 </div>
               </div>
             );
@@ -459,7 +459,7 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
           </div>
           <div className="flex items-center justify-between">
             <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>끼니당 급여량</span>
-            <NumInput value={rules.staple.defaultG} onChange={(v) => setRules((r) => ({ ...r, staple: { ...r.staple, defaultG: v } }))} suffix="g" width={44} />
+            <NumInput value={rules.staple.defaultG} onChange={(v) => setRules((r) => ({ ...r, staple: { ...r.staple, defaultG: v } }))} suffix="g" width={44} max={2000} />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: (rules.staple.combos || []).length > 0 ? 4 : 0, borderTop: (rules.staple.combos || []).length > 0 ? `1px dashed ${C.border}` : "none" }}>
             {(rules.staple.combos || []).map((combo) => {
@@ -490,7 +490,7 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
                             style={{ width: 22, height: 22, borderRadius: 6, background: C.surface, border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
                             {type === "frozen" ? <Snowflake size={12} color={C.sageDeep} /> : <Refrigerator size={12} color={C.sageDeep} />}
                           </button>
-                          <NumInput value={comboDisplayQty(name, curG)} onChange={(v) => setComboQty(combo.id, name, v)} suffix={type === "frozen" ? "큐브" : "g"} width={44} />
+                          <NumInput value={comboDisplayQty(name, curG)} onChange={(v) => setComboQty(combo.id, name, v)} suffix={type === "frozen" ? "큐브" : "g"} width={44} max={type === "frozen" ? 50 : 2000} />
                         </div>
                       </div>
                     );
@@ -541,14 +541,14 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
                     <span style={{ fontSize: 11, color: C.muted }}>대상 라벨 '{rule.label}'</span>
                     <div className="flex items-center" style={{ gap: 5 }}>
                       <span style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>주당 최대</span>
-                      <NumInput value={rule.value} onChange={(v) => setIngredientRule(rule.id, { value: v })} suffix="회" width={34} />
+                      <NumInput value={rule.value} onChange={(v) => setIngredientRule(rule.id, { value: v })} suffix="회" width={34} max={21} />
                     </div>
                   </div>
                 )}
                 {rule.enabled && rule.type === "categoryFloor" && (
                   <div className="flex items-center justify-between" style={{ marginTop: 6 }}>
                     <span style={{ fontSize: 11, color: C.muted }}>끼니당 '{rule.categoryName}' 최소 개수</span>
-                    <NumInput value={rule.value} onChange={(v) => setIngredientRule(rule.id, { value: v })} suffix="종" width={34} />
+                    <NumInput value={rule.value} onChange={(v) => setIngredientRule(rule.id, { value: v })} suffix="종" width={34} max={20} />
                   </div>
                 )}
               </div>

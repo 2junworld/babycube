@@ -236,7 +236,7 @@ export function SubHeader({ title, onBack, right }) {
 // 숫자 입력창(type=number)의 HTML min 속성은 스핀 버튼에만 적용되고 직접 타이핑으로 음수를 넣는 건 막아주지 않아서
 // (예: 냉장 보관량을 직접 편집하다 "-" 부호가 남는 경우) 재고 중량이 음수로 표시되는 버그가 있었음.
 // onChange에서 Math.max로 실제로 clamp해서 근본적으로 막음.
-export function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min = 0 }) {
+export function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min = 0, max }) {
   return (
     <div className="flex items-center" style={{ gap: 6 }}>
       <input
@@ -245,11 +245,15 @@ export function NumInput({ value, onChange, width = 46, suffix, placeholder = "0
         value={value === 0 || value == null ? "" : value}
         placeholder={placeholder}
         min={min}
+        max={max}
         onChange={(e) => {
           const raw = e.target.value;
           if (raw === "") { onChange(0); return; }
           const n = Number(raw);
-          if (!Number.isNaN(n)) onChange(min != null ? Math.max(min, n) : n);
+          if (Number.isNaN(n)) return;
+          let clamped = min != null ? Math.max(min, n) : n;
+          if (max != null) clamped = Math.min(max, clamped);
+          onChange(clamped);
         }}
         style={{ width, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px",
           fontSize: 12, textAlign: "center", color: C.ink, outline: "none" }}
