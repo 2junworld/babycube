@@ -249,22 +249,23 @@ export function checkRuleConflicts(state, rules, pool) {
   // 냉동(큐브) 재료는 실제로 최소 1큐브 단위로만 배치될 수 있어서(그램을 아무리 작게 잡아도 그
   // 밑으로 못 내려감), 매 끼니 항상 채워지는 최소 개수(min - max는 무작위라 매번 나온다는 보장이 없어
   // 최소 기준으로만 계산, 안 그러면 기본 설정에서도 경고가 떠서 너무 시끄러움)만 큐브 최소 단위로
-  // 잡아도 목표 총량을 넘는 경우가 있음 - 이때는 목표 총량을 아무리 낮게 잡아도(예: 120g) 실제로는
-  // 그보다 훨씬 크게 생성되고, 오히려 다른(더 큰 목표의) 끼니보다도 커 보일 수 있어 혼란스러움(사용자가
-  // 실제로 겪은 문제). 정확한 큐브 중량은 어떤 재료가 뽑힐지 몰라 알 수 없으므로 흔히 쓰는 기본 큐브
-  // 중량(15g, currentUnitGOf의 기본값과 동일)으로 대략 추정해서 미리 경고
+  // 잡아도 목표 총량을 넘는 경우가 있음. generatePlan()이 이제 목표를 넘기지 않으려고 주식 급여량을
+  // 먼저 줄이지만(재료당 최소 10g까지), 그렇게 줄여도 카테고리 최소 배치량만으로 이미 목표를 넘으면
+  // 더는 손쓸 수가 없음 - 그런 진짜 불가능한 설정만 여기서 미리 경고(주식이 줄어들 걸 감안 안 하고
+  // 무조건 원래 설정값 기준으로 경고하면, 실제로는 줄어들어서 별문제 없는 경우까지 과도하게 경고하게 됨)
   const ASSUMED_MIN_CUBE_G = 15;
+  const STAPLE_MEMBER_FLOOR_G = 10; // generatePlan의 memberFloor와 동일 - 주식은 아무리 줄어도 재료당 이 아래로는 안 내려감
   const perCatTarget = Object.values(rules.perMeal.categoryCounts || {}).filter((r) => (r.max || 0) > 0);
   const guaranteedCatSlots = perCatTarget.reduce((s, r) => s + (r.min || 0), 0);
   if (guaranteedCatSlots > 0) {
-    const worstStapleG = rules.staple.includeEveryMeal
-      ? (rules.staple.combos || []).reduce((max, c) => Math.max(max, stapleComboTotalG(state, rules, c)), 0)
+    const worstStapleFloorG = rules.staple.includeEveryMeal
+      ? (rules.staple.combos || []).reduce((max, c) => Math.max(max, STAPLE_MEMBER_FLOOR_G * ((c.names || []).length)), 0)
       : 0;
-    const minGuaranteedTotal = worstStapleG + guaranteedCatSlots * ASSUMED_MIN_CUBE_G;
+    const minGuaranteedTotal = worstStapleFloorG + guaranteedCatSlots * ASSUMED_MIN_CUBE_G;
     const tooLow = targets.filter((t) => minGuaranteedTotal > t.g);
     if (tooLow.length > 0) {
       const labels = tooLow.map((t) => `'${t.label}'(${t.g}g)`).join(", ");
-      warnings.push(`${labels} 목표 총량이 너무 낮아서 실제로는 최소 약 ${minGuaranteedTotal}g 이상으로 생성될 수 있어요 - 냉동 재료는 최소 1큐브 단위라 그램을 작게 잡아도 그 밑으로 못 내려가요. 목표 총량을 늘리거나 카테고리 최소 개수·주식 급여량을 줄여보세요`);
+      warnings.push(`${labels} 목표 총량이 너무 낮아서 실제로는 최소 약 ${minGuaranteedTotal}g 이상으로 생성될 수 있어요 - 주식 급여량을 자동으로 줄여도 카테고리 재료(냉동은 최소 1큐브 단위)만으로 이미 목표를 넘어요. 목표 총량을 늘리거나 카테고리 최소 개수를 줄여보세요`);
     }
   }
   return warnings;
@@ -557,6 +558,16 @@ export function generatePlan(state, opts) {
     };
   };
 
+  // buildItem과 완전히 같은 반올림(냉동 큐브 vs 냉장 계량)으로 "실제로 배치될 그램"만 미리 계산 -
+  // 재고는 안 건드림(순수 함수). 끼니 총량이 목표를 넘을 때 주식을 얼마나 줄여야 카테고리 재료의
+  // 실제 배치량(냉동 재료는 큐브 단위라 반올림 후 값이 달라짐)까지 감안해서 정확히 맞출 수 있는지
+  // 미리 계산하는 데 씀
+  const computeAssignedG = (name, targetG) => {
+    const unitG = currentUnitGOf(state, name) || 15;
+    const isFridge = storageTypeOf[name] === "fridge";
+    return isFridge ? Math.round(targetG) : Math.max(1, Math.round(targetG / unitG)) * unitG;
+  };
+
   const targetGFor = (name, fallback) => (perIngredientG[name] != null ? perIngredientG[name] : fallback);
 
   const plansByDate = {};
@@ -576,40 +587,40 @@ export function generatePlan(state, opts) {
       // 조합이 오늘 다른 끼니와 겹치면, 카테고리 하나(가장 후보가 많은 곳)를 다른 재료로 바꿔서 재시도
       let items = [];
       let relaxedAny = false;
+      let pendingShrinkNote = null; // 이번 시도에서 주식을 줄였다면 여기 담아뒀다가, 이 결과로 확정될 때만 warnings에 남김
       for (let attempt = 0; attempt <= COMBO_RETRY_ATTEMPTS; attempt++) {
         items = [];
         const usedThisMeal = new Set();
-        let stapleG = 0;
+        pendingShrinkNote = null;
 
+        // 1단계: 주식 조합을 고르고 "원래 설정값" 기준 그램을 계산만 해둠(아직 배치는 안 함) - 카테고리
+        // 재료의 실제 배치량(냉동 재료는 큐브 단위라 반올림됨)을 먼저 알아야 목표 총량을 넘길 때
+        // 주식을 얼마나 줄여야 할지 정확히 계산할 수 있음
+        let chosenCombo = null;
+        const nominalGramsByMember = {};
+        let nominalStapleG = 0;
         if (rules.staple.includeEveryMeal && stapleCombos.length > 0) {
-          const chosenCombo = pickStapleCombo(usedTodayNames);
+          chosenCombo = pickStapleCombo(usedTodayNames);
           if (chosenCombo) {
             const fallbackG = Math.max(10, Math.round(rules.staple.defaultG / chosenCombo.names.length));
             const gramsByName = chosenCombo.gramsByName || {};
             chosenCombo.names.forEach((name) => {
-              const comboG = gramsByName[name] > 0 ? gramsByName[name] : fallbackG;
-              stapleG += comboG;
               // targetGFor(perIngredientG)를 거치지 않고 comboG를 그대로 씀 - 주식이 예전엔 재료 풀
               // 화면에서 다뤄지던 시절 perIngredientG에 남겨진 값이 있으면(예: 74g), 화면에서
               // 이 재료가 빠진 지금도 그 낡은 값이 조합 설정을 조용히 덮어써 버렸음(사용자가 실제로
               // 겪은 문제 - 조합에서 아무리 다시 설정해도 예전 값이 계속 반영됨). 주식 급여량은
               // 이제 조합 설정(gramsByName/defaultG)이 유일한 출처여야 함
-              items.push(buildItem(name, comboG, dateIdx));
+              const comboG = gramsByName[name] > 0 ? gramsByName[name] : fallbackG;
+              nominalGramsByMember[name] = comboG;
+              nominalStapleG += comboG;
               usedThisMeal.add(name);
             });
           }
         }
 
-        // 주식이 실제로 차지한 양(stapleG)을 먼저 빼고 남은 예산만 카테고리 재료에 나눠서, 끼니
-        // 총량이 목표를 벗어나지 않게 함(예전엔 주식을 "슬롯 하나"로만 취급해 실제 주식 양과
-        // 무관하게 목표 총량을 훨씬 넘겨 배치되는 문제가 있었음).
-        // 카테고리 재료 1개당 최소 10g을 강제로 보장하던 바닥값은 없앰 - 주식이 목표 총량의 상당
-        // 부분을 차지하는 설정에서는 (목표-주식)/슬롯 수가 10g 밑으로 떨어지는 경우가 흔했는데,
-        // 그때마다 10g 바닥이 목표 총량과 무관하게 우선해버려서 목표를 낮게 잡아도(예: 120g) 오히려
-        // 더 크게(150~165g) 생성되는 역전 현상이 있었음(사용자가 실제로 겪은 문제). 냉동(큐브) 재료는
-        // buildItem이 최소 1큐브를 보장하므로 여기서 억지로 10g을 얹지 않아도 너무 작아지지 않음
-        const perItemG = Math.max(1, Math.round(Math.max(0, mealTargetG - stapleG) / totalCatSlots));
-
+        // 2단계: 카테고리 재료 후보만 뽑아둠(그램 배치는 아직 안 함) - 주식 예산을 뺀 나머지를 슬롯 수로 나눔
+        const perItemG = Math.max(1, Math.round(Math.max(0, mealTargetG - nominalStapleG) / totalCatSlots));
+        const catPicks = []; // { name, targetG }
         cats.forEach((cat) => {
           const range = categoryCounts[cat.id] || { min: 0, max: 0 };
           if ((range.max || 0) <= 0) return;
@@ -622,14 +633,57 @@ export function generatePlan(state, opts) {
           } else if (relaxed) {
             relaxedAny = true;
           }
-          picked.forEach((name) => { items.push(buildItem(name, targetGFor(name, perItemG), dateIdx)); usedThisMeal.add(name); });
+          picked.forEach((name) => { catPicks.push({ name, targetG: targetGFor(name, perItemG) }); usedThisMeal.add(name); });
         });
+
+        // 3단계: 카테고리 재료가 실제로 배치될 그램(냉동 큐브 반올림 반영)을 재고 차감 없이 미리 계산.
+        // 주식도 "원래 설정값"이 아니라 실제 배치될 그램(큐브 반올림 반영) 기준으로 비교해야 정확함.
+        // 주식+카테고리 실제 합이 목표 총량을 넘으면, 카테고리는 그대로 두고 주식 급여량만 목표에
+        // 맞게 줄임(구성원 비율은 유지) - 사용자 요청: "목표보다 높게 생성하지 말고 주식 양을 줄여라".
+        // 냉동 재료는 그램만 줄여도 반올림이 위로 튕겨서 큐브 수가 그대로일 수 있어(예: 85g도 여전히
+        // 6큐브=90g) 그램이 아니라 큐브 개수 자체를 내림으로 줄여서 실제로 감소하도록 함(재료당 최소
+        // 1큐브는 유지). 냉장 재료는 그램이 곧 실제 값이라 비율대로 줄이면 그대로 반영됨(최소 10g 유지)
+        const actualCategoryG = catPicks.reduce((s, p) => s + computeAssignedG(p.name, p.targetG), 0);
+        const realNominalStapleG = chosenCombo ? chosenCombo.names.reduce((s, n) => s + computeAssignedG(n, nominalGramsByMember[n]), 0) : 0;
+        let finalGramsByMember = nominalGramsByMember;
+        if (chosenCombo && realNominalStapleG > 0 && realNominalStapleG + actualCategoryG > mealTargetG) {
+          const memberFloor = 10;
+          const allowedStapleG = Math.max(memberFloor * chosenCombo.names.length, mealTargetG - actualCategoryG);
+          if (allowedStapleG < realNominalStapleG) {
+            const scale = allowedStapleG / realNominalStapleG;
+            finalGramsByMember = {};
+            chosenCombo.names.forEach((name) => {
+              if (storageTypeOf[name] === "fridge") {
+                finalGramsByMember[name] = Math.max(memberFloor, Math.round(nominalGramsByMember[name] * scale));
+              } else {
+                const unitG = currentUnitGOf(state, name) || 15;
+                const nominalCubes = Math.max(1, Math.round(nominalGramsByMember[name] / unitG));
+                const cubes = Math.max(1, Math.floor(nominalCubes * scale));
+                finalGramsByMember[name] = cubes * unitG;
+              }
+            });
+            const actualStapleGAfterScale = chosenCombo.names.reduce((s, n) => s + computeAssignedG(n, finalGramsByMember[n]), 0);
+            if (actualStapleGAfterScale < realNominalStapleG) {
+              const label = chosenCombo.names.join(" + ");
+              pendingShrinkNote = `${date} ${slot.label}: 목표 총량(${mealTargetG}g)에 맞추려고 주식 '${label}' 급여량을 ${realNominalStapleG}g에서 ${actualStapleGAfterScale}g로 줄였어요`;
+            }
+          }
+        }
+
+        // 4단계: 이제 실제로 배치(재고 차감 포함) - 순서는 기존과 동일하게 주식 먼저, 카테고리 나중
+        if (chosenCombo) {
+          chosenCombo.names.forEach((name) => {
+            items.push(buildItem(name, finalGramsByMember[name], dateIdx));
+          });
+        }
+        catPicks.forEach(({ name, targetG }) => { items.push(buildItem(name, targetG, dateIdx)); });
 
         const key = comboKeyOf(state, items);
         if (!key || !todayCombos[dateIdx].has(key)) break; // 겹치지 않으면(또는 조합이 없으면) 이 결과로 확정
         if (attempt === COMBO_RETRY_ATTEMPTS) warnings.push(`${date} ${slot.label}: 오늘 다른 끼니와 같은 조합이라 그대로 뒀어요`);
       }
       if (relaxedAny) warnings.push(`${date} ${slot.label}: 다양성 규칙을 완화해서 재료를 배치했어요`);
+      if (pendingShrinkNote) warnings.push(pendingShrinkNote);
 
       items.forEach((it) => { usedTodayNames.add(it.name); markUsed(it.name, dateIdx); if (requiredToday.has(it.name)) satisfiedToday.add(it.name); });
       const finalKey = comboKeyOf(state, items);

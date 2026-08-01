@@ -365,6 +365,21 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
     setRules((r) => ({ ...r, staple: { ...r.staple, combos: [...(r.staple.combos || []), { id: uid(), names: carbNames, gramsByName }] } }));
   };
   const removeCombo = (comboId) => setRules((r) => ({ ...r, staple: { ...r.staple, combos: r.staple.combos.filter((c) => c.id !== comboId) } }));
+  // 조합 안의 재료 하나만 제거 - 마지막 하나까지 지우면 빈 조합이 남는 게 의미 없으니 조합 자체를 통째로 지움
+  const removeComboMember = (comboId, name) => setRules((r) => ({
+    ...r,
+    staple: {
+      ...r.staple,
+      combos: r.staple.combos.flatMap((c) => {
+        if (c.id !== comboId) return [c];
+        const nextNames = c.names.filter((n) => n !== name);
+        if (nextNames.length === 0) return [];
+        const nextGramsByName = { ...c.gramsByName };
+        delete nextGramsByName[name];
+        return [{ ...c, names: nextNames, gramsByName: nextGramsByName }];
+      }),
+    },
+  }));
   const setComboGram = (comboId, name, v) => setRules((r) => ({
     ...r,
     staple: { ...r.staple, combos: r.staple.combos.map((c) => (c.id === comboId ? { ...c, gramsByName: { ...c.gramsByName, [name]: v } } : c)) },
@@ -491,6 +506,10 @@ function RulesStep({ rules, setRules, pool, removedNotice, onBack, onFinish }) {
                             {type === "frozen" ? <Snowflake size={12} color={C.sageDeep} /> : <Refrigerator size={12} color={C.sageDeep} />}
                           </button>
                           <NumInput value={comboDisplayQty(name, curG)} onChange={(v) => setComboQty(combo.id, name, v)} suffix={type === "frozen" ? "큐브" : "g"} width={44} max={type === "frozen" ? 50 : 2000} />
+                          <button onClick={() => removeComboMember(combo.id, name)} title="이 재료만 조합에서 빼기"
+                            style={{ width: 20, height: 20, borderRadius: 6, background: "none", border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+                            <X size={13} color={C.muted} />
+                          </button>
                         </div>
                       </div>
                     );
