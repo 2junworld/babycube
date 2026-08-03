@@ -2,13 +2,14 @@
    실제 생성 알고리즘 실행·미리보기·확정저장은 PR C에서 이어서 구현. 여기서는 규칙을 확정해
    state.settings.autoGenRules에 저장(다음에 열 때 이어서 프리필)하는 데까지만 담당한다. */
 import React, { useMemo, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Pencil, Plus, Refrigerator, Snowflake, Tag, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Info, Pencil, Plus, Refrigerator, Snowflake, Tag, X } from "lucide-react";
 import { C, primaryBtn } from "../theme";
 import { WD, addDaysISO, pad2, todayISO, uid } from "../lib/dates";
 import { catOf, categoryList, currentUnitGOf, stockFridgeG, stockTotalCubes, totalG } from "../state/appState";
 import { useStore } from "../store";
 import { MealItemList, NumInput, Segmented, SubHeader, BottomSheet } from "../components/common";
 import { IngredientPicker } from "../components/pickers";
+import { IngredientInfoScreen } from "./StockTab";
 import { PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
 import {
   COMMON_FISH_NAMES,
@@ -132,6 +133,7 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
   const [picker, setPicker] = useState(false);
   const [labelInputFor, setLabelInputFor] = useState(null);
   const [labelDraft, setLabelDraft] = useState("");
+  const [infoFor, setInfoFor] = useState(null); // 재료 정보를 바로 보고 수정할 재료명
 
   const introOf = (name) => (state.intros || []).find((it) => it.name === name);
   // 기본 노출: 이상없음(+토글 켜면 관찰중·주의)이면서 실제 재고가 있는 재료만. 나머지는 아래
@@ -261,6 +263,9 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
                     <button onClick={() => { setLabelInputFor(labelInputFor === n ? null : n); setLabelDraft(""); }} style={{ background: "transparent", border: "none", padding: 2, cursor: "pointer", display: "flex", flexShrink: 0 }}>
                       <Tag size={12} color={labels.length > 0 ? C.sageDeep : C.muted} />
                     </button>
+                    <button onClick={() => setInfoFor(n)} title="재료 정보" aria-label="재료 정보" style={{ background: "transparent", border: "none", padding: 2, cursor: "pointer", display: "flex", flexShrink: 0 }}>
+                      <Info size={12} color={C.muted} />
+                    </button>
                   </div>
                   {hasLabelUi && (
                     <div style={{ marginTop: 4, paddingLeft: 20 }}>
@@ -314,6 +319,11 @@ function PoolStep({ checked, setChecked, includeObserving, setIncludeObserving, 
       </div>
       {picker && (
         <IngredientPicker multi onPick={addFromPicker} alreadyAdded={[...checked]} onClose={() => setPicker(false)} />
+      )}
+      {infoFor && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          <IngredientInfoScreen name={infoFor} onBack={() => setInfoFor(null)} />
+        </div>
       )}
     </div>
   );
