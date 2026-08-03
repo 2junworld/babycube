@@ -1,6 +1,6 @@
 /* 식단표 탭 - 일/주/월 뷰, 끼니 편집, 여러 날짜 일괄 저장 */
 import React, { useState } from "react";
-import { CalendarDays, ChevronLeft, ChevronRight, Plus, Trash2, Pencil, Check } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Plus, Trash2, Pencil, Check, Sparkles } from "lucide-react";
 import { C } from "../theme";
 import { WD, addDaysISO, fmtTime, pad2, todayISO, uid } from "../lib/dates";
 import { totalG, unitGOf } from "../state/appState";
@@ -12,6 +12,7 @@ import { pairingNamesOf } from "../lib/pairing";
 import { GrowthStageHint, MealTipsPanel } from "../components/hints";
 import { IngredientPicker, MealCopyPicker, MealSlotPicker, ProductPicker } from "../components/pickers";
 import { PlanItemsEditor, usePlanItemsEditor } from "../components/planEditor";
+import { AutoGenFlowScreen } from "./AutoGenScreen";
 import { primaryBtn } from "../theme";
 
 /* =====================================================================
@@ -422,12 +423,16 @@ export function MealPlanTab() {
   const [editing, setEditing] = useState(null);
   const [monthSel, setMonthSel] = useState(todayISO());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [autoGenOpen, setAutoGenOpen] = useState(false);
 
   if (editing) {
     return <MealEditScreen date={editing.date} meal={editing.meal} onBack={() => setEditing(null)} />;
   }
   if (bulkOpen) {
     return <BulkSaveScreen initialCursor={new Date(cursor + "T00:00:00")} onBack={() => setBulkOpen(false)} />;
+  }
+  if (autoGenOpen) {
+    return <AutoGenFlowScreen onBack={() => setAutoGenOpen(false)} />;
   }
 
   const shift = (n) => {
@@ -463,6 +468,10 @@ export function MealPlanTab() {
             </button>
           )}
         </div>
+
+        <button onClick={() => setAutoGenOpen(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sage, border: "none", borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+          <Sparkles size={14} /> 자동 생성
+        </button>
 
         {range !== "day" && (
           <button onClick={() => setBulkOpen(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sageLight, border: "none", borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>

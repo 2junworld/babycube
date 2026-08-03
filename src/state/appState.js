@@ -486,6 +486,11 @@ function rawReducer(state, action) {
     case "FEEDBACK_MIGRATED":
       return { ...state, feedback: [] };
 
+    // 식단 자동 생성 규칙 저장 - 기본값 계산·검증 로직은 lib/autoGen.js에 있음(이 파일이 그쪽을 참조하면
+    // 순환 참조가 생기므로, 여기서는 이미 계산된 규칙 객체를 그대로 저장만 함). 다음 생성 시 프리필됨
+    case "AUTOGEN_RULES_SAVE":
+      return { ...state, settings: { ...state.settings, autoGenRules: action.rules } };
+
     /* ---- 재료 마스터에 카테고리 지정하여 등록 (신규 재료 추가시) ----
        카테고리를 명시하지 않으면 영양 DB의 카테고리를 우선 사용, baseOf가 오면 변형 재료로 연결 */
     case "INGREDIENT_ENSURE": {

@@ -115,9 +115,11 @@ export function MealItemList({ items, fontSize = 11, wrap = false, empty = "-" }
   return (
     <div style={{ display: "flex", flexDirection: wrap ? "row" : "column", flexWrap: wrap ? "wrap" : "nowrap", gap: wrap ? "3px 12px" : 2 }}>
       {sorted.map((it) => (
-        <span key={it.productId || it.name} className="flex items-center" style={{ fontSize, color: C.inkSoft, lineHeight: 1.3 }}>
+        <span key={it.productId || it.name} className="flex items-center" style={{ gap: 2, fontSize, color: C.inkSoft, lineHeight: 1.3 }}>
           {it.source === "product" ? <ProductDot size={Math.max(5, fontSize - 4)} /> : <CatDot name={it.name} size={Math.max(5, fontSize - 4)} />}
           {it.source === "product" ? `${it.productName} ${it.qty}팩` : it.name}
+          {/* 자동 생성 미리보기에서 재고 시뮬레이션 결과 재고가 모자란 항목에만 붙는 표시(_noStock) - 다른 화면의 일반 항목엔 이 필드가 없어 평소엔 아무 영향 없음 */}
+          {it._noStock && <span style={{ color: C.apricot }} title="재고 부족">⚠</span>}
         </span>
       ))}
     </div>
@@ -234,7 +236,7 @@ export function SubHeader({ title, onBack, right }) {
 // 숫자 입력창(type=number)의 HTML min 속성은 스핀 버튼에만 적용되고 직접 타이핑으로 음수를 넣는 건 막아주지 않아서
 // (예: 냉장 보관량을 직접 편집하다 "-" 부호가 남는 경우) 재고 중량이 음수로 표시되는 버그가 있었음.
 // onChange에서 Math.max로 실제로 clamp해서 근본적으로 막음.
-export function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min = 0 }) {
+export function NumInput({ value, onChange, width = 46, suffix, placeholder = "0", min = 0, max }) {
   return (
     <div className="flex items-center" style={{ gap: 6 }}>
       <input
@@ -243,11 +245,15 @@ export function NumInput({ value, onChange, width = 46, suffix, placeholder = "0
         value={value === 0 || value == null ? "" : value}
         placeholder={placeholder}
         min={min}
+        max={max}
         onChange={(e) => {
           const raw = e.target.value;
           if (raw === "") { onChange(0); return; }
           const n = Number(raw);
-          if (!Number.isNaN(n)) onChange(min != null ? Math.max(min, n) : n);
+          if (Number.isNaN(n)) return;
+          let clamped = min != null ? Math.max(min, n) : n;
+          if (max != null) clamped = Math.min(max, clamped);
+          onChange(clamped);
         }}
         style={{ width, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px",
           fontSize: 12, textAlign: "center", color: C.ink, outline: "none" }}

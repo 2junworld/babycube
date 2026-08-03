@@ -11,6 +11,7 @@ import { authorTime, CatDot, ConfirmModal, NumInput, ScreenHeader, Segmented, Su
 import { downloadFile, feedingLogsToCSV } from "../lib/exporters";
 import { usePwaUpdate } from "../pwa";
 import { CHANGELOG } from "../changelog";
+import { categoryUsedInAutoGenRules } from "../lib/autoGen";
 
 /* =====================================================================
    더보기 하위 화면들
@@ -713,6 +714,11 @@ export function CategoryEditModal({ category, onClose }) {
   const [name, setName] = useState(base.name || "");
   const [color, setColor] = useState(base.color || "#9A9285");
   const [confirmingDel, setConfirmingDel] = useState(false);
+  // 이 카테고리가 자동 생성 규칙에서 실제로 쓰이고 있으면, 재료 사용 여부 확인을 통과한 뒤에도
+  // 한 번 더 확인을 받음. 삭제해도 규칙 설정 자체는 안 건드림(CATEGORY_DELETE는 categories만 바꿈) -
+  // 다만 그 규칙은 이제 없는 카테고리를 참조하게 되므로, 나중에 자동 생성을 실제로 쓰려는 시점에
+  // "이 규칙은 사용할 수 없어요" 안내로 막고 규칙을 고치도록 유도함(생성 화면 쪽에서 처리, PR C)
+  const [confirmingAutoGenImpact, setConfirmingAutoGenImpact] = useState(false);
   const trimmed = name.trim();
   const dup = trimmed && state.categories.some((c) => c.name === trimmed && c.id !== base.id);
 
@@ -722,13 +728,18 @@ export function CategoryEditModal({ category, onClose }) {
     else dispatch({ type: "CATEGORY_UPDATE", id: base.id, patch: { name: trimmed, color } });
     onClose();
   };
+  const doDelete = () => {
+    setConfirmingAutoGenImpact(false);
+    dispatch({ type: "CATEGORY_DELETE", id: base.id });
+    onClose();
+  };
   const del = () => {
     setConfirmingDel(false);
     if (state.categories.length <= 1) { notify("카테고리는 최소 1개 이상 있어야 해요"); return; }
     const usage = categoryUsageCount(state, base.name);
     if (usage > 0) { notify(`'${base.name}' 카테고리를 사용 중인 재료가 ${usage}개 있어서 삭제할 수 없어요. 먼저 재료들의 카테고리를 바꿔 주세요.`); return; }
-    dispatch({ type: "CATEGORY_DELETE", id: base.id });
-    onClose();
+    if (categoryUsedInAutoGenRules(state.settings.autoGenRules, base)) { setConfirmingAutoGenImpact(true); return; }
+    doDelete();
   };
 
   return (
@@ -773,6 +784,15 @@ export function CategoryEditModal({ category, onClose }) {
             message="이 카테고리를 사용 중인 재료가 있으면 삭제할 수 없어요."
             onConfirm={del}
             onCancel={() => setConfirmingDel(false)}
+          />
+        )}
+        {confirmingAutoGenImpact && (
+          <ConfirmModal
+            title="자동 생성 규칙에서 사용 중이에요"
+            message={`'${base.name}' 카테고리는 식단 자동 생성 규칙에 설정돼 있어요. 삭제하면 그 규칙을 자동 생성에 사용할 때 오류가 나요 - 규칙 화면에서 다시 확인해 주셔야 해요.`}
+            confirmLabel="그래도 삭제"
+            onConfirm={doDelete}
+            onCancel={() => setConfirmingAutoGenImpact(false)}
           />
         )}
       </div>
