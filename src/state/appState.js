@@ -317,6 +317,34 @@ function rawReducer(state, action) {
       if (dayMeals.length > 0) plans[date] = dayMeals; else delete plans[date];
       return { ...state, plans };
     }
+    // 일 뷰의 "선택 삭제" - 체크한 끼니 몇 개만 한 번에 지움(하루 전체가 아니라 고른 것만)
+    case "PLAN_DELETE_MEALS": {
+      const { date, mealIds } = action;
+      const idSet = new Set(mealIds);
+      const dayMeals = (state.plans[date] || []).filter((m) => !idSet.has(m.id));
+      const plans = { ...state.plans };
+      if (dayMeals.length > 0) plans[date] = dayMeals; else delete plans[date];
+      return { ...state, plans };
+    }
+    // 선택 삭제 실행취소: 지웠던 끼니들을 그 날짜 배열에 다시 합치고 시간순 정렬
+    case "RESTORE_PLAN_MEALS": {
+      const { date, meals } = action;
+      const dayMeals = [...(state.plans[date] || []), ...meals];
+      dayMeals.sort((a, b) => a.time.localeCompare(b.time));
+      return { ...state, plans: { ...state.plans, [date]: dayMeals } };
+    }
+    // 주/월 뷰의 "선택 삭제" - 체크한 날짜(연속이 아니어도 됨)의 계획을 한 번에 지움
+    case "PLAN_DELETE_DATES": {
+      const dateSet = new Set(action.dates);
+      const plans = { ...state.plans };
+      dateSet.forEach((d) => delete plans[d]);
+      return { ...state, plans };
+    }
+    // 선택 삭제 실행취소: UI가 삭제 직전 백업해둔 날짜별 끼니 목록을 그대로 병합 복원
+    case "RESTORE_PLAN_DATES": {
+      const { plans: backup } = action;
+      return { ...state, plans: { ...state.plans, ...backup } };
+    }
 
     /* ---- 제조 기록 (재고 입고) ---- */
     case "STOCK_ADD_BATCH": {
@@ -759,6 +787,32 @@ const ACTIVITY_BUILDERS = {
   RESTORE_MEAL: (prev, next, action) => {
     const { date, meal } = action;
     return { kind: "restore", summary: `${ds(date)} ${meal.label} 식단 복원 (실행취소)`, ref: { date, mealId: meal.id, label: meal.label } };
+  },
+  PLAN_DELETE_MEALS: (prev, next, action) => {
+    const { date, mealIds } = action;
+    const n = (prev.plans[date] || []).filter((m) => mealIds.includes(m.id)).length;
+    if (n === 0) return null;
+    return { kind: "delete", summary: `${ds(date)} 식단 ${n}끼 선택 삭제` };
+  },
+  RESTORE_PLAN_MEALS: (prev, next, action) => {
+    const { date, meals } = action;
+    if (!meals || meals.length === 0) return null;
+    return { kind: "restore", summary: `${ds(date)} 식단 ${meals.length}끼 복원 (실행취소)` };
+  },
+  PLAN_DELETE_DATES: (prev, next, action) => {
+    const dates = (action.dates || []).filter((d) => (prev.plans[d] || []).length > 0);
+    const n = dates.reduce((s, d) => s + prev.plans[d].length, 0);
+    if (n === 0) return null;
+    const sorted = [...dates].sort();
+    const label = sorted.length === 1 ? ds(sorted[0]) : `${ds(sorted[0])} ~ ${ds(sorted[sorted.length - 1])} 중 ${sorted.length}일`;
+    return { kind: "delete", summary: `${label} 식단 계획 삭제 (${n}끼)` };
+  },
+  RESTORE_PLAN_DATES: (prev, next, action) => {
+    const dates = Object.keys(action.plans || {}).sort();
+    const n = Object.values(action.plans || {}).reduce((s, meals) => s + meals.length, 0);
+    if (dates.length === 0) return null;
+    const label = dates.length === 1 ? ds(dates[0]) : `${ds(dates[0])} ~ ${ds(dates[dates.length - 1])} 중 ${dates.length}일`;
+    return { kind: "restore", summary: `${label} 식단 계획 복원 (${n}끼, 실행취소)` };
   },
   STOCK_ADD_BATCH: (prev, next, action) => {
     const name = normalizeIngredientName(action.name);
