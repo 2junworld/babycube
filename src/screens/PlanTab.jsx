@@ -311,17 +311,30 @@ export function BulkSaveScreen({ initialCursor, onBack }) {
   );
 }
 
-export function WeekTable({ startISO, onPickDay }) {
+// 선택 모드에서 공용으로 쓰는 체크박스 표시 (재료 선택기의 다중 선택 체크박스와 같은 스타일)
+function SelectCheckbox({ checked, disabled }) {
+  return (
+    <span style={{ width: 17, height: 17, borderRadius: 5, border: `1.5px solid ${disabled ? C.border : checked ? C.sage : C.border}`,
+      background: checked ? C.sage : "transparent", opacity: disabled ? 0.4 : 1, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      {checked && <Check size={12} color="#fff" />}
+    </span>
+  );
+}
+
+// selectMode가 켜지면 날짜 행 클릭이 "그 날로 이동" 대신 "그 날 체크"로 바뀐다(끼니가 있는 날짜만 선택 가능 -
+// 계획이 없는 날짜를 지워봤자 의미가 없어서 체크박스를 흐리게 표시하고 클릭도 막는다)
+export function WeekTable({ startISO, onPickDay, selectMode = false, selectedDates, onToggleDate }) {
   const { state } = useStore();
   const days = Array.from({ length: 7 }, (_, i) => addDaysISO(startISO, i));
   const labels = weekMealLabels(state, days);
   const wide = labels.length > 3;
-  const cols = `34px repeat(${labels.length}, minmax(58px, 1fr))`;
+  const cols = selectMode ? `24px 34px repeat(${labels.length}, minmax(58px, 1fr))` : `34px repeat(${labels.length}, minmax(58px, 1fr))`;
   const t = todayISO();
   return (
     <div style={{ overflowX: wide ? "auto" : "visible" }}>
-      <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", minWidth: wide ? 34 + labels.length * 68 : "auto" }}>
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", minWidth: wide ? (selectMode ? 24 : 0) + 34 + labels.length * 68 : "auto" }}>
         <div style={{ display: "grid", gridTemplateColumns: cols, background: C.sageLight, padding: "9px 6px" }}>
+          {selectMode && <span />}
           <span style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep }}>요일</span>
           {labels.map((h) => <span key={h} style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, textAlign: "center" }}>{h}</span>)}
         </div>
@@ -330,9 +343,12 @@ export function WeekTable({ startISO, onPickDay }) {
           const dow = new Date(iso + "T00:00:00").getDay();
           const isToday = iso === t;
           const find = (lab) => meals.find((m) => m.label === lab) || {};
+          const has = meals.length > 0;
+          const isSel = selectMode && selectedDates && selectedDates.has(iso);
           return (
-            <button key={iso} onClick={() => onPickDay(iso)} style={{ display: "grid", gridTemplateColumns: cols, padding: "13px 6px", width: "100%", textAlign: "left",
-              borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: isToday ? C.sageLight : C.surface, border: "none", cursor: "pointer" }}>
+            <button key={iso} onClick={() => (selectMode ? (has && onToggleDate(iso)) : onPickDay(iso))} style={{ display: "grid", gridTemplateColumns: cols, padding: "13px 6px", width: "100%", textAlign: "left",
+              borderTop: i === 0 ? "none" : `1px solid ${C.border}`, background: isSel ? C.sageLight : isToday ? C.sageLight : C.surface, border: "none", cursor: selectMode && !has ? "default" : "pointer", opacity: selectMode && !has ? 0.5 : 1 }}>
+              {selectMode && <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}><SelectCheckbox checked={isSel} disabled={!has} /></div>}
               <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}><div style={{ fontSize: 13, fontWeight: 800, color: isToday ? C.sageDeep : C.ink }}>{WD[dow]}</div><div style={{ fontSize: 10.5, color: C.muted }}>{iso.slice(5)}</div></div>
               {labels.map((lab) => {
                 const meal = find(lab);
@@ -354,7 +370,10 @@ export function WeekTable({ startISO, onPickDay }) {
   );
 }
 
-export function MonthView({ monthDate, selected, setSelected }) {
+// selectMode에서는 날짜 칸을 눌러도 아래 미리보기가 바뀌는 대신 체크가 토글된다(계획이 있는
+// 날짜만 선택 가능). 미리보기 패널은 선택 모드가 아닐 때만 보여줘 — 여러 날짜를 고르는 중에
+// 한 날짜만 크게 보여주는 게 오히려 헷갈려서 숨김
+export function MonthView({ monthDate, selected, setSelected, selectMode = false, selectedDates, onToggleDate }) {
   const { state } = useStore();
   const t = todayISO();
   const year = monthDate.getFullYear(), month = monthDate.getMonth();
@@ -373,13 +392,19 @@ export function MonthView({ monthDate, selected, setSelected }) {
           if (!d) return <div key={i} />;
           const di = iso(d);
           const has = (state.plans[di] || []).length > 0;
-          const isToday = di === t, isSel = di === selected;
+          const isToday = di === t, isSel = selectMode ? (selectedDates && selectedDates.has(di)) : di === selected;
           return (
-            <button key={i} onClick={() => setSelected(di)} className="flex flex-col items-center justify-center"
-              style={{ height: 42, borderRadius: 10, background: isSel ? C.sageLight : "transparent", cursor: "pointer",
-                border: isToday ? `1.5px solid ${C.sage}` : isSel ? `1px solid ${C.sage}` : "1px solid transparent" }}>
-              <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500, color: isToday ? C.sageDeep : C.inkSoft }}>{d}</span>
-              <div style={{ width: 5, height: 5, borderRadius: 999, marginTop: 4, background: has ? C.sage : "transparent" }} />
+            <button key={i} onClick={() => (selectMode ? (has && onToggleDate(di)) : setSelected(di))} className="flex flex-col items-center justify-center"
+              style={{ height: 42, borderRadius: 10, background: isSel ? C.sageLight : "transparent", cursor: selectMode && !has ? "default" : "pointer", opacity: selectMode && !has ? 0.4 : 1,
+                border: isToday ? `1.5px solid ${C.sage}` : isSel ? `1px solid ${C.sage}` : "1px solid transparent", position: "relative" }}>
+              {selectMode ? (
+                <SelectCheckbox checked={isSel} disabled={!has} />
+              ) : (
+                <>
+                  <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500, color: isToday ? C.sageDeep : C.inkSoft }}>{d}</span>
+                  <div style={{ width: 5, height: 5, borderRadius: 999, marginTop: 4, background: has ? C.sage : "transparent" }} />
+                </>
+              )}
             </button>
           );
         })}
@@ -388,28 +413,30 @@ export function MonthView({ monthDate, selected, setSelected }) {
         <div className="flex items-center" style={{ gap: 5 }}><span style={{ width: 5, height: 5, borderRadius: 999, background: C.sage, display: "inline-block" }} /><span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>계획 있음</span></div>
         <div className="flex items-center" style={{ gap: 5 }}><span style={{ width: 5, height: 5, borderRadius: 999, border: `1px solid ${C.border}`, display: "inline-block" }} /><span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>계획 없음</span></div>
       </div>
-      <div style={{ marginTop: 16 }}>
-        <div className="flex items-center justify-between" style={{ marginBottom: 8, padding: "4px 6px" }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{selected.slice(5)}</span>
-          {selMeals.length > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: C.muted }}>{totalG(state, selMeals.flatMap((m) => m.items))}g</span>}
-        </div>
-        {selMeals.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {selMeals.map((m) => (
-              <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px" }}>
-                <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
-                  <div className="flex items-center" style={{ gap: 6 }}>
-                    <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink }}>{m.label}</span>
-                    {m.fromRecord && <FromRecordBadge small />}
-                  </div>
-                  <span style={{ fontSize: 10.5, color: C.muted }}>{totalG(state, m.items)}g</span>
-                </div>
-                <MealItemList items={m.items} fontSize={11} wrap />
-              </div>
-            ))}
+      {!selectMode && (
+        <div style={{ marginTop: 16 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8, padding: "4px 6px" }}>
+            <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{selected.slice(5)}</span>
+            {selMeals.length > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: C.muted }}>{totalG(state, selMeals.flatMap((m) => m.items))}g</span>}
           </div>
-        ) : <div style={{ textAlign: "center", padding: "22px 0", fontSize: 12, color: C.muted }}>이 날짜엔 계획된 식단이 없습니다</div>}
-      </div>
+          {selMeals.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {selMeals.map((m) => (
+                <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px" }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+                    <div className="flex items-center" style={{ gap: 6 }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink }}>{m.label}</span>
+                      {m.fromRecord && <FromRecordBadge small />}
+                    </div>
+                    <span style={{ fontSize: 10.5, color: C.muted }}>{totalG(state, m.items)}g</span>
+                  </div>
+                  <MealItemList items={m.items} fontSize={11} wrap />
+                </div>
+              ))}
+            </div>
+          ) : <div style={{ textAlign: "center", padding: "22px 0", fontSize: 12, color: C.muted }}>이 날짜엔 계획된 식단이 없습니다</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -417,14 +444,25 @@ export function MonthView({ monthDate, selected, setSelected }) {
 export function MealPlanTab() {
   const { state, dispatch, notify } = useStore();
   const timeFmt = state.settings.timeFmt;
-  const [range, setRange] = useState("day");
+  const [range, setRangeRaw] = useState("day");
   const [detail, setDetail] = useDetailView("bc_plan_view");
   const [cursor, setCursor] = useState(todayISO());
   const [editing, setEditing] = useState(null);
   const [monthSel, setMonthSel] = useState(todayISO());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [autoGenOpen, setAutoGenOpen] = useState(false);
-  const [delRange, setDelRange] = useState(null); // { startDate, endDate, title, message, count }
+
+  // 선택 삭제 모드 - 일 뷰는 끼니 단위(selectedMealIds), 주/월 뷰는 날짜 단위(selectedDates)로 고른다.
+  // 뷰를 바꾸면 이전 선택은 의미가 없어지므로 함께 초기화
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMealIds, setSelectedMealIds] = useState(() => new Set());
+  const [selectedDates, setSelectedDates] = useState(() => new Set());
+  const [rangeStart, setRangeStart] = useState(todayISO());
+  const [rangeEnd, setRangeEnd] = useState(todayISO());
+  const [confirmDel, setConfirmDel] = useState(null); // { title, message, onConfirm }
+
+  const exitSelect = () => { setSelectMode(false); setSelectedMealIds(new Set()); setSelectedDates(new Set()); };
+  const setRange = (v) => { exitSelect(); setRangeRaw(v); };
 
   if (editing) {
     return <MealEditScreen date={editing.date} meal={editing.meal} onBack={() => setEditing(null)} />;
@@ -445,7 +483,6 @@ export function MealPlanTab() {
   const dayMeals = state.plans[cursor] || [];
   const dayTotal = totalG(state, dayMeals.flatMap((m) => m.items));
   const weekStart = addDaysISO(cursor, -new Date(cursor + "T00:00:00").getDay());
-  const weekEnd = addDaysISO(weekStart, 6);
   const weekMealCount = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i)).reduce((s, d) => s + (state.plans[d] || []).length, 0);
 
   const headLabel = range === "day"
@@ -454,29 +491,56 @@ export function MealPlanTab() {
     ? `${weekStart.slice(5)} ~ ${addDaysISO(weekStart, 6).slice(5)}`
     : `${cursor.slice(0, 4)}년 ${Number(cursor.slice(5, 7))}월`;
 
-  // 일/주 단위 계획 일괄 삭제 - 실제 삭제 전에 UI에서 해당 범위 스냅샷을 백업해두고, 삭제 후
-  // 알림의 "실행취소"를 누르면 그 스냅샷을 그대로 되돌림 (급여 기록 일괄 삭제와 동일한 패턴)
-  const openDeleteRange = () => {
-    if (range === "day") {
-      if (dayMeals.length === 0) return;
-      setDelRange({ startDate: cursor, endDate: cursor, title: `${cursor} 계획을 전체 삭제할까요?`, message: `이 날짜에 저장된 끼니 ${dayMeals.length}개가 모두 삭제됩니다.` });
-    } else if (range === "week") {
-      if (weekMealCount === 0) return;
-      setDelRange({ startDate: weekStart, endDate: weekEnd, title: `이번 주 계획을 전체 삭제할까요?`, message: `${weekStart.slice(5)} ~ ${weekEnd.slice(5)} 사이에 저장된 끼니 ${weekMealCount}개가 모두 삭제됩니다.` });
-    }
-  };
-  const confirmDeleteRange = () => {
-    const { startDate, endDate } = delRange;
-    const backup = {};
-    Object.keys(state.plans).forEach((d) => { if (d >= startDate && d <= endDate) backup[d] = state.plans[d]; });
-    dispatch({ type: "PLAN_DELETE_RANGE", startDate, endDate });
-    setDelRange(null);
-    const label = startDate === endDate ? startDate : `${startDate.slice(5)} ~ ${endDate.slice(5)}`;
-    notify(`${label} 계획을 삭제했습니다`, () => dispatch({ type: "RESTORE_PLAN_RANGE", plans: backup }));
+  const toggleMeal = (id) => setSelectedMealIds((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleDate = (iso) => setSelectedDates((p) => { const n = new Set(p); n.has(iso) ? n.delete(iso) : n.add(iso); return n; });
+  // 월 뷰 전용: 시작~종료일 사이에 계획이 있는 날짜만 골라 선택에 더함(빈 날짜를 지워봤자 의미 없어 제외)
+  const addDateRange = () => {
+    if (rangeStart > rangeEnd) return;
+    setSelectedDates((p) => {
+      const n = new Set(p);
+      Object.keys(state.plans).forEach((d) => { if (d >= rangeStart && d <= rangeEnd) n.add(d); });
+      return n;
+    });
   };
 
+  const requestDeleteMeals = () => {
+    if (selectedMealIds.size === 0) return;
+    setConfirmDel({
+      title: `끼니 ${selectedMealIds.size}개를 삭제할까요?`,
+      message: "선택한 끼니가 모두 삭제됩니다.",
+      onConfirm: () => {
+        const ids = [...selectedMealIds];
+        const backupMeals = dayMeals.filter((m) => ids.includes(m.id));
+        dispatch({ type: "PLAN_DELETE_MEALS", date: cursor, mealIds: ids });
+        setConfirmDel(null);
+        exitSelect();
+        notify(`끼니 ${backupMeals.length}개를 삭제했습니다`, () => dispatch({ type: "RESTORE_PLAN_MEALS", date: cursor, meals: backupMeals }));
+      },
+    });
+  };
+  const requestDeleteDates = () => {
+    if (selectedDates.size === 0) return;
+    const dates = [...selectedDates];
+    const n = dates.reduce((s, d) => s + (state.plans[d] || []).length, 0);
+    setConfirmDel({
+      title: `${dates.length}일치 계획을 삭제할까요?`,
+      message: `선택한 ${dates.length}개 날짜에 저장된 끼니 ${n}개가 모두 삭제됩니다.`,
+      onConfirm: () => {
+        const backup = {};
+        dates.forEach((d) => { if (state.plans[d]) backup[d] = state.plans[d]; });
+        dispatch({ type: "PLAN_DELETE_DATES", dates });
+        setConfirmDel(null);
+        exitSelect();
+        notify(`${dates.length}일치 계획을 삭제했습니다`, () => dispatch({ type: "RESTORE_PLAN_DATES", plans: backup }));
+      },
+    });
+  };
+
+  const selectCount = range === "day" ? selectedMealIds.size : selectedDates.size;
+  const canShowSelectToggle = range === "day" ? dayMeals.length > 0 : range === "week" ? weekMealCount > 0 : true;
+
   return (
-    <div style={{ paddingBottom: 90 }}>
+    <div style={{ paddingBottom: selectMode ? 150 : 90 }}>
       <ScreenHeader title="식단표" />
       <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 12 }}>
         <Segmented value={range} onChange={setRange} options={[{ value: "day", label: "일" }, { value: "week", label: "주" }, { value: "month", label: "월" }]} />
@@ -487,12 +551,13 @@ export function MealPlanTab() {
             <button onClick={() => shift(1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronRight size={17} color={C.muted} /></button>
           </div>
           <div className="flex items-center" style={{ gap: 8 }}>
-            {((range === "day" && dayMeals.length > 0) || (range === "week" && weekMealCount > 0)) && (
-              <button onClick={openDeleteRange} title={range === "day" ? "이 날 계획 전체 삭제" : "이번 주 계획 전체 삭제"} style={{ background: "none", border: "none", padding: 3, cursor: "pointer", display: "flex" }}>
-                <Trash2 size={15} color={C.muted} />
+            {canShowSelectToggle && (
+              <button onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+                style={{ fontSize: 11.5, fontWeight: 700, color: selectMode ? C.apricot : C.sageDeep, background: selectMode ? C.apricotLight : C.sageLight, border: "none", borderRadius: 999, padding: "5px 10px", cursor: "pointer" }}>
+                {selectMode ? "선택 취소" : "선택"}
               </button>
             )}
-            {range === "day" && (
+            {range === "day" && !selectMode && (
               <button onClick={() => setDetail((v) => !v)} style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "5px 10px", cursor: "pointer" }}>
                 {detail ? "심플뷰로 보기" : "디테일뷰로 보기"}
               </button>
@@ -500,14 +565,35 @@ export function MealPlanTab() {
           </div>
         </div>
 
-        <button onClick={() => setAutoGenOpen(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sage, border: "none", borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
-          <Sparkles size={14} /> 자동 생성
-        </button>
+        {!selectMode && (
+          <>
+            <button onClick={() => setAutoGenOpen(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sage, border: "none", borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+              <Sparkles size={14} /> 자동 생성
+            </button>
 
-        {range !== "day" && (
-          <button onClick={() => setBulkOpen(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sageLight, border: "none", borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>
-            <CalendarDays size={14} /> 여러 날짜에 저장
-          </button>
+            {range !== "day" && (
+              <button onClick={() => setBulkOpen(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sageLight, border: "none", borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: C.sageDeep, cursor: "pointer" }}>
+                <CalendarDays size={14} /> 여러 날짜에 저장
+              </button>
+            )}
+          </>
+        )}
+
+        {selectMode && range === "month" && (
+          <div style={{ background: C.sageLight, borderRadius: 12, padding: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>기간으로 한 번에 선택</div>
+            <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+              <input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)}
+                style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 8px", fontSize: 12, color: C.ink, outline: "none", background: C.surface }} />
+              <span style={{ fontSize: 11, color: C.sageDeep }}>~</span>
+              <input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)}
+                style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 8px", fontSize: 12, color: C.ink, outline: "none", background: C.surface }} />
+              <button onClick={addDateRange} style={{ background: C.sage, border: "none", borderRadius: 10, padding: "7px 12px", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+                범위 선택
+              </button>
+            </div>
+            <div style={{ fontSize: 10, color: C.sageDeep, marginTop: 6, opacity: 0.8 }}>기간 중 계획이 있는 날짜만 선택에 추가돼요.</div>
+          </div>
         )}
 
         <CategoryLegend />
@@ -516,22 +602,26 @@ export function MealPlanTab() {
           <>
             {dayMeals.map((m) => {
               const mT = totalG(state, m.items);
+              const isSel = selectedMealIds.has(m.id);
               return (
-                <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 14 }}>
+                <div key={m.id} onClick={() => selectMode && toggleMeal(m.id)} style={{ background: isSel ? C.sageLight : C.surface, border: `1px solid ${isSel ? C.sage : C.border}`, borderRadius: 16, padding: 14, cursor: selectMode ? "pointer" : "default" }}>
                   <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
                     <div className="flex items-center" style={{ gap: 8 }}>
+                      {selectMode && <SelectCheckbox checked={isSel} />}
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{m.label}</span>
                       <span style={{ fontSize: 12, color: C.muted }}>{fmtTime(m.time, timeFmt)}</span>
                       {m.fromRecord && <FromRecordBadge />}
                     </div>
-                    <div className="flex items-center" style={{ gap: 12 }}>
-                      <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{mT}g</span>
-                      <button onClick={() => setEditing({ date: cursor, meal: m })} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Pencil size={14} color={C.muted} /></button>
-                      <button onClick={() => {
-                        dispatch({ type: "PLAN_DELETE_MEAL", date: cursor, mealId: m.id });
-                        notify(`'${m.label}' 끼니를 삭제했습니다`, () => dispatch({ type: "RESTORE_MEAL", date: cursor, meal: m }));
-                      }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
-                    </div>
+                    {!selectMode && (
+                      <div className="flex items-center" style={{ gap: 12 }}>
+                        <span style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{mT}g</span>
+                        <button onClick={() => setEditing({ date: cursor, meal: m })} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Pencil size={14} color={C.muted} /></button>
+                        <button onClick={() => {
+                          dispatch({ type: "PLAN_DELETE_MEAL", date: cursor, mealId: m.id });
+                          notify(`'${m.label}' 끼니를 삭제했습니다`, () => dispatch({ type: "RESTORE_MEAL", date: cursor, meal: m }));
+                        }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}><Trash2 size={14} color={C.apricot} /></button>
+                      </div>
+                    )}
                   </div>
                   {detail ? <IngredientTable items={m.items} total={mT} /> : <div style={{ marginBottom: 9 }}><MealItemList items={m.items} fontSize={12.5} wrap /></div>}
                   <div style={{ marginTop: 10 }}><CategoryBar items={m.items} /></div>
@@ -539,9 +629,11 @@ export function MealPlanTab() {
               );
             })}
             {dayMeals.length === 0 && <div style={{ textAlign: "center", padding: "20px 0", fontSize: 12.5, color: C.muted }}>계획된 끼니가 없습니다</div>}
-            <button onClick={() => setEditing({ date: cursor, meal: { label: "", time: "12:00", items: [] } })} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 14, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
-              <Plus size={14} /> 끼니 추가
-            </button>
+            {!selectMode && (
+              <button onClick={() => setEditing({ date: cursor, meal: { label: "", time: "12:00", items: [] } })} className="flex items-center justify-center" style={{ gap: 6, border: `1.5px dashed ${C.border}`, borderRadius: 14, padding: "11px 0", fontSize: 12.5, fontWeight: 700, color: C.muted, background: "transparent", cursor: "pointer" }}>
+                <Plus size={14} /> 끼니 추가
+              </button>
+            )}
             {dayMeals.length > 0 && (
               <div style={{ background: C.sageLight, borderRadius: 14, padding: "12px 16px" }}>
                 <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
@@ -554,15 +646,31 @@ export function MealPlanTab() {
           </>
         )}
 
-        {range === "week" && <WeekTable startISO={weekStart} onPickDay={(iso) => { setCursor(iso); setRange("day"); }} />}
-        {range === "month" && <MonthView monthDate={new Date(cursor + "T00:00:00")} selected={monthSel} setSelected={setMonthSel} />}
+        {range === "week" && <WeekTable startISO={weekStart} onPickDay={(iso) => { setCursor(iso); setRange("day"); }} selectMode={selectMode} selectedDates={selectedDates} onToggleDate={toggleDate} />}
+        {range === "month" && <MonthView monthDate={new Date(cursor + "T00:00:00")} selected={monthSel} setSelected={setMonthSel} selectMode={selectMode} selectedDates={selectedDates} onToggleDate={toggleDate} />}
       </div>
-      {delRange && (
+
+      {selectMode && (
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 25 }}>
+          <div style={{ maxWidth: 480, margin: "0 auto", background: C.surface, borderTop: `1px solid ${C.border}`, padding: "12px 18px calc(12px + env(safe-area-inset-bottom))", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, boxShadow: "0 -4px 12px rgba(0,0,0,0.06)" }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{selectCount}{range === "day" ? "개" : "일"} 선택됨</span>
+            <div className="flex items-center" style={{ gap: 8 }}>
+              <button onClick={exitSelect} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, color: C.muted, cursor: "pointer" }}>취소</button>
+              <button onClick={range === "day" ? requestDeleteMeals : requestDeleteDates} disabled={selectCount === 0}
+                style={{ background: selectCount > 0 ? C.apricot : C.sageLight, border: "none", borderRadius: 10, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, color: selectCount > 0 ? "#fff" : C.muted, cursor: selectCount > 0 ? "pointer" : "default" }}>
+                삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDel && (
         <ConfirmModal
-          title={delRange.title}
-          message={delRange.message}
-          onConfirm={confirmDeleteRange}
-          onCancel={() => setDelRange(null)}
+          title={confirmDel.title}
+          message={confirmDel.message}
+          onConfirm={confirmDel.onConfirm}
+          onCancel={() => setConfirmDel(null)}
         />
       )}
     </div>

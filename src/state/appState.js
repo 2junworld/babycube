@@ -317,17 +317,31 @@ function rawReducer(state, action) {
       if (dayMeals.length > 0) plans[date] = dayMeals; else delete plans[date];
       return { ...state, plans };
     }
-    // 하루/일주일 단위 일괄 삭제 - 날짜 문자열이 ISO(YYYY-MM-DD) 형식이라 사전순 비교가 곧 날짜 비교와
-    // 같음을 이용해, 실제 날짜를 순회하지 않고 이미 계획이 있는 날짜(state.plans의 키)만 걸러냄
-    // (day 뷰는 startDate===endDate로 호출해 같은 액션을 재사용)
-    case "PLAN_DELETE_RANGE": {
-      const { startDate, endDate } = action;
+    // 일 뷰의 "선택 삭제" - 체크한 끼니 몇 개만 한 번에 지움(하루 전체가 아니라 고른 것만)
+    case "PLAN_DELETE_MEALS": {
+      const { date, mealIds } = action;
+      const idSet = new Set(mealIds);
+      const dayMeals = (state.plans[date] || []).filter((m) => !idSet.has(m.id));
       const plans = { ...state.plans };
-      Object.keys(plans).forEach((d) => { if (d >= startDate && d <= endDate) delete plans[d]; });
+      if (dayMeals.length > 0) plans[date] = dayMeals; else delete plans[date];
       return { ...state, plans };
     }
-    // 일괄 삭제 실행취소: UI가 삭제 직전 백업해둔 날짜별 끼니 목록을 그대로 병합 복원
-    case "RESTORE_PLAN_RANGE": {
+    // 선택 삭제 실행취소: 지웠던 끼니들을 그 날짜 배열에 다시 합치고 시간순 정렬
+    case "RESTORE_PLAN_MEALS": {
+      const { date, meals } = action;
+      const dayMeals = [...(state.plans[date] || []), ...meals];
+      dayMeals.sort((a, b) => a.time.localeCompare(b.time));
+      return { ...state, plans: { ...state.plans, [date]: dayMeals } };
+    }
+    // 주/월 뷰의 "선택 삭제" - 체크한 날짜(연속이 아니어도 됨)의 계획을 한 번에 지움
+    case "PLAN_DELETE_DATES": {
+      const dateSet = new Set(action.dates);
+      const plans = { ...state.plans };
+      dateSet.forEach((d) => delete plans[d]);
+      return { ...state, plans };
+    }
+    // 선택 삭제 실행취소: UI가 삭제 직전 백업해둔 날짜별 끼니 목록을 그대로 병합 복원
+    case "RESTORE_PLAN_DATES": {
       const { plans: backup } = action;
       return { ...state, plans: { ...state.plans, ...backup } };
     }
@@ -774,18 +788,30 @@ const ACTIVITY_BUILDERS = {
     const { date, meal } = action;
     return { kind: "restore", summary: `${ds(date)} ${meal.label} 식단 복원 (실행취소)`, ref: { date, mealId: meal.id, label: meal.label } };
   },
-  PLAN_DELETE_RANGE: (prev, next, action) => {
-    const { startDate, endDate } = action;
-    const n = Object.keys(prev.plans).filter((d) => d >= startDate && d <= endDate).reduce((s, d) => s + prev.plans[d].length, 0);
+  PLAN_DELETE_MEALS: (prev, next, action) => {
+    const { date, mealIds } = action;
+    const n = (prev.plans[date] || []).filter((m) => mealIds.includes(m.id)).length;
     if (n === 0) return null;
-    const label = startDate === endDate ? ds(startDate) : `${ds(startDate)} ~ ${ds(endDate)}`;
-    return { kind: "delete", summary: `${label} 식단 계획 전체 삭제 (${n}끼)` };
+    return { kind: "delete", summary: `${ds(date)} 식단 ${n}끼 선택 삭제` };
   },
-  RESTORE_PLAN_RANGE: (prev, next, action) => {
+  RESTORE_PLAN_MEALS: (prev, next, action) => {
+    const { date, meals } = action;
+    if (!meals || meals.length === 0) return null;
+    return { kind: "restore", summary: `${ds(date)} 식단 ${meals.length}끼 복원 (실행취소)` };
+  },
+  PLAN_DELETE_DATES: (prev, next, action) => {
+    const dates = (action.dates || []).filter((d) => (prev.plans[d] || []).length > 0);
+    const n = dates.reduce((s, d) => s + prev.plans[d].length, 0);
+    if (n === 0) return null;
+    const sorted = [...dates].sort();
+    const label = sorted.length === 1 ? ds(sorted[0]) : `${ds(sorted[0])} ~ ${ds(sorted[sorted.length - 1])} 중 ${sorted.length}일`;
+    return { kind: "delete", summary: `${label} 식단 계획 삭제 (${n}끼)` };
+  },
+  RESTORE_PLAN_DATES: (prev, next, action) => {
     const dates = Object.keys(action.plans || {}).sort();
     const n = Object.values(action.plans || {}).reduce((s, meals) => s + meals.length, 0);
     if (dates.length === 0) return null;
-    const label = dates.length === 1 ? ds(dates[0]) : `${ds(dates[0])} ~ ${ds(dates[dates.length - 1])}`;
+    const label = dates.length === 1 ? ds(dates[0]) : `${ds(dates[0])} ~ ${ds(dates[dates.length - 1])} 중 ${dates.length}일`;
     return { kind: "restore", summary: `${label} 식단 계획 복원 (${n}끼, 실행취소)` };
   },
   STOCK_ADD_BATCH: (prev, next, action) => {
