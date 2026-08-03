@@ -395,15 +395,13 @@ export function MonthView({ monthDate, selected, setSelected, selectMode = false
           const isToday = di === t, isSel = selectMode ? (selectedDates && selectedDates.has(di)) : di === selected;
           return (
             <button key={i} onClick={() => (selectMode ? (has && onToggleDate(di)) : setSelected(di))} className="flex flex-col items-center justify-center"
-              style={{ height: 42, borderRadius: 10, background: isSel ? C.sageLight : "transparent", cursor: selectMode && !has ? "default" : "pointer", opacity: selectMode && !has ? 0.4 : 1,
+              style={{ height: selectMode ? 52 : 42, borderRadius: 10, background: isSel ? C.sageLight : "transparent", cursor: selectMode && !has ? "default" : "pointer",
                 border: isToday ? `1.5px solid ${C.sage}` : isSel ? `1px solid ${C.sage}` : "1px solid transparent", position: "relative" }}>
+              <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500, color: isToday ? C.sageDeep : C.inkSoft, opacity: selectMode && !has ? 0.5 : 1 }}>{d}</span>
               {selectMode ? (
-                <SelectCheckbox checked={isSel} disabled={!has} />
+                <div style={{ marginTop: 3 }}><SelectCheckbox checked={isSel} disabled={!has} /></div>
               ) : (
-                <>
-                  <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500, color: isToday ? C.sageDeep : C.inkSoft }}>{d}</span>
-                  <div style={{ width: 5, height: 5, borderRadius: 999, marginTop: 4, background: has ? C.sage : "transparent" }} />
-                </>
+                <div style={{ width: 5, height: 5, borderRadius: 999, marginTop: 4, background: has ? C.sage : "transparent" }} />
               )}
             </button>
           );
