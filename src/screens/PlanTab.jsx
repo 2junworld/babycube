@@ -5,7 +5,7 @@ import { C } from "../theme";
 import { WD, addDaysISO, fmtTime, pad2, todayISO, uid } from "../lib/dates";
 import { totalG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
-import { AuthorInfo, CategoryBar, CategoryLegend, FromRecordBadge, IngredientTable, MealItemList, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
+import { AuthorInfo, CategoryBar, CategoryLegend, ConfirmModal, FromRecordBadge, IngredientTable, MealItemList, NumInput, ScreenHeader, Segmented, SubHeader, TimePicker } from "../components/common";
 import { useDetailView } from "./uiPrefs";
 import { weekMealLabels } from "../lib/mealLabels";
 import { pairingNamesOf } from "../lib/pairing";
@@ -424,6 +424,7 @@ export function MealPlanTab() {
   const [monthSel, setMonthSel] = useState(todayISO());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [autoGenOpen, setAutoGenOpen] = useState(false);
+  const [delRange, setDelRange] = useState(null); // { startDate, endDate, title, message, count }
 
   if (editing) {
     return <MealEditScreen date={editing.date} meal={editing.meal} onBack={() => setEditing(null)} />;
@@ -444,12 +445,35 @@ export function MealPlanTab() {
   const dayMeals = state.plans[cursor] || [];
   const dayTotal = totalG(state, dayMeals.flatMap((m) => m.items));
   const weekStart = addDaysISO(cursor, -new Date(cursor + "T00:00:00").getDay());
+  const weekEnd = addDaysISO(weekStart, 6);
+  const weekMealCount = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i)).reduce((s, d) => s + (state.plans[d] || []).length, 0);
 
   const headLabel = range === "day"
     ? `${cursor} (${WD[new Date(cursor + "T00:00:00").getDay()]})`
     : range === "week"
     ? `${weekStart.slice(5)} ~ ${addDaysISO(weekStart, 6).slice(5)}`
     : `${cursor.slice(0, 4)}년 ${Number(cursor.slice(5, 7))}월`;
+
+  // 일/주 단위 계획 일괄 삭제 - 실제 삭제 전에 UI에서 해당 범위 스냅샷을 백업해두고, 삭제 후
+  // 알림의 "실행취소"를 누르면 그 스냅샷을 그대로 되돌림 (급여 기록 일괄 삭제와 동일한 패턴)
+  const openDeleteRange = () => {
+    if (range === "day") {
+      if (dayMeals.length === 0) return;
+      setDelRange({ startDate: cursor, endDate: cursor, title: `${cursor} 계획을 전체 삭제할까요?`, message: `이 날짜에 저장된 끼니 ${dayMeals.length}개가 모두 삭제됩니다.` });
+    } else if (range === "week") {
+      if (weekMealCount === 0) return;
+      setDelRange({ startDate: weekStart, endDate: weekEnd, title: `이번 주 계획을 전체 삭제할까요?`, message: `${weekStart.slice(5)} ~ ${weekEnd.slice(5)} 사이에 저장된 끼니 ${weekMealCount}개가 모두 삭제됩니다.` });
+    }
+  };
+  const confirmDeleteRange = () => {
+    const { startDate, endDate } = delRange;
+    const backup = {};
+    Object.keys(state.plans).forEach((d) => { if (d >= startDate && d <= endDate) backup[d] = state.plans[d]; });
+    dispatch({ type: "PLAN_DELETE_RANGE", startDate, endDate });
+    setDelRange(null);
+    const label = startDate === endDate ? startDate : `${startDate.slice(5)} ~ ${endDate.slice(5)}`;
+    notify(`${label} 계획을 삭제했습니다`, () => dispatch({ type: "RESTORE_PLAN_RANGE", plans: backup }));
+  };
 
   return (
     <div style={{ paddingBottom: 90 }}>
@@ -462,11 +486,18 @@ export function MealPlanTab() {
             <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{headLabel}</span>
             <button onClick={() => shift(1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><ChevronRight size={17} color={C.muted} /></button>
           </div>
-          {range === "day" && (
-            <button onClick={() => setDetail((v) => !v)} style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "5px 10px", cursor: "pointer" }}>
-              {detail ? "심플뷰로 보기" : "디테일뷰로 보기"}
-            </button>
-          )}
+          <div className="flex items-center" style={{ gap: 8 }}>
+            {((range === "day" && dayMeals.length > 0) || (range === "week" && weekMealCount > 0)) && (
+              <button onClick={openDeleteRange} title={range === "day" ? "이 날 계획 전체 삭제" : "이번 주 계획 전체 삭제"} style={{ background: "none", border: "none", padding: 3, cursor: "pointer", display: "flex" }}>
+                <Trash2 size={15} color={C.muted} />
+              </button>
+            )}
+            {range === "day" && (
+              <button onClick={() => setDetail((v) => !v)} style={{ fontSize: 11.5, fontWeight: 700, color: C.sageDeep, background: C.sageLight, border: "none", borderRadius: 999, padding: "5px 10px", cursor: "pointer" }}>
+                {detail ? "심플뷰로 보기" : "디테일뷰로 보기"}
+              </button>
+            )}
+          </div>
         </div>
 
         <button onClick={() => setAutoGenOpen(true)} className="flex items-center justify-center" style={{ gap: 6, background: C.sage, border: "none", borderRadius: 12, padding: "9px 0", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
@@ -526,6 +557,14 @@ export function MealPlanTab() {
         {range === "week" && <WeekTable startISO={weekStart} onPickDay={(iso) => { setCursor(iso); setRange("day"); }} />}
         {range === "month" && <MonthView monthDate={new Date(cursor + "T00:00:00")} selected={monthSel} setSelected={setMonthSel} />}
       </div>
+      {delRange && (
+        <ConfirmModal
+          title={delRange.title}
+          message={delRange.message}
+          onConfirm={confirmDeleteRange}
+          onCancel={() => setDelRange(null)}
+        />
+      )}
     </div>
   );
 }

@@ -317,6 +317,20 @@ function rawReducer(state, action) {
       if (dayMeals.length > 0) plans[date] = dayMeals; else delete plans[date];
       return { ...state, plans };
     }
+    // 하루/일주일 단위 일괄 삭제 - 날짜 문자열이 ISO(YYYY-MM-DD) 형식이라 사전순 비교가 곧 날짜 비교와
+    // 같음을 이용해, 실제 날짜를 순회하지 않고 이미 계획이 있는 날짜(state.plans의 키)만 걸러냄
+    // (day 뷰는 startDate===endDate로 호출해 같은 액션을 재사용)
+    case "PLAN_DELETE_RANGE": {
+      const { startDate, endDate } = action;
+      const plans = { ...state.plans };
+      Object.keys(plans).forEach((d) => { if (d >= startDate && d <= endDate) delete plans[d]; });
+      return { ...state, plans };
+    }
+    // 일괄 삭제 실행취소: UI가 삭제 직전 백업해둔 날짜별 끼니 목록을 그대로 병합 복원
+    case "RESTORE_PLAN_RANGE": {
+      const { plans: backup } = action;
+      return { ...state, plans: { ...state.plans, ...backup } };
+    }
 
     /* ---- 제조 기록 (재고 입고) ---- */
     case "STOCK_ADD_BATCH": {
@@ -759,6 +773,20 @@ const ACTIVITY_BUILDERS = {
   RESTORE_MEAL: (prev, next, action) => {
     const { date, meal } = action;
     return { kind: "restore", summary: `${ds(date)} ${meal.label} 식단 복원 (실행취소)`, ref: { date, mealId: meal.id, label: meal.label } };
+  },
+  PLAN_DELETE_RANGE: (prev, next, action) => {
+    const { startDate, endDate } = action;
+    const n = Object.keys(prev.plans).filter((d) => d >= startDate && d <= endDate).reduce((s, d) => s + prev.plans[d].length, 0);
+    if (n === 0) return null;
+    const label = startDate === endDate ? ds(startDate) : `${ds(startDate)} ~ ${ds(endDate)}`;
+    return { kind: "delete", summary: `${label} 식단 계획 전체 삭제 (${n}끼)` };
+  },
+  RESTORE_PLAN_RANGE: (prev, next, action) => {
+    const dates = Object.keys(action.plans || {}).sort();
+    const n = Object.values(action.plans || {}).reduce((s, meals) => s + meals.length, 0);
+    if (dates.length === 0) return null;
+    const label = dates.length === 1 ? ds(dates[0]) : `${ds(dates[0])} ~ ${ds(dates[dates.length - 1])}`;
+    return { kind: "restore", summary: `${label} 식단 계획 복원 (${n}끼, 실행취소)` };
   },
   STOCK_ADD_BATCH: (prev, next, action) => {
     const name = normalizeIngredientName(action.name);
