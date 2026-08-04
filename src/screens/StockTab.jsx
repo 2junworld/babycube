@@ -5,7 +5,7 @@ import { db } from "../firebase";
 import { C, primaryBtn, selectStyle, PRODUCT_COLOR, PRODUCT_COLOR_LIGHT } from "../theme";
 import { addDaysISO, todayISO } from "../lib/dates";
 import { NUTRIENT_TAGS, TAG_KEYS, TAG_LABELS } from "../data/nutrition";
-import { catOf, categoryNames, defaultCategoryName, mergeIngredientImpact, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
+import { catOf, categoryNames, defaultCategoryName, gOf, mergeIngredientImpact, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
 import { AuthorInfo, BottomSheet, CatDot, ConfirmModal, CubeGrid, NumInput, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE, readStockPref, writeStockPref } from "./uiPrefs";
@@ -799,7 +799,7 @@ export function IngredientInfoScreen({ name, onBack, go }) {
           message={components.length > 0
             ? `혼합 큐브 구성 재료(${components.join(", ")})를 그대로 포함 재료로 채운 새 시판 제품 '${name}'을(를) 만들어요.`
             : `구성 재료가 지정돼 있지 않아 일단 '${name}' 하나만 포함한 시판 제품으로 만들어요 - 다음 화면에서 포함 재료를 직접 골라 바꿀 수 있어요.`}
-          warning="기존 재료 데이터(재고·식단표·기록)는 전환 후에도 이 재료 이름으로 그대로 남아있어요."
+          warning="이미 쌓인 재고·식단표·급여 기록은 새 제품으로 자동으로 옮겨지지 않고 '재료'이름으로 그대로 남아요. 전환 이후 이 제품으로 새로 기록하는 것부터 제품 쪽 급여 이력에 쌓여요."
           confirmLabel="전환"
           danger={false}
           onConfirm={() => { setConvertConfirm(false); setConvertSheet(true); }}
@@ -1073,6 +1073,17 @@ export function ProductDetailScreen({ productId, onBack, go }) {
   }
   const packs = state.settings.productStockEnabled ? productStockPacks(state, productId) : null;
   const { good, avoid } = productPairsFor(state, p.ingredients);
+  // 최근 급여 이력 (최신순 5회) - 이 제품을 직접 준 기록만. 포함 재료를 원재료로 따로 준 기록은
+  // 재료 정보 화면 쪽에서 확인 가능(재료 → 제품 방향 노출 이력과 대칭되는, 제품 → 직접 급여 이력)
+  const history = [];
+  Object.keys(state.logs).sort((a, b) => b.localeCompare(a)).forEach((d) => {
+    (state.logs[d] || []).forEach((log) => {
+      log.items.forEach((it) => {
+        if (it.source === "product" && it.productId === productId) history.push({ date: d, label: log.label, g: gOf(state, it) });
+      });
+    });
+  });
+  const recent = history.slice(0, 5);
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title={p.name} onBack={onBack} />
@@ -1092,6 +1103,24 @@ export function ProductDetailScreen({ productId, onBack, go }) {
         </div>
         {p.memo && <div style={{ fontSize: 12, color: C.inkSoft, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>{p.memo}</div>}
         <PairingSection good={good} avoid={avoid} emptyText="포함 재료 기준으로 궁합 정보가 있는 재료가 없어요" />
+
+        {/* 최근 급여 이력 - 재료 정보 화면과 대칭되는 섹션(그동안 빠져있던 부분) */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>최근 급여 이력</div>
+          {recent.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.muted }}>아직 이 제품으로 준 급여 기록이 없어요</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {recent.map((h, i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <span style={{ fontSize: 12, color: C.inkSoft }}>{h.date.slice(5)} · {h.label}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{Math.round(h.g)}g</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <button onClick={() => setEditing(true)} style={primaryBtn}>정보 수정</button>
         {state.settings.productStockEnabled && (
           <button onClick={() => go && go("productStockDetail", { productId })}
