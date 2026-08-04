@@ -549,6 +549,7 @@ export function IngredientInfoScreen({ name, onBack, go }) {
   const [convertSheet, setConvertSheet] = useState(false);
   const [mergePicker, setMergePicker] = useState(false);
   const [mergeTarget, setMergeTarget] = useState(null); // 병합 대상으로 고른 재료명
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const intro = state.intros.find((it) => it.name === name);
   const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
   const myTags = tagsOf(state, name);
@@ -591,6 +592,20 @@ export function IngredientInfoScreen({ name, onBack, go }) {
   const recent = history.slice(0, 5);
   // 이 재료가 포함된 시판 제품 (역링크)
   const containingProducts = Object.values(state.products).filter((p) => p.ingredients.includes(name));
+
+  // mergeIngredientImpact 결과를 사람이 읽을 문장 조각들로 - 합치기·삭제 확인 모달이 공용으로 사용
+  const describeImpact = (impact) => {
+    const parts = [];
+    if (impact.batches > 0) parts.push(`재고 배치 ${impact.batches}개`);
+    if (impact.planItems > 0) parts.push(`식단표 항목 ${impact.planItems}개`);
+    if (impact.logItems > 0) parts.push(`급여 기록 항목 ${impact.logItems}개`);
+    if (impact.shoppingItems > 0) parts.push(`장보기 항목 ${impact.shoppingItems}개`);
+    if (impact.products > 0) parts.push(`포함된 시판 제품 ${impact.products}개`);
+    if (impact.linkedIngredients > 0) parts.push(`이 재료를 참조하는 다른 재료 ${impact.linkedIngredients}개`);
+    if (impact.hasIntro) parts.push("먹어본 재료 기록");
+    if (impact.hasCustomTags) parts.push("직접 지정한 영양 태그");
+    return parts;
+  };
 
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
@@ -746,9 +761,13 @@ export function IngredientInfoScreen({ name, onBack, go }) {
               <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>다른 재료와 합치기</span>
               <ChevronRight size={14} color={C.sageDeep} />
             </button>
-            <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.4 }}>
+            <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.4, marginBottom: 4 }}>
               이름만 다르게 중복 등록된 같은 재료를 하나로 합쳐요. 이 재료('{name}')는 사라지고, 골라주신 재료로 재고·식단표·기록이 모두 옮겨가요. 되돌릴 수 없어요.
             </div>
+            <button onClick={() => setDeleteConfirm(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "6px 2px", cursor: "pointer" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.apricot }}>이 재료 삭제</span>
+              <ChevronRight size={14} color={C.apricot} />
+            </button>
           </div>
         </div>
 
@@ -803,16 +822,7 @@ export function IngredientInfoScreen({ name, onBack, go }) {
         <IngredientPicker onPick={(n) => { setMergePicker(false); if (n === name) notify("자기 자신과는 합칠 수 없어요"); else if (n) setMergeTarget(n); }} onClose={() => setMergePicker(false)} />
       )}
       {mergeTarget && (() => {
-        const impact = mergeIngredientImpact(state, name);
-        const parts = [];
-        if (impact.batches > 0) parts.push(`재고 배치 ${impact.batches}개`);
-        if (impact.planItems > 0) parts.push(`식단표 항목 ${impact.planItems}개`);
-        if (impact.logItems > 0) parts.push(`급여 기록 항목 ${impact.logItems}개`);
-        if (impact.shoppingItems > 0) parts.push(`장보기 항목 ${impact.shoppingItems}개`);
-        if (impact.products > 0) parts.push(`포함된 시판 제품 ${impact.products}개`);
-        if (impact.linkedIngredients > 0) parts.push(`이 재료를 참조하는 다른 재료 ${impact.linkedIngredients}개`);
-        if (impact.hasIntro) parts.push("먹어본 재료 기록");
-        if (impact.hasCustomTags) parts.push("직접 지정한 영양 태그");
+        const parts = describeImpact(mergeIngredientImpact(state, name));
         const message = parts.length > 0
           ? `${parts.join(", ")}이(가) '${mergeTarget}'(으)로 옮겨져요.`
           : `'${name}'에는 아직 옮길 데이터가 없어요.`;
@@ -829,6 +839,30 @@ export function IngredientInfoScreen({ name, onBack, go }) {
               onBack();
             }}
             onCancel={() => setMergeTarget(null)}
+          />
+        );
+      })()}
+
+      {/* 재료 삭제 - 사용 중이면(재고·계획·기록·다른 재료 연결 등) 주의 문구와 함께, 아니면 단순 확인만
+          받고 삭제함. 삭제해도 다른 곳의 참조는 이름 그대로 남음(시판 제품 삭제와 동일한 정책) */}
+      {deleteConfirm && (() => {
+        const meta = state.ingredients[name];
+        const impact = mergeIngredientImpact(state, name);
+        const parts = describeImpact(impact);
+        const inUse = parts.length > 0;
+        return (
+          <ConfirmModal
+            title={`'${name}'을(를) 삭제할까요?`}
+            message={inUse ? `이 재료를 사용 중인 곳이 있어요: ${parts.join(", ")}. 그 데이터는 그대로 남고, 재료 목록에서만 사라져요.` : undefined}
+            warning={inUse ? "사용 중인데도 삭제를 진행하는 거예요 - 이름 연결만 끊어질 뿐 기존 데이터는 지워지지 않아요." : undefined}
+            confirmLabel="삭제"
+            onConfirm={() => {
+              dispatch({ type: "INGREDIENT_DELETE", name });
+              notify(`'${name}' 재료를 삭제했습니다`, () => dispatch({ type: "RESTORE_INGREDIENT", name, meta }));
+              setDeleteConfirm(false);
+              onBack();
+            }}
+            onCancel={() => setDeleteConfirm(false)}
           />
         );
       })()}

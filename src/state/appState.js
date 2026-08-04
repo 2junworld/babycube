@@ -573,6 +573,22 @@ function rawReducer(state, action) {
       return { ...state, ingredientUsage: usage };
     }
 
+    /* ---- 재료 마스터 삭제 - 재고·계획·기록 등 다른 곳의 참조는 그대로 이름으로 남김(시판 제품 삭제와
+       동일한 정책). catOf/unitGOf/tagsOf가 이미 "재료 마스터에 없을 때"를 다 대비해두고 있어서
+       안전함(영양 DB 기본값·기본 재료 미분류 등으로 자연스럽게 대체됨) ---- */
+    case "INGREDIENT_DELETE": {
+      const { name } = action;
+      if (!name || !state.ingredients[name]) return state;
+      const ingredients = { ...state.ingredients };
+      delete ingredients[name];
+      return { ...state, ingredients };
+    }
+    case "RESTORE_INGREDIENT": {
+      const { name, meta } = action;
+      if (!name || !meta) return state;
+      return { ...state, ingredients: { ...state.ingredients, [name]: meta } };
+    }
+
     /* ---- 재료 병합: 이름만 다른 같은 재료(오타·중복 등록)를 하나로 합침. from을 없애고
        그 재료가 관여하던 모든 곳(재고·계획·기록·장보기·제품·다른 재료의 baseOf/components·자동 생성
        규칙)을 into로 옮긴다. 되돌릴 수 없는 작업이라 UI에서 상세 미리보기 후 확인을 받고 호출함 ---- */
@@ -1013,6 +1029,16 @@ const ACTIVITY_BUILDERS = {
     const { from, into } = action;
     if (!from || !into || !prev.ingredients[from]) return null;
     return { kind: "update", summary: `${from} 재료를 ${into}(으)로 합침`, ref: { name: into } };
+  },
+  INGREDIENT_DELETE: (prev, next, action) => {
+    const { name } = action;
+    if (!name || !prev.ingredients[name]) return null;
+    return { kind: "delete", summary: `${name} 재료 삭제` };
+  },
+  RESTORE_INGREDIENT: (prev, next, action) => {
+    const { name } = action;
+    if (!name) return null;
+    return { kind: "restore", summary: `${name} 재료 복원 (실행취소)`, ref: { name } };
   },
   MEALSLOT_UPSERT: (prev, next, action) => {
     const prevSlot = prev.mealSlots.find((s) => s.id === action.slot.id);
