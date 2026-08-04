@@ -573,6 +573,139 @@ function rawReducer(state, action) {
       return { ...state, ingredientUsage: usage };
     }
 
+    /* ---- 재료 병합: 이름만 다른 같은 재료(오타·중복 등록)를 하나로 합침. from을 없애고
+       그 재료가 관여하던 모든 곳(재고·계획·기록·장보기·제품·다른 재료의 baseOf/components·자동 생성
+       규칙)을 into로 옮긴다. 되돌릴 수 없는 작업이라 UI에서 상세 미리보기 후 확인을 받고 호출함 ---- */
+    case "INGREDIENT_MERGE": {
+      const { from, into } = action;
+      if (!from || !into || from === into || !state.ingredients[from]) return state;
+
+      // 재고: 배치는 배치마다 자기 unitG를 들고 있어 그냥 이어붙이면 됨
+      const stock = { ...state.stock };
+      const fromBatches = (stock[from] && stock[from].batches) || [];
+      if (fromBatches.length > 0) {
+        const intoBatches = (stock[into] && stock[into].batches) || [];
+        stock[into] = { batches: [...intoBatches, ...fromBatches] };
+      }
+      delete stock[from];
+
+      // 재료 마스터: into 쪽 값을 기본으로 쓰고, into에 없는 값만 from에서 채워 넣음(둘 다 있으면 into 우선).
+      // baseOf/components가 이번에 없어질 from을 가리키던 경우엔 끊어냄(끊긴 채로 남기지 않게)
+      const fromMeta = state.ingredients[from] || {};
+      const intoMetaExisting = state.ingredients[into] || {};
+      const mergedLabels = Array.from(new Set([...(intoMetaExisting.labels || []), ...(fromMeta.labels || [])]));
+      const mergedComponents = Array.from(new Set([...(intoMetaExisting.components || []), ...(fromMeta.components || [])]))
+        .filter((n) => n !== into && n !== from);
+      const rawBaseOf = intoMetaExisting.baseOf || fromMeta.baseOf || null;
+      const mergedBaseOf = rawBaseOf && rawBaseOf !== into && rawBaseOf !== from ? rawBaseOf : null;
+      // baseOf/components는 intoMetaExisting에서 빼고 시작함 - mergedComponents/mergedBaseOf 계산에
+      // 이미 intoMetaExisting의 원래 값이 반영돼 있으므로, 그대로 스프레드해버리면 into가 원래
+      // from을 가리키고 있던 경우(자기참조 방지 대상) 정리한 값이 다시 옛 값으로 덮여씌워짐
+      const { components: _oldComp, baseOf: _oldBase, ...intoMetaRest } = intoMetaExisting;
+      const ingredients = { ...state.ingredients };
+      ingredients[into] = {
+        ...intoMetaRest,
+        cat: intoMetaExisting.cat || fromMeta.cat || defaultCategoryName(state),
+        unitG: intoMetaExisting.unitG != null ? intoMetaExisting.unitG : (fromMeta.unitG != null ? fromMeta.unitG : 15),
+        favorite: !!(intoMetaExisting.favorite || fromMeta.favorite),
+        staple: !!(intoMetaExisting.staple || fromMeta.staple),
+        ...(mergedLabels.length > 0 ? { labels: mergedLabels } : {}),
+        ...(mergedComponents.length > 0 ? { components: mergedComponents } : {}),
+        ...(mergedBaseOf ? { baseOf: mergedBaseOf } : {}),
+      };
+      delete ingredients[from];
+      // 다른 재료가 from을 기본 재료로 연결했거나 혼합 구성에 포함하고 있었다면 into로 옮김
+      Object.keys(ingredients).forEach((n) => {
+        if (n === into) return;
+        const ing = ingredients[n];
+        const patch = {};
+        if (ing.baseOf === from) patch.baseOf = into;
+        if (ing.components && ing.components.includes(from)) {
+          patch.components = Array.from(new Set(ing.components.map((c) => (c === from ? into : c)))).filter((c) => c !== n);
+        }
+        if (Object.keys(patch).length > 0) ingredients[n] = { ...ing, ...patch };
+      });
+
+      // 재료별 커스텀 영양 태그 - into에 이미 직접 지정한 태그가 있으면 그걸 우선하고, 없으면 from 것을 물려줌
+      const ingredientTags = { ...state.ingredientTags };
+      if (ingredientTags[from]) {
+        if (!ingredientTags[into] || ingredientTags[into].length === 0) ingredientTags[into] = ingredientTags[from];
+        delete ingredientTags[from];
+      }
+
+      // 최근 사용 시각(정렬용) - 더 최근 값으로
+      const ingredientUsage = { ...state.ingredientUsage };
+      if (ingredientUsage[from] != null) {
+        ingredientUsage[into] = Math.max(ingredientUsage[into] || 0, ingredientUsage[from]);
+        delete ingredientUsage[from];
+      }
+
+      // 먹어본 재료(반응 기록) - into에 이미 기록이 있으면 from 쪽은 버리고(상태 충돌 방지), 없으면 이름만 옮겨서 이력 보존
+      const intoHasIntro = state.intros.some((it) => it.name === into);
+      const intros = state.intros
+        .map((it) => (it.name === from ? (intoHasIntro ? null : { ...it, name: into }) : it))
+        .filter(Boolean);
+
+      // 장보기 목록
+      const shopping = state.shopping.map((s) => (s.name === from ? { ...s, name: into } : s));
+
+      // 식단표 계획 - 모든 날짜의 모든 끼니 항목에서 이름 교체(시판 제품 항목은 name이 없어 그대로 둠)
+      const plans = {};
+      Object.entries(state.plans).forEach(([date, meals]) => {
+        plans[date] = meals.map((m) => ({
+          ...m,
+          items: m.items.map((it) => (it.source !== "product" && it.name === from ? { ...it, name: into } : it)),
+        }));
+      });
+
+      // 급여 기록 - 동일하게 이름 교체
+      const logs = {};
+      Object.entries(state.logs).forEach(([date, dayLogs]) => {
+        logs[date] = dayLogs.map((l) => ({
+          ...l,
+          items: l.items.map((it) => (it.source !== "product" && it.name === from ? { ...it, name: into } : it)),
+        }));
+      });
+
+      // 시판 제품의 포함 재료 목록
+      const products = { ...state.products };
+      Object.keys(products).forEach((id) => {
+        const p = products[id];
+        if (!p.ingredients.includes(from)) return;
+        products[id] = { ...p, ingredients: Array.from(new Set(p.ingredients.map((n) => (n === from ? into : n)))) };
+      });
+
+      // 자동 생성 규칙(설정에 저장된 값) - 재료명을 직접 참조하는 부분들을 옮김
+      let settings = state.settings;
+      const rules = settings.autoGenRules;
+      if (rules) {
+        const ingredientRules = (rules.ingredientRules || []).map((r) => (r.ingredient === from ? { ...r, ingredient: into } : r));
+        const perIngredientG = { ...((rules.perMeal && rules.perMeal.perIngredientG) || {}) };
+        if (perIngredientG[from] != null) {
+          if (perIngredientG[into] == null) perIngredientG[into] = perIngredientG[from];
+          delete perIngredientG[from];
+        }
+        const perIngredientType = { ...((rules.perMeal && rules.perMeal.perIngredientType) || {}) };
+        if (perIngredientType[from] != null) {
+          if (perIngredientType[into] == null) perIngredientType[into] = perIngredientType[from];
+          delete perIngredientType[from];
+        }
+        const combos = ((rules.staple && rules.staple.combos) || []).map((c) => {
+          if (!c.names.includes(from)) return c;
+          const names = Array.from(new Set(c.names.map((n) => (n === from ? into : n))));
+          const gramsByName = { ...c.gramsByName };
+          if (gramsByName[from] != null) {
+            if (gramsByName[into] == null) gramsByName[into] = gramsByName[from];
+            delete gramsByName[from];
+          }
+          return { ...c, names, gramsByName };
+        });
+        settings = { ...settings, autoGenRules: { ...rules, ingredientRules, perMeal: { ...rules.perMeal, perIngredientG, perIngredientType }, staple: { ...rules.staple, combos } } };
+      }
+
+      return { ...state, stock, ingredients, ingredientTags, ingredientUsage, intros, shopping, plans, logs, products, settings };
+    }
+
     /* ---- 아기 정보 ---- */
     case "BABY_SET":
       return { ...state, baby: { ...state.baby, ...action.patch } };
@@ -875,6 +1008,11 @@ const ACTIVITY_BUILDERS = {
     const { name } = action;
     if (!name || prev.ingredientTags[name] === next.ingredientTags[name]) return null;
     return { kind: "update", summary: `${name} 재료 정보 수정`, ref: { name } };
+  },
+  INGREDIENT_MERGE: (prev, next, action) => {
+    const { from, into } = action;
+    if (!from || !into || !prev.ingredients[from]) return null;
+    return { kind: "update", summary: `${from} 재료를 ${into}(으)로 합침`, ref: { name: into } };
   },
   MEALSLOT_UPSERT: (prev, next, action) => {
     const prevSlot = prev.mealSlots.find((s) => s.id === action.slot.id);
@@ -1193,6 +1331,22 @@ export function ensureIngredientEntry(ingredients, name, cat, extra = {}, fallba
 export function normalizeIngredientName(name) {
   const n = (name || "").trim();
   return n.length > 0 ? n : null;
+}
+
+// INGREDIENT_MERGE로 name(from)을 없앨 때 실제로 옮겨질 데이터 개수를 미리 계산 - 되돌릴 수 없는
+// 작업이라 실행 전 확인 화면에서 "무엇이 얼마나 옮겨지는지" 보여주는 용도로만 씀(state는 읽기만 함)
+export function mergeIngredientImpact(state, name) {
+  const batches = ((state.stock[name] && state.stock[name].batches) || []).length;
+  let planItems = 0;
+  Object.values(state.plans).forEach((meals) => meals.forEach((m) => m.items.forEach((it) => { if (it.source !== "product" && it.name === name) planItems++; })));
+  let logItems = 0;
+  Object.values(state.logs).forEach((dayLogs) => dayLogs.forEach((l) => l.items.forEach((it) => { if (it.source !== "product" && it.name === name) logItems++; })));
+  const shoppingItems = state.shopping.filter((s) => s.name === name).length;
+  const products = Object.values(state.products).filter((p) => p.ingredients.includes(name)).length;
+  const linkedIngredients = Object.entries(state.ingredients).filter(([n, v]) => n !== name && (v.baseOf === name || (v.components || []).includes(name))).length;
+  const hasIntro = state.intros.some((it) => it.name === name);
+  const hasCustomTags = !!(state.ingredientTags && state.ingredientTags[name] && state.ingredientTags[name].length > 0);
+  return { batches, planItems, logItems, shoppingItems, products, linkedIngredients, hasIntro, hasCustomTags };
 }
 
 // 기록 삭제 시 재고 복원이 불가능한 재료 이름 목록 (배치가 하나도 없으면 복원할 곳이 없음)

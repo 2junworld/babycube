@@ -5,7 +5,7 @@ import { db } from "../firebase";
 import { C, primaryBtn, selectStyle, PRODUCT_COLOR, PRODUCT_COLOR_LIGHT } from "../theme";
 import { addDaysISO, todayISO } from "../lib/dates";
 import { NUTRIENT_TAGS, TAG_KEYS, TAG_LABELS } from "../data/nutrition";
-import { catOf, categoryNames, defaultCategoryName, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
+import { catOf, categoryNames, defaultCategoryName, mergeIngredientImpact, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
 import { AuthorInfo, BottomSheet, CatDot, ConfirmModal, CubeGrid, NumInput, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE, readStockPref, writeStockPref } from "./uiPrefs";
@@ -541,10 +541,14 @@ function PairingSection({ good, avoid, emptyText }) {
    (기록 탭 '지금까지 먹어본 재료'에서 재료를 탭하면 진입)
    ===================================================================== */
 export function IngredientInfoScreen({ name, onBack, go }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const [editIntro, setEditIntro] = useState(false);
   const [basePicker, setBasePicker] = useState(false);
   const [compPicker, setCompPicker] = useState(false);
+  const [convertConfirm, setConvertConfirm] = useState(false);
+  const [convertSheet, setConvertSheet] = useState(false);
+  const [mergePicker, setMergePicker] = useState(false);
+  const [mergeTarget, setMergeTarget] = useState(null); // 병합 대상으로 고른 재료명
   const intro = state.intros.find((it) => it.name === name);
   const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
   const myTags = tagsOf(state, name);
@@ -727,6 +731,27 @@ export function IngredientInfoScreen({ name, onBack, go }) {
           </div>
         )}
 
+        {/* 재료 관리 - 시판 제품으로 전환 · 중복 등록된 다른 재료와 합치기 */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>재료 관리</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <button onClick={() => setConvertConfirm(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.sageLight, border: "none", borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>시판 제품으로 전환</span>
+              <ChevronRight size={14} color={C.sageDeep} />
+            </button>
+            <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.4, marginBottom: 4 }}>
+              {components.length > 0 ? `구성 재료(${components.join(", ")})를 그대로 포함한 새 시판 제품을 만들어요.` : "시판 카테고리가 생기기 전에 등록한 혼합 재료를 시판 제품으로 옮길 때 써요."}
+            </div>
+            <button onClick={() => setMergePicker(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.sageLight, border: "none", borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>다른 재료와 합치기</span>
+              <ChevronRight size={14} color={C.sageDeep} />
+            </button>
+            <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.4 }}>
+              이름만 다르게 중복 등록된 같은 재료를 하나로 합쳐요. 이 재료('{name}')는 사라지고, 골라주신 재료로 재고·식단표·기록이 모두 옮겨가요. 되돌릴 수 없어요.
+            </div>
+          </div>
+        </div>
+
         {/* 반응 기록·메모 */}
         {intro ? (
           <button onClick={() => setEditIntro(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 13px", cursor: "pointer" }}>
@@ -746,6 +771,67 @@ export function IngredientInfoScreen({ name, onBack, go }) {
       {editIntro && intro && <IntroEditModal intro={intro} onClose={() => setEditIntro(false)} />}
       {basePicker && <IngredientPicker onPick={(n) => { if (n !== name) setMeta({ baseOf: n }); setBasePicker(false); }} onClose={() => setBasePicker(false)} />}
       {compPicker && <IngredientPicker multi alreadyAdded={[...components, name]} onPick={(names) => { setMeta({ components: Array.from(new Set([...components, ...names.filter((n) => n !== name)])) }); }} onClose={() => setCompPicker(false)} />}
+
+      {/* 시판 제품으로 전환 - 확인 후, 새 제품 등록 폼을 이 재료의 이름·구성 재료로 미리 채워서 열어줌
+          (바로 저장하지 않고 폼에서 브랜드·용량 등을 확인·보완한 뒤 직접 '추가'를 눌러야 실제로 생성됨) */}
+      {convertConfirm && (
+        <ConfirmModal
+          title={`'${name}'을(를) 시판 제품으로 전환할까요?`}
+          message={components.length > 0
+            ? `혼합 큐브 구성 재료(${components.join(", ")})를 그대로 포함 재료로 채운 새 시판 제품 '${name}'을(를) 만들어요.`
+            : `구성 재료가 지정돼 있지 않아 일단 '${name}' 하나만 포함한 시판 제품으로 만들어요 - 다음 화면에서 포함 재료를 직접 골라 바꿀 수 있어요.`}
+          warning="기존 재료 데이터(재고·식단표·기록)는 전환 후에도 이 재료 이름으로 그대로 남아있어요."
+          confirmLabel="전환"
+          danger={false}
+          onConfirm={() => { setConvertConfirm(false); setConvertSheet(true); }}
+          onCancel={() => setConvertConfirm(false)}
+        />
+      )}
+      {convertSheet && (
+        <ProductEditSheet
+          product="new"
+          initialName={name}
+          initialIngredients={components.length > 0 ? components : [name]}
+          go={go}
+          onSaved={({ id }) => { notify(`'${name}' 재료를 시판 제품으로 전환했어요`); go && go("productDetail", { productId: id }); }}
+          onClose={() => setConvertSheet(false)}
+        />
+      )}
+
+      {/* 다른 재료와 합치기 - 대상 선택 후, 실제로 옮겨질 데이터 개수를 미리 보여주고 확인받음(되돌릴 수 없음) */}
+      {mergePicker && (
+        <IngredientPicker onPick={(n) => { setMergePicker(false); if (n === name) notify("자기 자신과는 합칠 수 없어요"); else if (n) setMergeTarget(n); }} onClose={() => setMergePicker(false)} />
+      )}
+      {mergeTarget && (() => {
+        const impact = mergeIngredientImpact(state, name);
+        const parts = [];
+        if (impact.batches > 0) parts.push(`재고 배치 ${impact.batches}개`);
+        if (impact.planItems > 0) parts.push(`식단표 항목 ${impact.planItems}개`);
+        if (impact.logItems > 0) parts.push(`급여 기록 항목 ${impact.logItems}개`);
+        if (impact.shoppingItems > 0) parts.push(`장보기 항목 ${impact.shoppingItems}개`);
+        if (impact.products > 0) parts.push(`포함된 시판 제품 ${impact.products}개`);
+        if (impact.linkedIngredients > 0) parts.push(`이 재료를 참조하는 다른 재료 ${impact.linkedIngredients}개`);
+        if (impact.hasIntro) parts.push("먹어본 재료 기록");
+        if (impact.hasCustomTags) parts.push("직접 지정한 영양 태그");
+        const message = parts.length > 0
+          ? `${parts.join(", ")}이(가) '${mergeTarget}'(으)로 옮겨져요.`
+          : `'${name}'에는 아직 옮길 데이터가 없어요.`;
+        return (
+          <ConfirmModal
+            title={`'${name}'을(를) '${mergeTarget}'(으)로 합칠까요?`}
+            message={message}
+            warning={`이 작업은 되돌릴 수 없어요. 합친 뒤 '${name}' 재료는 사라지고 이 화면에서 나가져요.`}
+            confirmLabel="합치기"
+            onConfirm={() => {
+              dispatch({ type: "INGREDIENT_MERGE", from: name, into: mergeTarget });
+              notify(`'${name}'을(를) '${mergeTarget}'(으)로 합쳤어요`);
+              setMergeTarget(null);
+              onBack();
+            }}
+            onCancel={() => setMergeTarget(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
