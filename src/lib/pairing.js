@@ -1,7 +1,7 @@
 /* 재료 궁합 계산 (영양학적 근거 기반) - 순수 함수 계층 */
 import { todayISO } from "./dates";
 import { NUTRIENT_TAGS, PAIRING_RULES } from "../data/nutrition";
-import { sortByCategory, stockFridgeG, stockTotalCubes } from "../state/appState";
+import { gOf, sortByCategory, stockFridgeG, stockTotalCubes } from "../state/appState";
 
 // 재료의 영양 태그 결정 순서: ① 사용자가 직접 지정한 태그 → ② 기본 영양 DB →
 // ③ 변형 재료면 기본 재료의 태그 상속 (예: 사과퓨레 → 사과) → ④ 혼합 큐브면 구성 재료 태그 합산
@@ -57,18 +57,45 @@ export function pairingSuggestions(state, currentNames) {
   return { good: good.slice(0, 5), avoid };
 }
 
-// 특정 날짜의 급여 기록에 사용된 재료 -> 그 날짜에 제공된 총 g. 재료 검색의 "오늘 사용 재료 제외" 필터/배지와
-// 끼니 편집 화면의 "오늘 이미 준 재료" 힌트가 공용으로 사용. date 기준은 실제 오늘이 아니라 "끼니 계획을 세우는 날짜"임 —
-// 끼니 편집·일괄 저장 화면에서는 편집 중인 날짜를 넘겨받고, 그 외(제조 기록 추가 등 날짜 개념이 없는 곳)만 실제 오늘을 기본값으로 씀
+// 특정 날짜의 급여 "기록"에 사용된 재료 -> 그 날짜에 실제로 먹인 총 g. 실제 섭취량이 중요한 곳
+// (알레르기 노출 등)에서는 이 함수를 그대로 쓴다. date 기준은 실제 오늘이 아니라 "끼니 계획을 세우는
+// 날짜"임 — 끼니 편집·일괄 저장 화면에서는 편집 중인 날짜를 넘겨받고, 그 외(제조 기록 추가 등 날짜
+// 개념이 없는 곳)만 실제 오늘을 기본값으로 씀. 시판 제품 항목은 name이 없어 집계에서 제외.
+// 그램 계산은 appState.js의 gOf()에 위임함(직접 it.qty*it.unitG로 계산하면 계획 항목처럼 unitG가
+// 저장돼 있지 않은 경우 NaN이 나던 문제가 있었음 - gOf는 없으면 재료 마스터 기본값으로 대체해줌)
 export function usedTodayMap(state, date = todayISO()) {
   const usedG = new Map();
   (state.logs[date] || []).forEach((log) => {
     log.items.forEach((it) => {
-      const g = it.source === "fridge" ? it.qty : it.qty * it.unitG;
-      usedG.set(it.name, (usedG.get(it.name) || 0) + g);
+      if (it.source === "product") return;
+      usedG.set(it.name, (usedG.get(it.name) || 0) + gOf(state, it));
     });
   });
   return usedG;
+}
+
+// 재료 검색의 "오늘 사용 재료 제외" 필터/배지, 끼니 편집 화면의 "오늘 사용 재료" 힌트가 공용으로 사용.
+// usedTodayMap과 달리 "급여 기록"뿐 아니라 그 날짜의 "식단표 계획"(아직 급여 기록 전인 다른 끼니)도
+// 함께 봄 - 하루치 끼니를 미리 다 계획해두고 나중에 하나씩 기록하는 사용 흐름에서, 아직 기록 전인
+// 오전 계획에 이미 넣어둔 재료가 오후 끼니를 편집할 때도 "오늘 사용 중"으로 잡히게 하기 위함
+// (실제 급여 기록이 하나도 없이 계획에만 있으면 logged:false로 구분해 "이미 먹였다"고 착각하지 않게 함)
+// 주의: '바로기록'으로 만들어진 끼니(fromRecord:true)는 같은 내용이 state.logs에도 이미 들어있어
+// usedTodayMap 합계에 포함돼 있으므로, 여기서 또 더하면 같은 급여가 두 번 잡혀 그램 수가 부풀려진다
+// (실제로 겪은 문제) - 그래서 fromRecord 끼니는 건너뛰고, 아직 기록되지 않은 순수 계획만 더한다
+export function usedOrPlannedTodayMap(state, date = todayISO()) {
+  const map = new Map();
+  usedTodayMap(state, date).forEach((g, name) => { map.set(name, { g, logged: true }); });
+  (state.plans[date] || []).forEach((meal) => {
+    if (meal.fromRecord) return;
+    meal.items.forEach((it) => {
+      if (it.source === "product") return;
+      const g = gOf(state, it);
+      const cur = map.get(it.name);
+      if (cur) cur.g += g;
+      else map.set(it.name, { g, logged: false });
+    });
+  });
+  return map;
 }
 
 // 재료 검색에서 "궁합 좋은 재료" 정렬에 쓸 순위: 현재 조합(currentNames)과 좋은 궁합이면 0(근거 A) 또는 1(근거 B), 없으면 null.

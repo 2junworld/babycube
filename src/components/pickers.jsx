@@ -8,7 +8,7 @@ import { DB_CATEGORY } from "../data/nutrition";
 import { catOf, categoryNames, defaultCategoryName, normalizeIngredientName, productStockPacks, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
 import { useStore } from "../store";
 import { BottomSheet, CatDot, ConfirmModal, MealItemList, NumInput, ProductDot, Segmented, useVisualViewport } from "./common";
-import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedTodayMap } from "../lib/pairing";
+import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedOrPlannedTodayMap } from "../lib/pairing";
 import { primaryBtn } from "../theme";
 import { IngredientInfoScreen } from "../screens/StockTab";
 import { matchIngredientsFromLabel, resizeLabelImage } from "../lib/labelRecognition";
@@ -129,7 +129,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
   const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
   const isFavorite = (n) => !!(state.ingredients[n] && state.ingredients[n].favorite);
-  const usedTodayG = usedTodayMap(state, date);
+  const usedTodayG = usedOrPlannedTodayMap(state, date);
   const toggleSortFav = () => setSortSel((s) => ({ ...s, fav: !s.fav }));
   const toggleExcludeUsedToday = () => setSortSel((s) => ({ ...s, excludeUsedToday: !s.excludeUsedToday }));
   const toggleSortPairing = () => setSortSel((s) => ({ ...s, pairing: !s.pairing }));
@@ -284,9 +284,14 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
                     <Star size={13} color={fav ? C.apricot : C.border} fill={fav ? C.apricot : "none"} />
                   </span>
                   <CatDot name={n} size={8} /><span style={{ fontSize: 13, color: C.ink }}>{n}</span>
-                  {usedTodayG.has(n) && (
-                    <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>오늘 {Math.round(usedTodayG.get(n))}g</span>
-                  )}
+                  {usedTodayG.has(n) && (() => {
+                    const u = usedTodayG.get(n);
+                    return (
+                      <span style={{ fontSize: 9, fontWeight: 700, color: u.logged ? C.sageDeep : "#9A4A1E", background: u.logged ? C.sageLight : C.apricotLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>
+                        오늘 {u.logged ? "" : "계획 "}{Math.round(u.g)}g
+                      </span>
+                    );
+                  })()}
                   {pairInfo && pairInfo.goodWith.length > 0 && (
                     <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>{pairInfo.goodWith.join("·")}와 궁합</span>
                   )}
