@@ -642,12 +642,12 @@ function rawReducer(state, action) {
         if (Object.keys(patch).length > 0) ingredients[n] = { ...ing, ...patch };
       });
 
-      // 재료별 커스텀 영양 태그 - into에 이미 직접 지정한 태그가 있으면 그걸 우선하고, 없으면 from 것을 물려줌
+      // 재료별 커스텀 영양 태그 - 둘 다 직접 지정한 태그가 있으면 합집합으로 합치고(한쪽만 있으면 그대로 물려줌)
       const ingredientTags = { ...state.ingredientTags };
-      if (ingredientTags[from]) {
-        if (!ingredientTags[into] || ingredientTags[into].length === 0) ingredientTags[into] = ingredientTags[from];
-        delete ingredientTags[from];
+      if (ingredientTags[from] && ingredientTags[from].length > 0) {
+        ingredientTags[into] = Array.from(new Set([...(ingredientTags[into] || []), ...ingredientTags[from]]));
       }
+      delete ingredientTags[from];
 
       // 최근 사용 시각(정렬용) - 더 최근 값으로
       const ingredientUsage = { ...state.ingredientUsage };
@@ -656,11 +656,23 @@ function rawReducer(state, action) {
         delete ingredientUsage[from];
       }
 
-      // 먹어본 재료(반응 기록) - into에 이미 기록이 있으면 from 쪽은 버리고(상태 충돌 방지), 없으면 이름만 옮겨서 이력 보존
-      const intoHasIntro = state.intros.some((it) => it.name === into);
-      const intros = state.intros
-        .map((it) => (it.name === from ? (intoHasIntro ? null : { ...it, name: into }) : it))
-        .filter(Boolean);
+      // 먹어본 재료(반응 기록) - 알레르기 등 안전 정보라 둘 다 기록이 있어도 그냥 한쪽을 버리면 안 됨.
+      // 상태는 더 주의가 필요한 등급을 유지하고(중단 > 주의 > 관찰중 > 이상없음), 메모는 둘 다 남기고,
+      // 날짜는 더 이른 쪽(최초 노출일)을 기준으로 함. 한쪽에만 기록이 있으면 이름만 into로 옮겨서 그대로 보존
+      const STATUS_RANK = { 중단: 3, 주의: 2, 관찰중: 1, 이상없음: 0 };
+      const fromIntro = state.intros.find((it) => it.name === from);
+      const intoIntro = state.intros.find((it) => it.name === into);
+      let intros;
+      if (fromIntro && intoIntro) {
+        const worseStatus = (STATUS_RANK[fromIntro.status] || 0) > (STATUS_RANK[intoIntro.status] || 0) ? fromIntro.status : intoIntro.status;
+        const mergedMemo = Array.from(new Set([intoIntro.memo, fromIntro.memo].map((m) => (m || "").trim()).filter(Boolean))).join(" / ");
+        const earliestDate = [intoIntro.date, fromIntro.date].filter(Boolean).sort()[0] || intoIntro.date;
+        intros = state.intros
+          .map((it) => (it.id === intoIntro.id ? { ...intoIntro, status: worseStatus, memo: mergedMemo, date: earliestDate } : it))
+          .filter((it) => it.id !== fromIntro.id);
+      } else {
+        intros = state.intros.map((it) => (it.name === from ? { ...it, name: into } : it));
+      }
 
       // 장보기 목록
       const shopping = state.shopping.map((s) => (s.name === from ? { ...s, name: into } : s));
