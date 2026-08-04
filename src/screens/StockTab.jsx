@@ -547,6 +547,7 @@ export function IngredientInfoScreen({ name, onBack, go }) {
   const [compPicker, setCompPicker] = useState(false);
   const [convertConfirm, setConvertConfirm] = useState(false);
   const [convertSheet, setConvertSheet] = useState(false);
+  const [postConvertProductId, setPostConvertProductId] = useState(null); // 전환 저장 직후, 원래 재료도 지울지 물어보는 단계
   const [mergePicker, setMergePicker] = useState(false);
   const [mergeTarget, setMergeTarget] = useState(null); // 병합 대상으로 고른 재료명
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -812,10 +813,36 @@ export function IngredientInfoScreen({ name, onBack, go }) {
           initialName={name}
           initialIngredients={components.length > 0 ? components : [name]}
           go={go}
-          onSaved={({ id }) => { notify(`'${name}' 재료를 시판 제품으로 전환했어요`); go && go("productDetail", { productId: id }); }}
+          onSaved={({ id }) => { setConvertSheet(false); notify(`'${name}' 재료를 시판 제품으로 전환했어요`); setPostConvertProductId(id); }}
           onClose={() => setConvertSheet(false)}
         />
       )}
+
+      {/* 전환이 끝나면 곧바로 "원래 재료도 지울지"를 물어봄 - 삭제 버튼을 따로 찾아 눌러야 하는
+          불편함을 없애기 위함(사용 중이면 여기서도 같은 주의 안내를 보여줌) */}
+      {postConvertProductId && (() => {
+        const parts = describeImpact(mergeIngredientImpact(state, name));
+        const inUse = parts.length > 0;
+        const goToProduct = () => go && go("productDetail", { productId: postConvertProductId });
+        return (
+          <ConfirmModal
+            title={`'${name}' 재료도 삭제할까요?`}
+            message={inUse
+              ? `이 재료를 사용 중인 곳이 있어요: ${parts.join(", ")}. 그 데이터는 그대로 남고, 재료 목록에서만 사라져요.`
+              : "시판 제품으로 옮겼으니 원래 재료는 지워도 괜찮아요."}
+            warning={inUse ? "사용 중인데도 삭제하는 거예요 - 이름 연결만 끊어질 뿐 기존 데이터는 지워지지 않아요." : undefined}
+            confirmLabel="삭제"
+            onConfirm={() => {
+              const meta = state.ingredients[name];
+              dispatch({ type: "INGREDIENT_DELETE", name });
+              notify(`'${name}' 재료를 삭제했습니다`, () => dispatch({ type: "RESTORE_INGREDIENT", name, meta }));
+              setPostConvertProductId(null);
+              goToProduct();
+            }}
+            onCancel={() => { setPostConvertProductId(null); goToProduct(); }}
+          />
+        );
+      })()}
 
       {/* 다른 재료와 합치기 - 대상 선택 후, 실제로 옮겨질 데이터 개수를 미리 보여주고 확인받음(되돌릴 수 없음) */}
       {mergePicker && (
