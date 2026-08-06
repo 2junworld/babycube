@@ -8,7 +8,7 @@ import { DB_CATEGORY } from "../data/nutrition";
 import { catOf, categoryNames, defaultCategoryName, normalizeIngredientName, productStockPacks, stockFridgeG, stockTotalCubes, stockTotalFrozenG } from "../state/appState";
 import { useStore } from "../store";
 import { BottomSheet, CatDot, ConfirmModal, MealItemList, NumInput, ProductDot, Segmented, useVisualViewport } from "./common";
-import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedTodayMap } from "../lib/pairing";
+import { pairingInfoFor, pairingRankFor, suggestBaseFor, usedOrPlannedTodayMap } from "../lib/pairing";
 import { primaryBtn } from "../theme";
 import { IngredientInfoScreen } from "../screens/StockTab";
 import { matchIngredientsFromLabel, resizeLabelImage } from "../lib/labelRecognition";
@@ -129,7 +129,7 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
   const stockAmt = (n) => stockTotalFrozenG(state, n) + stockFridgeG(state, n);
   const isFavorite = (n) => !!(state.ingredients[n] && state.ingredients[n].favorite);
-  const usedTodayG = usedTodayMap(state, date);
+  const usedTodayG = usedOrPlannedTodayMap(state, date);
   const toggleSortFav = () => setSortSel((s) => ({ ...s, fav: !s.fav }));
   const toggleExcludeUsedToday = () => setSortSel((s) => ({ ...s, excludeUsedToday: !s.excludeUsedToday }));
   const toggleSortPairing = () => setSortSel((s) => ({ ...s, pairing: !s.pairing }));
@@ -284,9 +284,14 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
                     <Star size={13} color={fav ? C.apricot : C.border} fill={fav ? C.apricot : "none"} />
                   </span>
                   <CatDot name={n} size={8} /><span style={{ fontSize: 13, color: C.ink }}>{n}</span>
-                  {usedTodayG.has(n) && (
-                    <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>오늘 {Math.round(usedTodayG.get(n))}g</span>
-                  )}
+                  {usedTodayG.has(n) && (() => {
+                    const u = usedTodayG.get(n);
+                    return (
+                      <span style={{ fontSize: 9, fontWeight: 700, color: u.logged ? C.sageDeep : "#9A4A1E", background: u.logged ? C.sageLight : C.apricotLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>
+                        오늘 {u.logged ? "" : "계획 "}{Math.round(u.g)}g
+                      </span>
+                    );
+                  })()}
                   {pairInfo && pairInfo.goodWith.length > 0 && (
                     <span style={{ fontSize: 9, fontWeight: 700, color: C.sageDeep, background: C.sageLight, borderRadius: 999, padding: "1px 6px", flexShrink: 0 }}>{pairInfo.goodWith.join("·")}와 궁합</span>
                   )}
@@ -333,14 +338,14 @@ export function IngredientPicker({ onPick, onClose, multi = false, alreadyAdded 
    독립 화면처럼 쓰고, ProductPicker는 embedded=true로 검색 결과 목록과 같은 화면 안에 인라인으로
    붙여서 쓴다(재료 선택기의 "검색어로 바로 새 재료 추가"와 동일한 경험을 시판 제품에도 제공)
    ===================================================================== */
-function ProductEditForm({ product, initialName, onSaved, onClose, go, embedded = false }) {
+function ProductEditForm({ product, initialName, initialIngredients, onSaved, onClose, go, embedded = false }) {
   const { state, dispatch, notify, cloud } = useStore();
   const isNew = product === "new";
   const base = isNew ? {} : product;
   const [name, setName] = useState(base.name || initialName || "");
   const [brand, setBrand] = useState(base.brand || "");
   const [packG, setPackG] = useState(base.packG || 100);
-  const [ingredients, setIngredients] = useState(base.ingredients || []);
+  const [ingredients, setIngredients] = useState(base.ingredients || initialIngredients || []);
   const [memo, setMemo] = useState(base.memo || "");
   const [picker, setPicker] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -506,12 +511,12 @@ function ProductEditForm({ product, initialName, onSaved, onClose, go, embedded 
    (ProductEditForm에 BottomSheet를 씌운 것). 급여기록·식단표의 ProductPicker는 이 시트를 쓰지
    않고 ProductEditForm을 직접 인라인으로 붙여 쓴다(아래 ProductPicker 참고)
    ===================================================================== */
-export function ProductEditSheet({ product, onClose, go, onSaved, initialName }) {
+export function ProductEditSheet({ product, onClose, go, onSaved, initialName, initialIngredients }) {
   const isNew = product === "new";
   return (
     <BottomSheet title={isNew ? "시판 제품 추가" : "시판 제품 수정"} onClose={onClose}>
       <div style={{ padding: "0 18px 20px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
-        <ProductEditForm product={product} initialName={initialName} onSaved={onSaved} onClose={onClose} go={go} />
+        <ProductEditForm product={product} initialName={initialName} initialIngredients={initialIngredients} onSaved={onSaved} onClose={onClose} go={go} />
       </div>
     </BottomSheet>
   );

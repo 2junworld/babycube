@@ -7,7 +7,7 @@ import { GROWTH_STAGES, growthStageOf } from "../data/nutrition";
 import { productStockPacks, sortByCategory, stockFridgeG, stockTotalCubes } from "../state/appState";
 import { useStore } from "../store";
 import { CatDot } from "./common";
-import { pairingSuggestions, usedTodayMap } from "../lib/pairing";
+import { pairingSuggestions, usedOrPlannedTodayMap } from "../lib/pairing";
 import { urgentStockNames } from "../lib/stockAlerts";
 
 // 식단 편집 화면 등에서 보여줄 "참고용" 성장 단계 안내 카드 - 값을 자동으로 적용하지 않고 정보만 표시함.
@@ -135,25 +135,30 @@ export function UrgentStockHint({ currentNames, onAdd }) {
   );
 }
 
-// 오늘 이미 급여 기록에 사용된 재료 힌트 - 끼니를 짤 때 오늘 벌써 준 재료를 참고해서 겹치지 않게 구성할 수 있도록 안내
+// 오늘 급여 기록·식단표 계획에 쓰인 재료 힌트 - 끼니를 짤 때 오늘 이미 준(또는 다른 끼니에 계획해둔)
+// 재료를 참고해서 겹치지 않게 구성할 수 있도록 안내. 실제로 먹인 재료와 아직 계획만 있는 재료를
+// 구분해 보여줌(계획만 있는데 "이미 줬다"고 오해하지 않도록)
 export function TodayUsedHint({ currentNames, date = todayISO() }) {
   const { state } = useStore();
   const currentSet = new Set(currentNames);
-  const usedG = usedTodayMap(state, date); // name -> 해당 날짜에 제공된 총 g
+  const usedG = usedOrPlannedTodayMap(state, date); // name -> { g, logged }
   const usedNames = sortByCategory(state, Array.from(usedG.keys()), (n) => n).filter((n) => !currentSet.has(n));
   if (usedNames.length === 0) return null;
-  const label = date === todayISO() ? "오늘 이미 준 재료" : `${date.slice(5)}에 이미 준 재료`;
+  const label = date === todayISO() ? "오늘 사용 재료" : `${date.slice(5)} 사용 재료`;
   return (
     <div style={{ background: C.sageLight, borderRadius: 12, padding: 12 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>{label}</div>
       <div className="flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
-        {usedNames.map((n) => (
-          <span key={n} className="flex items-center" style={{ gap: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 999, padding: "4px 9px" }}>
-            <CatDot name={n} size={6} />
-            <span style={{ fontSize: 11, color: C.ink, fontWeight: 600 }}>{n}</span>
-            <span style={{ fontSize: 9.5, color: C.muted }}>{Math.round(usedG.get(n))}g</span>
-          </span>
-        ))}
+        {usedNames.map((n) => {
+          const u = usedG.get(n);
+          return (
+            <span key={n} className="flex items-center" style={{ gap: 4, background: C.surface, border: `1px solid ${u.logged ? C.border : C.apricot}`, borderStyle: u.logged ? "solid" : "dashed", borderRadius: 999, padding: "4px 9px" }}>
+              <CatDot name={n} size={6} />
+              <span style={{ fontSize: 11, color: C.ink, fontWeight: 600 }}>{n}</span>
+              <span style={{ fontSize: 9.5, color: u.logged ? C.muted : "#9A4A1E" }}>{u.logged ? `${Math.round(u.g)}g` : `계획 ${Math.round(u.g)}g`}</span>
+            </span>
+          );
+        })}
       </div>
     </div>
   );
@@ -180,7 +185,7 @@ export function MealTipsPanel({ currentNames, pairingNames = currentNames, onAdd
 
   const urgentCount = tips.stock !== false ? urgentStockNames(state).filter((u) => !currentSet.has(u.name)).length : 0;
   const { good, avoid } = tips.pairing !== false ? pairingSuggestions(state, pairingNames) : { good: [], avoid: [] };
-  const usedTodayCount = tips.usedToday !== false ? Array.from(usedTodayMap(state, date).keys()).filter((n) => !currentSet.has(n)).length : 0;
+  const usedTodayCount = tips.usedToday !== false ? Array.from(usedOrPlannedTodayMap(state, date).keys()).filter((n) => !currentSet.has(n)).length : 0;
   const totalCount = urgentCount + good.length + avoid.length + usedTodayCount;
 
   const toggle = (key) => dispatch({ type: "SET_SETTING", key: "mealTips", value: { ...tips, [key]: tips[key] === false } });

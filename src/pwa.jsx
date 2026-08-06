@@ -83,6 +83,18 @@ export function UpdateBanner({ waitFor }) {
    경우(저장된 값이 아예 없음)는 "업데이트 안내"가 아니므로 조용히 버전만 기록하고 넘어간다 ---- */
 const LAST_SEEN_VERSION_KEY = "bc_last_seen_version";
 
+// "1.7.10" 같은 두 자리 이상 패치 번호도 문자열 비교가 아니라 숫자로 비교해야 정확함
+// (문자열 비교로는 "1.7.10" < "1.7.2"가 돼버림)
+function compareVersions(a, b) {
+  const pa = (a || "").split(".").map(Number);
+  const pb = (b || "").split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 export function useWhatsNew() {
   const [entry, setEntry] = useState(null);
   useEffect(() => {
@@ -92,8 +104,15 @@ export function useWhatsNew() {
     try { last = localStorage.getItem(LAST_SEEN_VERSION_KEY); } catch { /* 저장소 접근 불가 시 매번 조용히 넘어감 */ }
     if (last !== current) {
       if (last) {
-        const found = CHANGELOG.find((c) => c.version === current);
-        if (found) setEntry(found);
+        // 마지막으로 본 버전 이후 ~ 현재 버전까지의 모든 항목을 모아서 보여줌 - 개발 중 여러 패치
+        // 버전이 한 번에 배포되는 경우(예: 사용자는 1.7.1까지만 봤는데 그 사이 1.7.2~1.7.7이 한꺼번에
+        // 배포됨)에도 그동안 쌓인 변경사항을 하나도 빠짐없이 안내하기 위함(예전엔 딱 현재 버전 항목
+        // 하나만 찾아서 보여줘서, 건너뛴 중간 버전들의 안내가 통째로 묻혔음)
+        const between = CHANGELOG.filter((c) => compareVersions(c.version, last) > 0 && compareVersions(c.version, current) <= 0);
+        if (between.length > 0) {
+          const notes = between.flatMap((c) => c.notes);
+          setEntry({ version: current, notes });
+        }
       }
       try { localStorage.setItem(LAST_SEEN_VERSION_KEY, current); } catch { /* 저장 불가 환경이면 다음에도 다시 시도됨 */ }
     }

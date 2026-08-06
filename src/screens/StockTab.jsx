@@ -5,7 +5,7 @@ import { db } from "../firebase";
 import { C, primaryBtn, selectStyle, PRODUCT_COLOR, PRODUCT_COLOR_LIGHT } from "../theme";
 import { addDaysISO, todayISO } from "../lib/dates";
 import { NUTRIENT_TAGS, TAG_KEYS, TAG_LABELS } from "../data/nutrition";
-import { catOf, categoryNames, defaultCategoryName, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
+import { catOf, categoryNames, defaultCategoryName, gOf, mergeIngredientImpact, productStockLots, productStockPacks, sortByCategory, stockBatches, stockFridgeG, stockTotalCubes, stockTotalFrozenG, unitGOf } from "../state/appState";
 import { useStore } from "../store";
 import { AuthorInfo, BottomSheet, CatDot, ConfirmModal, CubeGrid, NumInput, ProductDot, ScreenHeader, Segmented, SubHeader } from "../components/common";
 import { UI_STATE, readStockPref, writeStockPref } from "./uiPrefs";
@@ -541,10 +541,16 @@ function PairingSection({ good, avoid, emptyText }) {
    (기록 탭 '지금까지 먹어본 재료'에서 재료를 탭하면 진입)
    ===================================================================== */
 export function IngredientInfoScreen({ name, onBack, go }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, notify } = useStore();
   const [editIntro, setEditIntro] = useState(false);
   const [basePicker, setBasePicker] = useState(false);
   const [compPicker, setCompPicker] = useState(false);
+  const [convertConfirm, setConvertConfirm] = useState(false);
+  const [convertSheet, setConvertSheet] = useState(false);
+  const [postConvertProductId, setPostConvertProductId] = useState(null); // 전환 저장 직후, 원래 재료도 지울지 물어보는 단계
+  const [mergePicker, setMergePicker] = useState(false);
+  const [mergeTarget, setMergeTarget] = useState(null); // 병합 대상으로 고른 재료명
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const intro = state.intros.find((it) => it.name === name);
   const cubes = stockTotalCubes(state, name), fg = stockFridgeG(state, name);
   const myTags = tagsOf(state, name);
@@ -587,6 +593,20 @@ export function IngredientInfoScreen({ name, onBack, go }) {
   const recent = history.slice(0, 5);
   // 이 재료가 포함된 시판 제품 (역링크)
   const containingProducts = Object.values(state.products).filter((p) => p.ingredients.includes(name));
+
+  // mergeIngredientImpact 결과를 사람이 읽을 문장 조각들로 - 합치기·삭제 확인 모달이 공용으로 사용
+  const describeImpact = (impact) => {
+    const parts = [];
+    if (impact.batches > 0) parts.push(`재고 배치 ${impact.batches}개`);
+    if (impact.planItems > 0) parts.push(`식단표 항목 ${impact.planItems}개`);
+    if (impact.logItems > 0) parts.push(`급여 기록 항목 ${impact.logItems}개`);
+    if (impact.shoppingItems > 0) parts.push(`장보기 항목 ${impact.shoppingItems}개`);
+    if (impact.products > 0) parts.push(`포함된 시판 제품 ${impact.products}개`);
+    if (impact.linkedIngredients > 0) parts.push(`이 재료를 참조하는 다른 재료 ${impact.linkedIngredients}개`);
+    if (impact.hasIntro) parts.push("먹어본 재료 기록");
+    if (impact.hasCustomTags) parts.push("직접 지정한 영양 태그");
+    return parts;
+  };
 
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
@@ -727,6 +747,31 @@ export function IngredientInfoScreen({ name, onBack, go }) {
           </div>
         )}
 
+        {/* 재료 관리 - 시판 제품으로 전환 · 중복 등록된 다른 재료와 합치기 */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>재료 관리</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <button onClick={() => setConvertConfirm(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.sageLight, border: "none", borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>시판 제품으로 전환</span>
+              <ChevronRight size={14} color={C.sageDeep} />
+            </button>
+            <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.4, marginBottom: 4 }}>
+              {components.length > 0 ? `구성 재료(${components.join(", ")})를 그대로 포함한 새 시판 제품을 만들어요.` : "시판 카테고리가 생기기 전에 등록한 혼합 재료를 시판 제품으로 옮길 때 써요."}
+            </div>
+            <button onClick={() => setMergePicker(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.sageLight, border: "none", borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.sageDeep }}>다른 재료와 합치기</span>
+              <ChevronRight size={14} color={C.sageDeep} />
+            </button>
+            <div style={{ fontSize: 9.5, color: C.muted, lineHeight: 1.4, marginBottom: 4 }}>
+              이름만 다르게 중복 등록된 같은 재료를 하나로 합쳐요. 이 재료('{name}')는 사라지고, 골라주신 재료로 재고·식단표·기록이 모두 옮겨가요. 되돌릴 수 없어요.
+            </div>
+            <button onClick={() => setDeleteConfirm(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "6px 2px", cursor: "pointer" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.apricot }}>이 재료 삭제</span>
+              <ChevronRight size={14} color={C.apricot} />
+            </button>
+          </div>
+        </div>
+
         {/* 반응 기록·메모 */}
         {intro ? (
           <button onClick={() => setEditIntro(true)} className="flex items-center justify-between" style={{ width: "100%", textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 13px", cursor: "pointer" }}>
@@ -746,6 +791,108 @@ export function IngredientInfoScreen({ name, onBack, go }) {
       {editIntro && intro && <IntroEditModal intro={intro} onClose={() => setEditIntro(false)} />}
       {basePicker && <IngredientPicker onPick={(n) => { if (n !== name) setMeta({ baseOf: n }); setBasePicker(false); }} onClose={() => setBasePicker(false)} />}
       {compPicker && <IngredientPicker multi alreadyAdded={[...components, name]} onPick={(names) => { setMeta({ components: Array.from(new Set([...components, ...names.filter((n) => n !== name)])) }); }} onClose={() => setCompPicker(false)} />}
+
+      {/* 시판 제품으로 전환 - 확인 후, 새 제품 등록 폼을 이 재료의 이름·구성 재료로 미리 채워서 열어줌
+          (바로 저장하지 않고 폼에서 브랜드·용량 등을 확인·보완한 뒤 직접 '추가'를 눌러야 실제로 생성됨) */}
+      {convertConfirm && (
+        <ConfirmModal
+          title={`'${name}'을(를) 시판 제품으로 전환할까요?`}
+          message={components.length > 0
+            ? `혼합 큐브 구성 재료(${components.join(", ")})를 그대로 포함 재료로 채운 새 시판 제품 '${name}'을(를) 만들어요.`
+            : `구성 재료가 지정돼 있지 않아 일단 '${name}' 하나만 포함한 시판 제품으로 만들어요 - 다음 화면에서 포함 재료를 직접 골라 바꿀 수 있어요.`}
+          warning="이미 쌓인 재고·식단표·급여 기록은 새 제품으로 자동으로 옮겨지지 않고 '재료'이름으로 그대로 남아요. 전환 이후 이 제품으로 새로 기록하는 것부터 제품 쪽 급여 이력에 쌓여요."
+          confirmLabel="전환"
+          danger={false}
+          onConfirm={() => { setConvertConfirm(false); setConvertSheet(true); }}
+          onCancel={() => setConvertConfirm(false)}
+        />
+      )}
+      {convertSheet && (
+        <ProductEditSheet
+          product="new"
+          initialName={name}
+          initialIngredients={components.length > 0 ? components : [name]}
+          go={go}
+          onSaved={({ id }) => { setConvertSheet(false); notify(`'${name}' 재료를 시판 제품으로 전환했어요`); setPostConvertProductId(id); }}
+          onClose={() => setConvertSheet(false)}
+        />
+      )}
+
+      {/* 전환이 끝나면 곧바로 "원래 재료도 지울지"를 물어봄 - 삭제 버튼을 따로 찾아 눌러야 하는
+          불편함을 없애기 위함(사용 중이면 여기서도 같은 주의 안내를 보여줌) */}
+      {postConvertProductId && (() => {
+        const parts = describeImpact(mergeIngredientImpact(state, name));
+        const inUse = parts.length > 0;
+        const goToProduct = () => go && go("productDetail", { productId: postConvertProductId });
+        return (
+          <ConfirmModal
+            title={`'${name}' 재료도 삭제할까요?`}
+            message={inUse
+              ? `이 재료를 사용 중인 곳이 있어요: ${parts.join(", ")}. 그 데이터는 그대로 남고, 재료 목록에서만 사라져요.`
+              : "시판 제품으로 옮겼으니 원래 재료는 지워도 괜찮아요."}
+            warning={inUse ? "사용 중인데도 삭제하는 거예요 - 이름 연결만 끊어질 뿐 기존 데이터는 지워지지 않아요." : undefined}
+            confirmLabel="삭제"
+            onConfirm={() => {
+              const meta = state.ingredients[name];
+              dispatch({ type: "INGREDIENT_DELETE", name });
+              notify(`'${name}' 재료를 삭제했습니다`, () => dispatch({ type: "RESTORE_INGREDIENT", name, meta }));
+              setPostConvertProductId(null);
+              goToProduct();
+            }}
+            onCancel={() => { setPostConvertProductId(null); goToProduct(); }}
+          />
+        );
+      })()}
+
+      {/* 다른 재료와 합치기 - 대상 선택 후, 실제로 옮겨질 데이터 개수를 미리 보여주고 확인받음(되돌릴 수 없음) */}
+      {mergePicker && (
+        <IngredientPicker onPick={(n) => { setMergePicker(false); if (n === name) notify("자기 자신과는 합칠 수 없어요"); else if (n) setMergeTarget(n); }} onClose={() => setMergePicker(false)} />
+      )}
+      {mergeTarget && (() => {
+        const parts = describeImpact(mergeIngredientImpact(state, name));
+        const message = parts.length > 0
+          ? `${parts.join(", ")}이(가) '${mergeTarget}'(으)로 옮겨져요.`
+          : `'${name}'에는 아직 옮길 데이터가 없어요.`;
+        return (
+          <ConfirmModal
+            title={`'${name}'을(를) '${mergeTarget}'(으)로 합칠까요?`}
+            message={message}
+            warning={`이 작업은 되돌릴 수 없어요. 합친 뒤 '${name}' 재료는 사라지고 이 화면에서 나가져요.`}
+            confirmLabel="합치기"
+            onConfirm={() => {
+              dispatch({ type: "INGREDIENT_MERGE", from: name, into: mergeTarget });
+              notify(`'${name}'을(를) '${mergeTarget}'(으)로 합쳤어요`);
+              setMergeTarget(null);
+              onBack();
+            }}
+            onCancel={() => setMergeTarget(null)}
+          />
+        );
+      })()}
+
+      {/* 재료 삭제 - 사용 중이면(재고·계획·기록·다른 재료 연결 등) 주의 문구와 함께, 아니면 단순 확인만
+          받고 삭제함. 삭제해도 다른 곳의 참조는 이름 그대로 남음(시판 제품 삭제와 동일한 정책) */}
+      {deleteConfirm && (() => {
+        const meta = state.ingredients[name];
+        const impact = mergeIngredientImpact(state, name);
+        const parts = describeImpact(impact);
+        const inUse = parts.length > 0;
+        return (
+          <ConfirmModal
+            title={`'${name}'을(를) 삭제할까요?`}
+            message={inUse ? `이 재료를 사용 중인 곳이 있어요: ${parts.join(", ")}. 그 데이터는 그대로 남고, 재료 목록에서만 사라져요.` : undefined}
+            warning={inUse ? "사용 중인데도 삭제를 진행하는 거예요 - 이름 연결만 끊어질 뿐 기존 데이터는 지워지지 않아요." : undefined}
+            confirmLabel="삭제"
+            onConfirm={() => {
+              dispatch({ type: "INGREDIENT_DELETE", name });
+              notify(`'${name}' 재료를 삭제했습니다`, () => dispatch({ type: "RESTORE_INGREDIENT", name, meta }));
+              setDeleteConfirm(false);
+              onBack();
+            }}
+            onCancel={() => setDeleteConfirm(false)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -953,6 +1100,17 @@ export function ProductDetailScreen({ productId, onBack, go }) {
   }
   const packs = state.settings.productStockEnabled ? productStockPacks(state, productId) : null;
   const { good, avoid } = productPairsFor(state, p.ingredients);
+  // 최근 급여 이력 (최신순 5회) - 이 제품을 직접 준 기록만. 포함 재료를 원재료로 따로 준 기록은
+  // 재료 정보 화면 쪽에서 확인 가능(재료 → 제품 방향 노출 이력과 대칭되는, 제품 → 직접 급여 이력)
+  const history = [];
+  Object.keys(state.logs).sort((a, b) => b.localeCompare(a)).forEach((d) => {
+    (state.logs[d] || []).forEach((log) => {
+      log.items.forEach((it) => {
+        if (it.source === "product" && it.productId === productId) history.push({ date: d, label: log.label, g: gOf(state, it) });
+      });
+    });
+  });
+  const recent = history.slice(0, 5);
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title={p.name} onBack={onBack} />
@@ -972,6 +1130,24 @@ export function ProductDetailScreen({ productId, onBack, go }) {
         </div>
         {p.memo && <div style={{ fontSize: 12, color: C.inkSoft, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>{p.memo}</div>}
         <PairingSection good={good} avoid={avoid} emptyText="포함 재료 기준으로 궁합 정보가 있는 재료가 없어요" />
+
+        {/* 최근 급여 이력 - 재료 정보 화면과 대칭되는 섹션(그동안 빠져있던 부분) */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.ink, marginBottom: 8 }}>최근 급여 이력</div>
+          {recent.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.muted }}>아직 이 제품으로 준 급여 기록이 없어요</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {recent.map((h, i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <span style={{ fontSize: 12, color: C.inkSoft }}>{h.date.slice(5)} · {h.label}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep }}>{Math.round(h.g)}g</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <button onClick={() => setEditing(true)} style={primaryBtn}>정보 수정</button>
         {state.settings.productStockEnabled && (
           <button onClick={() => go && go("productStockDetail", { productId })}
