@@ -446,9 +446,13 @@ export function ShoppingScreen({ onBack }) {
   const { state, dispatch } = useStore();
   const [batchFor, setBatchFor] = useState(null);
   const [adding, setAdding] = useState(false);
-  // 재고 임박 항목도 합류
+  // 재고 임박 항목도 합류 - 이미 실제 장보기 항목이 있는 재료(체크 여부 상관없이)는 자동 알림 행을
+  // 또 띄우지 않음. 예전엔 "체크 안 된 것만" 걸러내서, 항목을 체크하는 순간 클릭 안 되는 알림 행이
+  // 새로 나타나 같은 이름이 두 줄이 되고 마치 체크가 풀린 것처럼 보이는 문제가 있었음(실제 재현 확인).
+  // 체크한 뒤에도 실제 재고가 그대로 부족한 건 맞지만, 그 안내는 "완료 정리"로 항목을 치운 뒤에나
+  // 다시 뜨는 게 자연스러움(체크 직후 바로 또 뜨면 안내가 아니라 방해가 됨)
   const lowStock = frozenAlerts(state).filter((a) => a.daysLeft <= 3).map((a) => ({ id: "low-" + a.name, name: a.name, reason: a.cubes <= 0 ? "재고 소진" : `재고 임박 (~${a.daysLeft}일)`, done: false, low: true }));
-  const list = [...state.shopping, ...lowStock.filter((l) => !state.shopping.some((s) => s.name === l.name && !s.done))];
+  const list = [...state.shopping, ...lowStock.filter((l) => !state.shopping.some((s) => s.name === l.name))];
 
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
