@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { defineConfig } from 'vite'
 import pkg from './package.json'
 import react from '@vitejs/plugin-react'
@@ -9,6 +10,19 @@ import { VitePWA } from 'vite-plugin-pwa'
 // 취급되고, production이 아닌 모든 경우를 "개발용 앱"으로 간주한다(잘못 표시될 바엔 과하게 표시하는 쪽이 안전).
 const DEPLOY_ENV = process.env.VERCEL_ENV || 'local'
 const IS_DEV_BUILD = DEPLOY_ENV !== 'production'
+
+// 테스트용 빌드 식별자 - package.json의 version은 이제 "정식 배포" 때만 올리기로 했으므로,
+// 그 사이 개발 브랜치에 쌓이는 커밋들을 구분할 별도 표식이 필요하다. 커밋 짧은 해시를 사용하고,
+// production 빌드에는 노출하지 않는다(더보기 화면·DEV 배지에서만 IS_DEV_BUILD일 때 표시).
+function getBuildId() {
+  if (process.env.VERCEL_GIT_COMMIT_SHA) return process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7)
+  try {
+    return execSync('git rev-parse --short HEAD').toString().trim()
+  } catch {
+    return null
+  }
+}
+const BUILD_ID = getBuildId()
 const APP_TITLE = IS_DEV_BUILD ? '베이비큐브 (개발)' : '베이비큐브'
 const THEME_COLOR = IS_DEV_BUILD ? '#E07A3F' : '#6B8F71'
 const ICON_SVG = IS_DEV_BUILD ? '/pwa-icon-dev.svg' : '/pwa-icon.svg'
@@ -34,9 +48,14 @@ function devIdentityHtmlPlugin() {
 }
 
 export default defineConfig({
-  // 앱 버전 단일 소스: package.json version → 더보기 화면 표기에 사용
+  // 앱 버전 단일 소스: package.json version(정식 배포 때만 올림) → 더보기 화면 표기에 사용
   // __DEPLOY_ENV__: 화면 한쪽에 작게 "개발용 배포" 표시를 띄우는 데 사용 (Shell.jsx)
-  define: { __APP_VERSION__: JSON.stringify(pkg.version), __DEPLOY_ENV__: JSON.stringify(DEPLOY_ENV) },
+  // __BUILD_ID__: 정식 버전이 안 바뀐 개발 빌드끼리 구분하기 위한 커밋 해시(테스트용 버전명)
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __DEPLOY_ENV__: JSON.stringify(DEPLOY_ENV),
+    __BUILD_ID__: JSON.stringify(BUILD_ID),
+  },
   plugins: [
     react(),
     tailwindcss(),

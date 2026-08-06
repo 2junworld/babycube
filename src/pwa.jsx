@@ -110,8 +110,9 @@ export function useWhatsNew() {
         // 하나만 찾아서 보여줘서, 건너뛴 중간 버전들의 안내가 통째로 묻혔음)
         const between = CHANGELOG.filter((c) => compareVersions(c.version, last) > 0 && compareVersions(c.version, current) <= 0);
         if (between.length > 0) {
-          const notes = between.flatMap((c) => c.notes);
-          setEntry({ version: current, notes });
+          const features = between.flatMap((c) => c.features || []);
+          const fixes = between.flatMap((c) => c.fixes || []);
+          if (features.length > 0 || fixes.length > 0) setEntry({ version: current, features, fixes });
         }
       }
       try { localStorage.setItem(LAST_SEEN_VERSION_KEY, current); } catch { /* 저장 불가 환경이면 다음에도 다시 시도됨 */ }
@@ -125,11 +126,23 @@ export function WhatsNewSheet() {
   if (!entry) return null;
   return (
     <BottomSheet title={`v${entry.version} 업데이트`} onClose={dismiss}>
-      <div style={{ padding: "0 18px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 12, color: C.muted }}>이번 업데이트에서 이런 점이 달라졌어요</div>
-        <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
-          {entry.notes.map((n, i) => <li key={i} style={{ fontSize: 13, color: C.ink, lineHeight: 1.5 }}>{n}</li>)}
-        </ul>
+      <div style={{ padding: "0 18px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+        {entry.features.length > 0 && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.sageDeep, marginBottom: 8 }}>✨ 새로워진 기능</div>
+            <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+              {entry.features.map((n, i) => <li key={i} style={{ fontSize: 13, color: C.ink, lineHeight: 1.5 }}>{n}</li>)}
+            </ul>
+          </div>
+        )}
+        {entry.fixes.length > 0 && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, marginBottom: 6 }}>🔧 버그 수정</div>
+            <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+              {entry.fixes.map((n, i) => <li key={i} style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>{n}</li>)}
+            </ul>
+          </div>
+        )}
         <button onClick={dismiss} style={primaryBtn}>확인</button>
         <button onClick={() => { dismiss(); window.dispatchEvent(new Event(GO_TO_CHANGELOG_EVENT)); }}
           style={{ background: "none", border: "none", color: C.sageDeep, fontWeight: 700, fontSize: 12.5, textDecoration: "underline", cursor: "pointer", padding: "2px 0" }}>

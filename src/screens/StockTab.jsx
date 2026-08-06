@@ -454,6 +454,14 @@ export function ShoppingScreen({ onBack }) {
   const lowStock = frozenAlerts(state).filter((a) => a.daysLeft <= 3).map((a) => ({ id: "low-" + a.name, name: a.name, reason: a.cubes <= 0 ? "재고 소진" : `재고 임박 (~${a.daysLeft}일)`, done: false, low: true }));
   const list = [...state.shopping, ...lowStock.filter((l) => !state.shopping.some((s) => s.name === l.name))];
 
+  // 자동 알림 행(low)을 탭하면: 그동안은 아무 반응이 없어서 "체크박스가 안 눌러진다"는 불만이
+  // 있었음. 알림은 그 자체로 체크 상태를 가질 수 없는(실제 장보기 항목이 아닌) 파생 데이터라서,
+  // 탭한 순간 진짜 장보기 항목으로 승격시키면서 바로 완료 처리한다(장 봐온 걸 체크하는 흐름과 동일).
+  const toggleItem = (s) => {
+    if (s.low) dispatch({ type: "SHOP_CHECK_ALERT", name: s.name, reason: s.reason });
+    else dispatch({ type: "SHOP_TOGGLE", id: s.id });
+  };
+
   return (
     <div style={{ paddingBottom: 90, position: "relative" }}>
       <SubHeader title="장보기 · 제조 목록" onBack={onBack} right={
@@ -463,7 +471,7 @@ export function ShoppingScreen({ onBack }) {
         {list.length === 0 && <div style={{ textAlign: "center", padding: "30px 0", fontSize: 12.5, color: C.muted }}>목록이 비어 있습니다</div>}
         {list.map((s) => (
           <div key={s.id} className="flex items-center justify-between" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 13px" }}>
-            <button onClick={() => !s.low && dispatch({ type: "SHOP_TOGGLE", id: s.id })} className="flex items-center" style={{ gap: 10, background: "none", border: "none", cursor: s.low ? "default" : "pointer", flex: 1, textAlign: "left" }}>
+            <button onClick={() => toggleItem(s)} className="flex items-center" style={{ gap: 10, background: "none", border: "none", cursor: "pointer", flex: 1, textAlign: "left" }}>
               <span style={{ width: 20, height: 20, borderRadius: 6, border: `1.5px solid ${s.done ? C.sage : C.border}`, background: s.done ? C.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 {s.done && <Check size={13} color="#fff" />}
               </span>
