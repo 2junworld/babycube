@@ -821,19 +821,36 @@ export function ChangelogHistoryScreen({ onBack }) {
     <div style={{ paddingBottom: 40 }}>
       <SubHeader title="업데이트 내역" onBack={onBack} />
       <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 18 }}>
-        {CHANGELOG.map((c) => (
-          <div key={c.version}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep, marginBottom: 6 }}>v{c.version}</div>
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {c.notes.map((n, i) => (
-                <div key={i} className="flex items-start" style={{ gap: 8, padding: "7px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
-                  <span className="flex items-center justify-center" style={{ flexShrink: 0, width: 16, height: 16, marginTop: 1, borderRadius: 8, background: C.sageLight, color: C.sageDeep, fontSize: 10, fontWeight: 700 }}>{i + 1}</span>
-                  <span style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5 }}>{n}</span>
+        {CHANGELOG.map((c) => {
+          const features = c.features || [];
+          const fixes = c.fixes || [];
+          return (
+            <div key={c.version}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.sageDeep, marginBottom: 6 }}>v{c.version}</div>
+              {features.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", marginBottom: fixes.length > 0 ? 6 : 0 }}>
+                  {features.map((n, i) => (
+                    <div key={i} className="flex items-start" style={{ gap: 8, padding: "7px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+                      <span className="flex items-center justify-center" style={{ flexShrink: 0, width: 16, height: 16, marginTop: 1, borderRadius: 8, background: C.sageLight, color: C.sageDeep, fontSize: 10, fontWeight: 700 }}>{i + 1}</span>
+                      <span style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5 }}>{n}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
+              {fixes.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, padding: "6px 0 2px" }}>🔧 버그 수정</div>
+                  {fixes.map((n, i) => (
+                    <div key={i} className="flex items-start" style={{ gap: 8, padding: "5px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+                      <span className="flex items-center justify-center" style={{ flexShrink: 0, width: 16, height: 16, marginTop: 1, borderRadius: 8, background: C.border, color: C.muted, fontSize: 10, fontWeight: 700 }}>{i + 1}</span>
+                      <span style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>{n}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -871,7 +888,12 @@ export function MoreTab({ go }) {
         })}
       </div>
       <div style={{ textAlign: "center", fontSize: 10, color: C.muted, marginTop: 20 }}>
-        <div>베이비큐브 · v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?"}</div>
+        <div>
+          베이비큐브 · v{typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?"}
+          {typeof __DEPLOY_ENV__ !== "undefined" && __DEPLOY_ENV__ !== "production" && typeof __BUILD_ID__ !== "undefined" && __BUILD_ID__
+            ? ` (테스트 빌드 ${__BUILD_ID__})`
+            : ""}
+        </div>
         {needRefresh ? (
           <div style={{ marginTop: 4, color: C.sageDeep, fontWeight: 700 }}>새 버전이 있어요 — 화면 상단 배너에서 업데이트해 주세요</div>
         ) : (

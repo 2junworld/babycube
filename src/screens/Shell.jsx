@@ -17,10 +17,11 @@ import { GO_TO_CHANGELOG_EVENT, UI_STATE } from "./uiPrefs";
 function DevBuildBadge() {
   const isDevBuild = typeof __DEPLOY_ENV__ !== "undefined" && __DEPLOY_ENV__ !== "production";
   if (!isDevBuild) return null;
+  const buildId = typeof __BUILD_ID__ !== "undefined" ? __BUILD_ID__ : null;
   return (
     <div style={{ position: "fixed", top: "calc(6px + env(safe-area-inset-top))", right: 8, zIndex: 40, pointerEvents: "none" }}>
       <span style={{ fontSize: 9.5, fontWeight: 800, color: "#fff", background: "#E07A3F", borderRadius: 999, padding: "3px 8px", letterSpacing: 0.4, boxShadow: "0 2px 6px rgba(0,0,0,0.15)" }}>
-        DEV
+        DEV{buildId ? ` ${buildId}` : ""}
       </span>
     </div>
   );
