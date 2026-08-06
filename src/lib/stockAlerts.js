@@ -75,7 +75,11 @@ export function frozenAlerts(state) {
     // (예전엔 cubes<=0이면 통째로 제외돼서, 정작 다 떨어진 순간 알림이 사라지는 문제가 있었음)
     const dl = cubes > 0 ? daysLeft(state, name) : 0;
     return { name, cubes, g: stockTotalFrozenG(state, name), daysLeft: dl };
-  }).filter((x) => x && x.daysLeft != null && x.daysLeft <= 5).sort((a, b) => a.daysLeft - b.daysLeft);
+  }).filter((x) => x && x.daysLeft != null && x.daysLeft <= 5)
+    // daysLeft가 같은 항목끼리는 이름순으로 고정 - Object.keys(state.stock) 순서에 기대면 안 됨
+    // (Firestore 스냅샷을 받을 때마다 state.stock 객체가 새로 만들어지는데, 그 안의 키 순서가
+    // 매번 똑같다는 보장이 없어서, 예전엔 동점 항목들이 매 동기화마다 화면에서 순서가 흔들렸음)
+    .sort((a, b) => a.daysLeft - b.daysLeft || a.name.localeCompare(b.name, "ko"));
 }
 
 export function fridgeAlerts(state) {

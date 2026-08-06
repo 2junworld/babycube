@@ -489,6 +489,15 @@ function rawReducer(state, action) {
       if (!name) return state;
       return { ...state, shopping: [...state.shopping, { id: uid(), name, reason: "직접 추가", done: false }] };
     }
+    // 재고 임박/소진으로 자동 표시된 알림 행은 그 자체로는 체크 상태가 없는 안내일 뿐이라 원래 클릭이
+    // 안 됐음 - 사용자가 "체크박스가 안 눌러진다"고 느끼는 지점이라, 탭하면 실제 장보기 항목으로
+    // 승격시키면서 바로 완료 처리한다(장 봐온 걸 체크하는 자연스러운 흐름). 이미 같은 이름의 실제
+    // 항목이 있으면(레이스로 중복 탭 등) 아무 것도 하지 않는다.
+    case "SHOP_CHECK_ALERT": {
+      const name = normalizeIngredientName(action.name);
+      if (!name || state.shopping.some((s) => s.name === name)) return state;
+      return { ...state, shopping: [...state.shopping, { id: uid(), name, reason: action.reason || "직접 추가", done: true }] };
+    }
     case "SHOP_CLEAR_DONE":
       return { ...state, shopping: state.shopping.filter((s) => !s.done) };
 
@@ -1007,6 +1016,11 @@ const ACTIVITY_BUILDERS = {
     // 완료 처리만 기록하고, 완료 해제는 기록하지 않음 (실수로 눌렀다 되돌리는 경우가 많아 로그 소음이 큼)
     if (!item || !item.done) return null;
     return { kind: "update", summary: `${item.name} 장보기 완료 처리` };
+  },
+  SHOP_CHECK_ALERT: (prev, next, action) => {
+    const name = normalizeIngredientName(action.name);
+    if (!name) return null;
+    return { kind: "update", summary: `${name} 장보기 완료 처리` };
   },
   INTRO_UPSERT: (prev, next, action) => {
     const name = normalizeIngredientName(action.intro.name);
